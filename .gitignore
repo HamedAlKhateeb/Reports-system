@@ -2,6 +2,7 @@
 .next/
 out/
 .open-next/
+.wrangler/
 
 # Node
 node_modules/
