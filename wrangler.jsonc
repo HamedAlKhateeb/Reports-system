@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "reports-system",
   "main": ".open-next/worker.js",
@@ -9,6 +9,6 @@
     "binding": "ASSETS"
   },
   "build": {
-    "command": "npx opennextjs-cloudflare build --dangerouslyUseUnsupportedNextVersion"
+    "command": "npx @opennextjs/cloudflare -s"
   }
 }

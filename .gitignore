@@ -1,6 +1,7 @@
 # Next.js
 .next/
 out/
+.open-next/
 
 # Node
 node_modules/
