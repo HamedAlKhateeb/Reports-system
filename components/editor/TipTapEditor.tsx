@@ -8,9 +8,11 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import Placeholder from '@tiptap/extension-placeholder';
+import Link from '@tiptap/extension-link';
 import { ReportImage } from './ReportImageNode';
 import { TextColor, TextHighlight } from './CustomColorMarks';
 import { EditorToolbar } from './EditorToolbar';
+import { EditorContextMenu } from './EditorContextMenu';
 import { uploadReportImage } from '@/lib/db';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
@@ -21,6 +23,7 @@ interface TipTapEditorProps {
   initialContent: any;
   reportLanguage: AppLanguage;
   onSave: (contentJson: any) => Promise<void>;
+  onContentChange?: (contentJson: any) => void;
   themeColor?: string;
   backgroundColor?: string;
 }
@@ -30,12 +33,18 @@ export function TipTapEditor({
   initialContent,
   reportLanguage,
   onSave,
+  onContentChange,
   themeColor = 'olive',
   backgroundColor = 'white',
 }: TipTapEditorProps) {
   const { t } = useLanguage();
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ isOpen: boolean; x: number; y: number }>({
+    isOpen: false,
+    x: 0,
+    y: 0,
+  });
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const saveContent = useCallback(
@@ -84,6 +93,14 @@ export function TipTapEditor({
             imageId: uploadedItem.id,
           })
           .run();
+        // Immediately trigger save and notify parent
+        const json = editor.getJSON();
+        if (onContentChange) {
+          onContentChange(json);
+        }
+        setTimeout(() => {
+          saveContent(json);
+        }, 100);
       }
     } catch (err) {
       console.error('Image upload failed', err);
@@ -108,6 +125,14 @@ export function TipTapEditor({
       TableCell,
       Placeholder.configure({
         placeholder: reportLanguage === 'ar' ? 'ابدأ كتابة محتوى التقرير هنا...' : 'Start writing report content here...',
+      }),
+      Link.configure({
+        openOnClick: false,
+        autolink: true,
+        defaultProtocol: 'https',
+        HTMLAttributes: {
+          class: 'text-blue-600 underline hover:text-blue-800 transition-colors cursor-pointer',
+        },
       }),
       ReportImage,
       TextColor,
@@ -140,11 +165,15 @@ export function TipTapEditor({
         return false;
       },
       attributes: {
-        class: 'prose prose-slate max-w-none focus:outline-none p-6 sm:p-8 min-h-[500px]',
+        class: 'prose prose-slate max-w-none focus:outline-none p-3.5 sm:p-6 md:p-8 min-h-[500px] w-full',
       },
     },
     onUpdate: ({ editor: ed }) => {
-      triggerAutosave(ed.getJSON());
+      const json = ed.getJSON();
+      if (onContentChange) {
+        onContentChange(json);
+      }
+      triggerAutosave(json);
     },
   });
 
@@ -160,11 +189,11 @@ export function TipTapEditor({
   const dir = reportLanguage === 'ar' ? 'rtl' : 'ltr';
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+    <div className="w-full max-w-full rounded-xl border border-border bg-card shadow-sm overflow-hidden">
       {/* Editor Top Bar with Status and Toolbar */}
-      <div className="flex flex-col border-b border-border">
+      <div className="flex flex-col border-b border-border w-full max-w-full">
         {/* Autosave Status Indicator */}
-        <div className="flex items-center justify-between bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground border-b border-border/50">
+        <div className="flex items-center justify-between bg-muted/30 px-3 sm:px-4 py-1.5 text-xs text-muted-foreground border-b border-border/50">
           <div className="flex items-center gap-1.5 font-medium">
             <span>{t('reportLanguage')}:</span>
             <span className="rounded bg-muted px-1.5 py-0.5 font-bold uppercase text-foreground">
@@ -205,7 +234,15 @@ export function TipTapEditor({
       {/* Editor Content Area respecting Report Language, Direction, and Background */}
       <div
         dir={dir}
-        className={`transition-colors text-foreground ${
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({
+            isOpen: true,
+            x: e.clientX,
+            y: e.clientY,
+          });
+        }}
+        className={`w-full max-w-full overflow-x-auto transition-colors text-foreground ${
           backgroundColor === 'cream'
             ? 'bg-[#fdfcf7] dark:bg-[#1a1917]'
             : backgroundColor === 'cool'
@@ -213,8 +250,20 @@ export function TipTapEditor({
             : 'bg-card'
         }`}
       >
-        <EditorContent editor={editor} />
+        <div className="w-full min-w-full">
+          <EditorContent editor={editor} />
+        </div>
       </div>
+
+      {/* Interactive Right-Click Context Menu */}
+      <EditorContextMenu
+        x={contextMenu.x}
+        y={contextMenu.y}
+        editor={editor}
+        isOpen={contextMenu.isOpen}
+        onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
+        lang={reportLanguage}
+      />
     </div>
   );
 }

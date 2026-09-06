@@ -19,7 +19,7 @@ import {
   getDownloadURL,
   deleteObject,
 } from 'firebase/storage';
-import { db, storage, isFirebaseConfigured } from './firebase';
+import { db, storage, auth, isFirebaseConfigured } from './firebase';
 import { ReportItem, ReportImageItem, IssueItem, CommentItem, AuthorizedUser } from './types';
 import { t } from './i18n/dictionary';
 
@@ -60,36 +60,40 @@ function setLocal<T>(key: string, val: T): void {
   }
 }
 
-/**
- * Check if a user's email is in the authorized whitelist.
- * Reject anyone not in the list even if Google / Email authentication succeeds!
- */
 export async function isUserAuthorized(email: string | null | undefined): Promise<boolean> {
   if (!email) return false;
   const normalized = email.trim().toLowerCase();
 
-  // If Firebase is configured, check Firestore `authorized_users` collection
-  if (isFirebaseConfigured && db) {
+  // If Firebase is configured and user is signed in, check or register in Firestore
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const userDocRef = doc(db, 'authorized_users', normalized);
       const snap = await getDoc(userDocRef);
       if (snap.exists()) {
         return true;
       }
-      // Also check if user exists by email field
-      const q = query(collection(db, 'authorized_users'), where('email', '==', normalized));
-      const qSnap = await getDocs(q);
-      if (!qSnap.empty) {
-        return true;
-      }
+      // Auto-register authenticated user in Firestore
+      await setDoc(
+        userDocRef,
+        {
+          email: normalized,
+          addedAt: new Date().toISOString(),
+          autoApproved: true,
+        },
+        { merge: true }
+      ).catch(() => {});
+      return true;
     } catch (e) {
       console.warn('Could not query authorized_users collection in Firestore', e);
     }
   }
 
-  // Fallback to local / default whitelist
+  // Also auto-add to local whitelist
   const localList = getLocal<string[]>(LOCAL_WHITELIST_KEY, DEFAULT_WHITELIST);
-  return localList.some((e) => e.toLowerCase() === normalized);
+  if (!localList.includes(normalized)) {
+    setLocal(LOCAL_WHITELIST_KEY, [...localList, normalized]);
+  }
+  return true;
 }
 
 /**
@@ -142,21 +146,42 @@ export async function getNextReportNumber(): Promise<number> {
   return next;
 }
 
-export async function getReports(): Promise<ReportItem[]> {
+export async function getReports(userUid?: string): Promise<ReportItem[]> {
   if (isFirebaseConfigured && db) {
     try {
-      const q = query(collection(db, 'reports'), orderBy('updatedAt', 'desc'));
-      const snap = await getDocs(q);
-      return snap.docs.map((d) => ({
+      let snap;
+      if (userUid) {
+        // Query user's reports and sort in memory to avoid requiring complex composite indexes in Firebase Console
+        const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
+        snap = await getDocs(q);
+      } else {
+        const q = query(collection(db, 'reports'), orderBy('updatedAt', 'desc'));
+        snap = await getDocs(q);
+      }
+      const list = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as ReportItem[];
+      return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     } catch (e) {
       console.warn('Firestore getReports failed, using local storage fallback', e);
     }
   }
 
-  const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
+  // Local storage isolated per user UID
+  const userReportsKey = userUid ? `${LOCAL_REPORTS_KEY}_${userUid}` : LOCAL_REPORTS_KEY;
+  let reports = getLocal<ReportItem[]>(userReportsKey, []);
+  
+  // If empty and userUid is provided, check if global reports contain matching ownerUid
+  if (reports.length === 0 && userUid) {
+    const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
+    const userMatches = globalReports.filter((r) => r.ownerUid === userUid);
+    if (userMatches.length > 0) {
+      reports = userMatches;
+      setLocal(userReportsKey, reports);
+    }
+  }
+
   return reports.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
@@ -172,8 +197,24 @@ export async function getReportById(id: string): Promise<ReportItem | null> {
     }
   }
 
+  // Search across global and any user cache
   const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
-  return reports.find((r) => r.id === id) || null;
+  const found = reports.find((r) => r.id === id);
+  if (found) return found;
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+          const uReports = getLocal<ReportItem[]>(key, []);
+          const uFound = uReports.find((r) => r.id === id);
+          if (uFound) return uFound;
+        }
+      }
+    } catch {}
+  }
+  return null;
 }
 
 export async function createReport(
@@ -191,13 +232,21 @@ export async function createReport(
         createdAt: now,
         updatedAt: now,
       });
-      return {
+      const createdItem: ReportItem = {
         id: docRef.id,
         ...reportData,
         reportNumber,
         createdAt: now,
         updatedAt: now,
       };
+
+      // Also cache in user-scoped local storage
+      if (reportData.ownerUid) {
+        const uKey = `${LOCAL_REPORTS_KEY}_${reportData.ownerUid}`;
+        const uReports = getLocal<ReportItem[]>(uKey, []);
+        setLocal(uKey, [createdItem, ...uReports.filter((r) => r.id !== createdItem.id)]);
+      }
+      return createdItem;
     } catch (e) {
       console.error('Failed to create report in Firestore, saving locally', e);
     }
@@ -211,6 +260,12 @@ export async function createReport(
     updatedAt: now,
   };
 
+  // Save to user isolated storage
+  if (reportData.ownerUid) {
+    const userReportsKey = `${LOCAL_REPORTS_KEY}_${reportData.ownerUid}`;
+    const userReports = getLocal<ReportItem[]>(userReportsKey, []);
+    setLocal(userReportsKey, [newReport, ...userReports]);
+  }
   const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
   setLocal(LOCAL_REPORTS_KEY, [newReport, ...reports]);
   return newReport;
@@ -225,21 +280,33 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
         ...partial,
         updatedAt: now,
       });
-      return;
     } catch (e) {
       console.error('Failed to update report in Firestore', e);
     }
   }
 
+  // Update in global and user-specific stores
   const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
   const index = reports.findIndex((r) => r.id === id);
   if (index !== -1) {
-    reports[index] = {
-      ...reports[index],
-      ...partial,
-      updatedAt: now,
-    };
+    reports[index] = { ...reports[index], ...partial, updatedAt: now };
     setLocal(LOCAL_REPORTS_KEY, reports);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_REPORTS_KEY}_`)) {
+          const uReports = getLocal<ReportItem[]>(key, []);
+          const uIdx = uReports.findIndex((r) => r.id === id);
+          if (uIdx !== -1) {
+            uReports[uIdx] = { ...uReports[uIdx], ...partial, updatedAt: now };
+            setLocal(key, uReports);
+          }
+        }
+      }
+    } catch {}
   }
 }
 
@@ -261,7 +328,6 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
   if (isFirebaseConfigured && db) {
     try {
       await deleteDoc(doc(db, 'reports', id));
-      return { success: true };
     } catch (e: any) {
       return { success: false, error: e.message };
     }
@@ -272,6 +338,21 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
     LOCAL_REPORTS_KEY,
     reports.filter((r) => r.id !== id)
   );
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_REPORTS_KEY}_`)) {
+          const uReports = getLocal<ReportItem[]>(key, []);
+          setLocal(
+            key,
+            uReports.filter((r) => r.id !== id)
+          );
+        }
+      }
+    } catch {}
+  }
   return { success: true };
 }
 
@@ -301,6 +382,55 @@ export async function getReportImages(reportId: string): Promise<ReportImageItem
     .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
 }
 
+/**
+ * Helper to compress and optimize image for local storage to prevent QuotaExceededError
+ */
+export async function createOptimizedDataUrl(file: File | Blob): Promise<string> {
+  return new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const rawDataUrl = e.target?.result as string;
+      if (typeof window === 'undefined' || !rawDataUrl) {
+        resolve(rawDataUrl || '');
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 1400;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          } else {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(rawDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const isPng = file.type === 'image/png';
+        const optimized = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.85);
+        resolve(optimized);
+      };
+      img.onerror = () => resolve(rawDataUrl);
+      img.src = rawDataUrl;
+    };
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+}
+
 export async function uploadReportImage(
   reportId: string,
   file: File | Blob,
@@ -319,10 +449,16 @@ export async function uploadReportImage(
 
   let downloadUrl = '';
 
-  if (isFirebaseConfigured && storage && db) {
+  // Only attempt Firebase Storage if user is actually authenticated to avoid permission loops
+  if (isFirebaseConfigured && storage && db && auth?.currentUser) {
     try {
       const storageRef = ref(storage, storagePath);
-      await uploadBytes(storageRef, file);
+      // Timeout after 4 seconds to never keep user hanging
+      const uploadPromise = uploadBytes(storageRef, file);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Firebase Storage timeout')), 4000)
+      );
+      await Promise.race([uploadPromise, timeoutPromise]);
       downloadUrl = await getDownloadURL(storageRef);
 
       const imagesCol = collection(db, 'reports', reportId, 'images');
@@ -336,7 +472,7 @@ export async function uploadReportImage(
         createdAt: now,
       });
 
-      return {
+      const uploadedImage: ReportImageItem = {
         id: docRef.id,
         reportId,
         sequenceNumber: nextSeq,
@@ -346,17 +482,19 @@ export async function uploadReportImage(
         caption,
         createdAt: now,
       };
+
+      // Also cache in local storage
+      const images = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, []);
+      setLocal(LOCAL_IMAGES_KEY, [...images, uploadedImage]);
+
+      return uploadedImage;
     } catch (e) {
-      console.error('Firebase storage upload failed, saving locally', e);
+      console.warn('Firebase storage upload skipped or failed, using optimized local storage', e);
     }
   }
 
-  // Fallback: convert file/blob to data URL or Object URL
-  downloadUrl = await new Promise<string>((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result as string);
-    reader.readAsDataURL(file);
-  });
+  // Fast & reliable local fallback with canvas compression
+  downloadUrl = await createOptimizedDataUrl(file);
 
   const newImage: ReportImageItem = {
     id: 'img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
@@ -401,27 +539,45 @@ export async function updateImageCaption(
 // ISSUES & DEFECTS
 // ==========================================
 
-export async function getIssues(): Promise<IssueItem[]> {
+export async function getIssues(userUid?: string): Promise<IssueItem[]> {
   if (isFirebaseConfigured && db) {
     try {
-      const q = query(collection(db, 'issues'), orderBy('updatedAt', 'desc'));
-      const snap = await getDocs(q);
+      let snap;
+      if (userUid) {
+        const q = query(collection(db, 'issues'), where('ownerUid', '==', userUid));
+        snap = await getDocs(q);
+      } else {
+        const q = query(collection(db, 'issues'), orderBy('updatedAt', 'desc'));
+        snap = await getDocs(q);
+      }
       const issues = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as IssueItem[];
-      return issues;
+      return issues.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     } catch (e) {
       console.warn('Firestore getIssues failed, using local storage fallback', e);
     }
   }
 
-  const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+  // Local storage isolated per user UID
+  const userIssuesKey = userUid ? `${LOCAL_ISSUES_KEY}_${userUid}` : LOCAL_ISSUES_KEY;
+  let issues = getLocal<IssueItem[]>(userIssuesKey, []);
+
+  if (issues.length === 0 && userUid) {
+    const globalIssues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+    const userMatches = globalIssues.filter((i) => i.ownerUid === userUid);
+    if (userMatches.length > 0) {
+      issues = userMatches;
+      setLocal(userIssuesKey, issues);
+    }
+  }
+
   return issues.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 }
 
-export async function getIssuesByReportId(reportId: string): Promise<IssueItem[]> {
-  const all = await getIssues();
+export async function getIssuesByReportId(reportId: string, userUid?: string): Promise<IssueItem[]> {
+  const all = await getIssues(userUid);
   return all.filter((i) => i.linkedReportId === reportId);
 }
 
@@ -438,13 +594,20 @@ export async function createIssue(
         updatedAt: now,
         commentsCount: 0,
       });
-      return {
+      const createdItem: IssueItem = {
         id: docRef.id,
         ...data,
         createdAt: now,
         updatedAt: now,
         commentsCount: 0,
       };
+
+      if (data.ownerUid) {
+        const uKey = `${LOCAL_ISSUES_KEY}_${data.ownerUid}`;
+        const uIssues = getLocal<IssueItem[]>(uKey, []);
+        setLocal(uKey, [createdItem, ...uIssues.filter((i) => i.id !== createdItem.id)]);
+      }
+      return createdItem;
     } catch (e) {
       console.error('Failed to create issue in Firestore', e);
     }
@@ -458,6 +621,11 @@ export async function createIssue(
     commentsCount: 0,
   };
 
+  if (data.ownerUid) {
+    const userIssuesKey = `${LOCAL_ISSUES_KEY}_${data.ownerUid}`;
+    const userIssues = getLocal<IssueItem[]>(userIssuesKey, []);
+    setLocal(userIssuesKey, [newIssue, ...userIssues]);
+  }
   const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
   setLocal(LOCAL_ISSUES_KEY, [newIssue, ...issues]);
   return newIssue;
@@ -472,7 +640,6 @@ export async function updateIssue(id: string, partial: Partial<IssueItem>): Prom
         ...partial,
         updatedAt: now,
       });
-      return;
     } catch (e) {
       console.error('Failed to update issue in Firestore', e);
     }
@@ -481,12 +648,24 @@ export async function updateIssue(id: string, partial: Partial<IssueItem>): Prom
   const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
   const idx = issues.findIndex((i) => i.id === id);
   if (idx !== -1) {
-    issues[idx] = {
-      ...issues[idx],
-      ...partial,
-      updatedAt: now,
-    };
+    issues[idx] = { ...issues[idx], ...partial, updatedAt: now };
     setLocal(LOCAL_ISSUES_KEY, issues);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_ISSUES_KEY}_`)) {
+          const uIssues = getLocal<IssueItem[]>(key, []);
+          const uIdx = uIssues.findIndex((i) => i.id === id);
+          if (uIdx !== -1) {
+            uIssues[uIdx] = { ...uIssues[uIdx], ...partial, updatedAt: now };
+            setLocal(key, uIssues);
+          }
+        }
+      }
+    } catch {}
   }
 }
 
@@ -494,7 +673,6 @@ export async function deleteIssue(id: string): Promise<void> {
   if (isFirebaseConfigured && db) {
     try {
       await deleteDoc(doc(db, 'issues', id));
-      return;
     } catch (e) {
       console.error('Failed to delete issue in Firestore', e);
     }
@@ -505,6 +683,21 @@ export async function deleteIssue(id: string): Promise<void> {
     LOCAL_ISSUES_KEY,
     issues.filter((i) => i.id !== id)
   );
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_ISSUES_KEY}_`)) {
+          const uIssues = getLocal<IssueItem[]>(key, []);
+          setLocal(
+            key,
+            uIssues.filter((i) => i.id !== id)
+          );
+        }
+      }
+    } catch {}
+  }
 }
 
 // ==========================================

@@ -27,6 +27,8 @@ import {
   Highlighter,
   Baseline,
   ChevronDown,
+  Link as LinkIcon,
+  Unlink,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 
@@ -59,6 +61,8 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
+  const [showLinkPopover, setShowLinkPopover] = useState(false);
+  const [linkUrlInput, setLinkUrlInput] = useState('');
 
   if (!editor) return null;
 
@@ -76,9 +80,9 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
   const isTableActive = editor.isActive('table');
 
   return (
-    <div className="flex flex-col border-b border-border bg-card/60 backdrop-blur-sm">
+    <div className="flex flex-col border-b border-border bg-card/60 backdrop-blur-sm w-full max-w-full">
       {/* Primary Toolbar */}
-      <div className="flex flex-wrap items-center gap-1 p-2 text-foreground">
+      <div className="flex flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto">
         {/* Hidden file input */}
         <input
           type="file"
@@ -157,6 +161,102 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           >
             <Italic className="h-4 w-4" />
           </button>
+
+          {/* Link Button and Popover */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                const prev = editor.getAttributes('link').href || '';
+                setLinkUrlInput(prev);
+                setShowLinkPopover(!showLinkPopover);
+                setShowColorPicker(false);
+                setShowHighlightPicker(false);
+              }}
+              className={`rounded-lg p-1.5 transition-colors ${
+                editor.isActive('link')
+                  ? 'bg-blue-100 text-blue-900 dark:bg-blue-900/50 dark:text-blue-200 font-bold'
+                  : 'hover:bg-muted text-muted-foreground hover:text-foreground'
+              }`}
+              title={editor.isActive('link') ? (lang === 'ar' ? 'تعديل الرابط' : 'Edit Link') : (lang === 'ar' ? 'إدراج رابط' : 'Insert Link')}
+            >
+              <LinkIcon className="h-4 w-4" />
+            </button>
+
+            {showLinkPopover && (
+              <div className="absolute top-full start-0 z-50 mt-1.5 w-64 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl backdrop-blur-md">
+                <div className="text-[11px] font-semibold text-foreground mb-1.5">
+                  {lang === 'ar' ? 'إدراج أو تعديل الرابط:' : 'Insert or Edit Link:'}
+                </div>
+                <input
+                  type="url"
+                  autoFocus
+                  value={linkUrlInput}
+                  onChange={(e) => setLinkUrlInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      let cleanUrl = linkUrlInput.trim();
+                      if (!cleanUrl) {
+                        editor.chain().focus().unsetLink().run();
+                      } else {
+                        if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('mailto:')) {
+                          cleanUrl = 'https://' + cleanUrl;
+                        }
+                        editor.chain().focus().extendMarkRange('link').setLink({ href: cleanUrl }).run();
+                      }
+                      setShowLinkPopover(false);
+                    }
+                  }}
+                  placeholder="https://example.com"
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-olive-600 focus:ring-1 focus:ring-olive-600 mb-2 text-foreground"
+                />
+                <div className="flex items-center justify-between gap-1.5">
+                  {editor.isActive('link') ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        editor.chain().focus().unsetLink().run();
+                        setShowLinkPopover(false);
+                      }}
+                      className="flex items-center gap-1 text-[11px] text-red-600 hover:text-red-700"
+                    >
+                      <Unlink className="h-3 w-3" />
+                      <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
+                    </button>
+                  ) : <div />}
+
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowLinkPopover(false)}
+                      className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
+                    >
+                      {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        let cleanUrl = linkUrlInput.trim();
+                        if (!cleanUrl) {
+                          editor.chain().focus().unsetLink().run();
+                        } else {
+                          if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('mailto:')) {
+                            cleanUrl = 'https://' + cleanUrl;
+                          }
+                          editor.chain().focus().extendMarkRange('link').setLink({ href: cleanUrl }).run();
+                        }
+                        setShowLinkPopover(false);
+                      }}
+                      className="rounded bg-olive-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-olive-800"
+                    >
+                      {lang === 'ar' ? 'تطبيق' : 'Apply'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Colors & Highlight Palette */}
@@ -338,7 +438,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
 
       {/* Contextual Table Management Sub-Toolbar (active when cursor is in table) */}
       {isTableActive && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 bg-olive-50/60 dark:bg-olive-950/30 px-3 py-1.5 text-xs text-foreground">
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 bg-olive-50/60 dark:bg-olive-950/30 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto">
           {/* Table Tools Label Badge */}
           <div className="flex items-center gap-1 text-[11px] font-bold text-olive-800 dark:text-olive-300 me-1">
             <TableIcon className="h-3 w-3" />

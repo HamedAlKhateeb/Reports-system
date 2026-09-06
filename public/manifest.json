@@ -1,0 +1,21 @@
+﻿{
+  " name\: \نظام إدارة تقارير المراجعة وتتبع المشاكل\,
+ \short_name\: \التقارير\,
+ \description\: \منصة ذكية متكاملة لإعداد ومتابعة وتصدير التقارير الفنية ولوحات متابعة المشاكل\,
+ \start_url\: \/reports\,
+ \id\: \/reports\,
+ \display\: \standalone\,
+ \background_color\: \#FAFAF8\,
+ \theme_color\: \#2E4034\,
+ \orientation\: \portrait-primary\,
+ \dir\: \rtl\,
+ \lang\: \ar\,
+ \icons\: [
+ {
+ \src\: \/icon.svg\,
+ \sizes\: \any\,
+ \type\: \image/svg+xml\,
+ \purpose\: \any maskable\
+ }
+ ]
+}

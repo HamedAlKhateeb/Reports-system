@@ -2,7 +2,7 @@
 
 import React, { useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { FileText, Lock, Mail, AlertCircle, Globe, Sparkles } from 'lucide-react';
+import { FileText, Lock, Mail, AlertCircle, Globe, Sparkles, User as UserIcon, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { isFirebaseConfigured } from '@/lib/firebase';
@@ -12,21 +12,26 @@ function LoginFormContent() {
   const searchParams = useSearchParams();
   const redirectPath = searchParams.get('redirect') || '/reports';
 
-  const { signInWithEmail, signInWithGoogle, signInAsGuest, error: authContextError, clearError } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, error: authContextError, clearError } = useAuth();
   const { lang, setLang, t } = useLanguage();
 
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
+  const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const toggleLanguage = () => {
     setLang(lang === 'ar' ? 'en' : 'ar');
   };
 
-  const handleEmailLogin = async (e: React.FormEvent) => {
+  const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLocalError(null);
+    setSuccessMessage(null);
     clearError();
 
     if (!email || !password) {
@@ -34,15 +39,41 @@ function LoginFormContent() {
       return;
     }
 
+    if (mode === 'signup') {
+      if (password.length < 6) {
+        setLocalError(t('passwordTooShort'));
+        return;
+      }
+      if (password !== confirmPassword) {
+        setLocalError(t('passwordsDoNotMatch'));
+        return;
+      }
+    }
+
     try {
       setSubmitting(true);
-      await signInWithEmail(email, password);
-      router.push(redirectPath);
+      if (mode === 'signup') {
+        await signUpWithEmail(email, password, displayName);
+        setSuccessMessage(t('signUpSuccess'));
+        setTimeout(() => {
+          router.push(redirectPath);
+        }, 600);
+      } else {
+        await signInWithEmail(email, password);
+        router.push(redirectPath);
+      }
     } catch (err: any) {
-      if (err.message === 'unauthorizedUserError') {
+      console.error('Auth error:', err);
+      if (err.code === 'auth/email-already-in-use') {
+        setLocalError(lang === 'ar' ? 'هذا البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول.' : 'This email is already registered. Please sign in.');
+      } else if (err.code === 'auth/weak-password') {
+        setLocalError(t('passwordTooShort'));
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setLocalError(t('invalidCredentialsError'));
+      } else if (err.message === 'unauthorizedUserError') {
         setLocalError(t('unauthorizedUserError'));
       } else {
-        setLocalError(t('invalidCredentialsError'));
+        setLocalError(err.message || t('invalidCredentialsError'));
       }
     } finally {
       setSubmitting(false);
@@ -51,16 +82,38 @@ function LoginFormContent() {
 
   const handleGoogleLogin = async () => {
     setLocalError(null);
+    setSuccessMessage(null);
     clearError();
     try {
       setSubmitting(true);
       await signInWithGoogle();
       router.push(redirectPath);
     } catch (err: any) {
-      if (err.message === 'unauthorizedUserError') {
-        setLocalError(t('unauthorizedUserError'));
+      console.error('Google login error:', err);
+      if (err.code === 'auth/popup-blocked') {
+        setLocalError(
+          lang === 'ar'
+            ? 'تم حظر النافذة المنبثقة من قِبل المتصفح. يرجى السماح بالنوافذ المنبثقة أو استخدام الدخول بالبريد الإلكتروني.'
+            : 'Popup blocked by your browser. Please allow popups or use email login.'
+        );
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        setLocalError(
+          lang === 'ar'
+            ? 'تم إغلاق نافذة تسجيل الدخول قبل إتمام العملية.'
+            : 'The sign-in popup was closed before completion.'
+        );
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setLocalError(
+          lang === 'ar'
+            ? 'النطاق الحالي قيد الإعداد في Firebase Auth. يمكنك إنشاء حساب بالبريد الإلكتروني الآن أو الدخول كضيف لمتابعة العمل فوراً وبشكل معزول.'
+            : 'Domain pending in Firebase. You can create an email account or use Guest mode immediately.'
+        );
       } else {
-        setLocalError(t('invalidCredentialsError'));
+        setLocalError(
+          lang === 'ar'
+            ? `تعذر الاتصال بمزود Google. يمكنك إنشاء حساب فوري بالبريد أو استخدام "الدخول كضيف".`
+            : `Google sign-in unavailable. You can sign up with email or continue as Guest.`
+        );
       }
     } finally {
       setSubmitting(false);
@@ -69,6 +122,7 @@ function LoginFormContent() {
 
   const handleGuestLogin = async () => {
     setLocalError(null);
+    setSuccessMessage(null);
     clearError();
     try {
       setSubmitting(true);
@@ -84,46 +138,112 @@ function LoginFormContent() {
   const currentError = localError || (authContextError ? t(authContextError as any) : null);
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-slate-100 p-4 sm:p-6 lg:p-8">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-[#FAFAF8] dark:bg-[#161615] p-3 sm:p-6 lg:p-8">
       {/* Top language switch */}
-      <div className="absolute top-4 end-4">
+      <div className="absolute top-4 end-4 z-10">
         <button
           type="button"
           onClick={toggleLanguage}
-          className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 transition-colors"
+          className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground shadow-xs hover:bg-muted transition-colors"
         >
-          <Globe className="h-4 w-4 text-teal-600" />
+          <Globe className="h-4 w-4 text-olive-600 dark:text-olive-400" />
           <span>{lang === 'ar' ? 'English' : 'عربي'}</span>
         </button>
       </div>
 
       <div className="w-full max-w-md">
-        {/* Card Header */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
+        <div className="rounded-2xl border border-border bg-card p-6 sm:p-8 shadow-xl">
+          {/* Card Header */}
           <div className="mb-6 flex flex-col items-center text-center">
-            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-teal-600 text-white shadow-md">
-              <FileText className="h-8 w-8" />
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#2E4034] text-white shadow-md">
+              <FileText className="h-7 w-7" />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900">{t('loginTitle')}</h1>
-            <p className="mt-2 text-sm text-slate-500">{t('loginSubtitle')}</p>
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground">
+              {mode === 'signup' ? t('signUpTitle') : t('loginTitle')}
+            </h1>
+            <p className="mt-1.5 text-xs sm:text-sm text-muted-foreground">
+              {mode === 'signup' ? t('signUpSubtitle') : t('loginSubtitle')}
+            </p>
           </div>
+
+          {/* Mode Switcher Tabs (Sign In vs Sign Up) */}
+          <div className="mb-6 flex rounded-xl border border-border bg-muted/40 p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setMode('signin');
+                setLocalError(null);
+                setSuccessMessage(null);
+              }}
+              className={`flex-1 rounded-lg py-2 text-xs sm:text-sm font-semibold transition-all ${
+                mode === 'signin'
+                  ? 'bg-card text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t('login')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setMode('signup');
+                setLocalError(null);
+                setSuccessMessage(null);
+              }}
+              className={`flex-1 rounded-lg py-2 text-xs sm:text-sm font-semibold transition-all ${
+                mode === 'signup'
+                  ? 'bg-card text-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {t('signUp')}
+            </button>
+          </div>
+
+          {/* Success Banner */}
+          {successMessage && (
+            <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 p-3.5 text-xs sm:text-sm text-emerald-800 dark:text-emerald-300">
+              <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-emerald-600 mt-0.5" />
+              <div>{successMessage}</div>
+            </div>
+          )}
 
           {/* Error Banner */}
           {currentError && (
-            <div className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-              <AlertCircle className="h-5 w-5 flex-shrink-0 text-red-600 mt-0.5" />
+            <div className="mb-5 flex items-start gap-2.5 rounded-xl border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/40 p-3.5 text-xs sm:text-sm text-red-800 dark:text-red-300">
+              <AlertCircle className="h-4 w-4 flex-shrink-0 text-red-600 mt-0.5" />
               <div>{currentError}</div>
             </div>
           )}
 
-          {/* Email/Password Form */}
-          <form onSubmit={handleEmailLogin} className="space-y-4">
+          {/* Form */}
+          <form onSubmit={handleEmailSubmit} className="space-y-3.5">
+            {mode === 'signup' && (
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  {t('displayName')}
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
+                    <UserIcon className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder={t('displayNamePlaceholder')}
+                    className="block w-full rounded-xl border border-border bg-background ps-10 pe-3 py-2.5 text-base sm:text-sm text-foreground placeholder:text-muted-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600 transition-colors"
+                  />
+                </div>
+              </div>
+            )}
+
             <div>
-              <label className="block text-xs font-semibold uppercase text-slate-700 mb-1.5">
+              <label className="block text-xs font-semibold text-foreground mb-1">
                 {t('email')}
               </label>
               <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-slate-400">
+                <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
                   <Mail className="h-4 w-4" />
                 </div>
                 <input
@@ -132,17 +252,17 @@ function LoginFormContent() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder={t('emailPlaceholder')}
                   required
-                  className="block w-full rounded-lg border border-slate-300 bg-slate-50 ps-10 pe-3 py-2.5 text-sm text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  className="block w-full rounded-xl border border-border bg-background ps-10 pe-3 py-2.5 text-base sm:text-sm text-foreground placeholder:text-muted-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600 transition-colors"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase text-slate-700 mb-1.5">
+              <label className="block text-xs font-semibold text-foreground mb-1">
                 {t('password')}
               </label>
               <div className="relative">
-                <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-slate-400">
+                <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
                   <Lock className="h-4 w-4" />
                 </div>
                 <input
@@ -151,27 +271,52 @@ function LoginFormContent() {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder={t('passwordPlaceholder')}
                   required
-                  className="block w-full rounded-lg border border-slate-300 bg-slate-50 ps-10 pe-3 py-2.5 text-sm text-slate-900 transition-colors focus:border-teal-500 focus:bg-white focus:outline-none focus:ring-1 focus:ring-teal-500"
+                  className="block w-full rounded-xl border border-border bg-background ps-10 pe-3 py-2.5 text-base sm:text-sm text-foreground placeholder:text-muted-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600 transition-colors"
                 />
               </div>
             </div>
 
+            {mode === 'signup' && (
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-1">
+                  {t('confirmPassword')}
+                </label>
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
+                    <Lock className="h-4 w-4" />
+                  </div>
+                  <input
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder={t('passwordPlaceholder')}
+                    required
+                    className="block w-full rounded-xl border border-border bg-background ps-10 pe-3 py-2.5 text-base sm:text-sm text-foreground placeholder:text-muted-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600 transition-colors"
+                  />
+                </div>
+              </div>
+            )}
+
             <button
               type="submit"
               disabled={submitting}
-              className="flex w-full items-center justify-center rounded-lg bg-teal-600 py-2.5 text-sm font-semibold text-white shadow hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 disabled:opacity-50 transition-colors"
+              className="flex w-full items-center justify-center rounded-xl bg-[#2E4034] py-2.5 text-sm font-semibold text-white shadow hover:bg-[#24382F] focus:outline-none focus:ring-2 focus:ring-olive-600 focus:ring-offset-2 disabled:opacity-50 transition-colors"
             >
-              {submitting ? t('loading') : t('signInWithEmail')}
+              {submitting
+                ? t('loading')
+                : mode === 'signup'
+                ? t('createAccountBtn')
+                : t('signInWithEmail')}
             </button>
           </form>
 
           {/* Divider */}
-          <div className="my-6 flex items-center">
-            <div className="flex-grow border-t border-slate-200"></div>
-            <span className="mx-3 flex-shrink text-xs font-medium text-slate-400">
+          <div className="my-5 flex items-center">
+            <div className="flex-grow border-t border-border"></div>
+            <span className="mx-3 flex-shrink text-xs font-medium text-muted-foreground">
               {lang === 'ar' ? 'أو' : 'OR'}
             </span>
-            <div className="flex-grow border-t border-slate-200"></div>
+            <div className="flex-grow border-t border-border"></div>
           </div>
 
           {/* Google Sign-in */}
@@ -179,7 +324,7 @@ function LoginFormContent() {
             type="button"
             onClick={handleGoogleLogin}
             disabled={submitting}
-            className="flex w-full items-center justify-center gap-3 rounded-lg border border-slate-300 bg-white py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300 disabled:opacity-50 transition-colors"
+            className="flex w-full items-center justify-center gap-3 rounded-xl border border-border bg-card py-2.5 text-sm font-semibold text-foreground shadow-xs hover:bg-muted focus:outline-none focus:ring-2 focus:ring-border disabled:opacity-50 transition-colors"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24">
               <path
@@ -207,19 +352,19 @@ function LoginFormContent() {
             type="button"
             onClick={handleGuestLogin}
             disabled={submitting}
-            className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-teal-300 bg-teal-50/70 py-2.5 text-sm font-semibold text-teal-900 shadow-sm hover:bg-teal-100 hover:border-teal-400 focus:outline-none focus:ring-2 focus:ring-teal-400 disabled:opacity-50 transition-colors"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-olive-300 dark:border-olive-800/60 bg-olive-50/70 dark:bg-olive-950/30 py-2.5 text-sm font-semibold text-olive-900 dark:text-olive-200 shadow-xs hover:bg-olive-100 dark:hover:bg-olive-900/40 focus:outline-none focus:ring-2 focus:ring-olive-500 disabled:opacity-50 transition-colors"
           >
-            <Sparkles className="h-4 w-4 text-teal-600" />
+            <Sparkles className="h-4 w-4 text-olive-600 dark:text-olive-400" />
             <span>{t('continueAsGuest')}</span>
           </button>
 
           {!isFirebaseConfigured && (
-            <div className="mt-6 rounded-lg bg-teal-50 border border-teal-200 p-3 text-xs text-teal-800">
+            <div className="mt-5 rounded-xl bg-olive-50 dark:bg-olive-950/40 border border-olive-200 dark:border-olive-800 p-3 text-xs text-olive-800 dark:text-olive-300">
               <p className="font-semibold mb-1">{t('demoModeNotice')}</p>
-              <p className="text-teal-700">
+              <p className="text-olive-700 dark:text-olive-400">
                 {lang === 'ar'
-                  ? 'يمكنك تسجيل الدخول بالبريد: reviewer@example.com (أي كلمة مرور).'
-                  : 'You can sign in with: reviewer@example.com (any password).'}
+                  ? 'يمكنك إنشاء حساب جديد فوري أو استخدام: reviewer@example.com (أي كلمة مرور).'
+                  : 'You can create a new account now or use: reviewer@example.com (any password).'}
               </p>
             </div>
           )}

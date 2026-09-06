@@ -18,6 +18,7 @@ import { IssueCard } from '@/components/dashboard/IssueCard';
 import { IssueModal } from '@/components/dashboard/IssueModal';
 import { NewIssueModal } from '@/components/dashboard/NewIssueModal';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAuth } from '@/lib/auth-context';
 import {
   getStatusLabel,
   getSeverityLabel,
@@ -27,6 +28,7 @@ import {
 
 export default function DashboardPage() {
   const { lang, t } = useLanguage();
+  const { user } = useAuth();
 
   const [issues, setIssues] = useState<IssueItem[]>([]);
   const [reports, setReports] = useState<ReportItem[]>([]);
@@ -48,8 +50,8 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const [fetchedIssues, fetchedReports] = await Promise.all([
-        getIssues(),
-        getReports(),
+        getIssues(user?.uid),
+        getReports(user?.uid),
       ]);
       setIssues(fetchedIssues);
       setReports(fetchedReports);
@@ -58,7 +60,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     loadData();
@@ -105,7 +107,10 @@ export default function DashboardPage() {
   const handleCreateIssue = async (
     data: Omit<IssueItem, 'id' | 'createdAt' | 'updatedAt' | 'commentsCount'>
   ) => {
-    const created = await createIssue(data);
+    const created = await createIssue({
+      ...data,
+      ownerUid: user?.uid,
+    });
     setIssues((prev) => [created, ...prev]);
   };
 

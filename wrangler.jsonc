@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "reports-system",
+  "account_id": "367b6f99f8e042158eb86d7042f688fb",
   "main": ".open-next/worker.js",
   "compatibility_date": "2025-05-15",
   "compatibility_flags": ["nodejs_compat"],

@@ -17,13 +17,16 @@ export async function POST(req: NextRequest) {
     const zipBlob = await createMarkdownZip(report, images || []);
     const buffer = Buffer.from(await zipBlob.arrayBuffer());
 
-    const filename = `report-${report.reportNumber}-markdown.zip`;
+    const rawTitle = (report.title || (report.language === 'ar' ? 'تقرير' : 'report')).trim();
+    const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
+    const filename = `${sanitizedTitle} - #${report.reportNumber}-markdown.zip`;
+    const encodedFilename = encodeURIComponent(filename);
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
       },
     });
   } catch (error: any) {

@@ -18,6 +18,8 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useTheme, AppTheme } from '@/lib/theme-context';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 
+import { AI_CONFIG_KEY, AiProviderConfig } from '@/components/ai/AiAssistantModal';
+
 const API_KEY_STORAGE_KEY = 'gemini_custom_api_key';
 
 export default function SettingsPage() {
@@ -25,15 +27,32 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
 
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [providerConfig, setProviderConfig] = useState<AiProviderConfig>({
+    provider: 'gemini',
+    modelName: 'gemini-1.5-flash',
+    apiKey: '',
+    baseUrl: '',
+  });
   const [hasCustomKey, setHasCustomKey] = useState(false);
 
   useEffect(() => {
     try {
-      const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
-      if (savedKey) {
-        setApiKeyInput(savedKey);
-        setHasCustomKey(true);
+      const savedConfig = localStorage.getItem(AI_CONFIG_KEY);
+      if (savedConfig) {
+        const parsed = JSON.parse(savedConfig);
+        setProviderConfig((prev) => ({ ...prev, ...parsed }));
+        if (parsed.apiKey) setHasCustomKey(true);
+      } else {
+        const legacyKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+        if (legacyKey) {
+          setProviderConfig({
+            provider: 'gemini',
+            modelName: 'gemini-1.5-flash',
+            apiKey: legacyKey,
+            baseUrl: '',
+          });
+          setHasCustomKey(true);
+        }
       }
     } catch (e) {
       console.warn('Could not read API key from localStorage', e);
@@ -55,19 +74,29 @@ export default function SettingsPage() {
     showNotice(t('settingsSavedAlert'));
   };
 
-  const handleSaveApiKey = (e: React.FormEvent) => {
+  const handleSaveAiConfig = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = apiKeyInput.trim();
-    if (trimmed) {
-      localStorage.setItem(API_KEY_STORAGE_KEY, trimmed);
-      setHasCustomKey(true);
+    try {
+      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(providerConfig));
+      if (providerConfig.provider === 'gemini' && providerConfig.apiKey) {
+        localStorage.setItem(API_KEY_STORAGE_KEY, providerConfig.apiKey);
+      }
+      setHasCustomKey(Boolean(providerConfig.apiKey.trim()));
       showNotice(t('apiKeySavedSuccess'));
+    } catch (err) {
+      console.error('Failed to save AI config', err);
     }
   };
 
-  const handleRemoveApiKey = () => {
+  const handleRemoveAiConfig = () => {
+    localStorage.removeItem(AI_CONFIG_KEY);
     localStorage.removeItem(API_KEY_STORAGE_KEY);
-    setApiKeyInput('');
+    setProviderConfig({
+      provider: 'gemini',
+      modelName: 'gemini-1.5-flash',
+      apiKey: '',
+      baseUrl: '',
+    });
     setHasCustomKey(false);
     showNotice(t('apiKeyRemoved'));
   };
@@ -167,15 +196,20 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* AI API Key Configuration Card */}
+        {/* AI Multi-Provider Configuration Card */}
         <div className="rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#20201F] p-6 shadow-none">
           <div className="flex items-start gap-4">
             <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-olive-50 dark:bg-[#26342B] text-olive-700 dark:text-olive-300">
-              <Key className="h-5 w-5" />
+              <Sparkles className="h-5 w-5" />
             </div>
             <div className="flex-1">
               <div className="flex items-center justify-between">
-                <h2 className="text-base font-semibold text-[#202020] dark:text-[#F2F2EE]">{t('aiApiKeyTitle')}</h2>
+                <div>
+                  <h2 className="text-base font-semibold text-[#202020] dark:text-[#F2F2EE]">{t('aiApiKeyTitle')}</h2>
+                  <p className="mt-1 text-sm text-[#6B6964] dark:text-[#9E9C96] leading-relaxed">
+                    {t('aiApiKeyDesc')}
+                  </p>
+                </div>
                 <span
                   className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${
                     hasCustomKey
@@ -186,38 +220,134 @@ export default function SettingsPage() {
                   {hasCustomKey ? t('apiKeyStatusActive') : t('apiKeyStatusDefault')}
                 </span>
               </div>
-              <p className="mt-1 text-sm text-[#6B6964] dark:text-[#9E9C96] leading-relaxed">
-                {t('aiApiKeyDesc')}
-              </p>
 
-              <form onSubmit={handleSaveApiKey} className="mt-4 flex flex-col sm:flex-row gap-2 max-w-xl">
-                <div className="relative flex-1">
+              <form onSubmit={handleSaveAiConfig} className="mt-5 space-y-4 max-w-2xl">
+                {/* Provider Selector Tabs */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#6B6964] dark:text-[#9E9C96] mb-1.5">
+                    {t('aiProviderLabel')}
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'gemini', label: 'Google Gemini', defaultModel: 'gemini-1.5-flash' },
+                      { id: 'openai', label: 'OpenAI', defaultModel: 'gpt-4o' },
+                      { id: 'anthropic', label: 'Anthropic Claude', defaultModel: 'claude-3-7-sonnet-20250219' },
+                      { id: 'custom', label: 'Custom / Proxy', defaultModel: 'deepseek-chat' },
+                    ].map((p) => {
+                      const isActive = providerConfig.provider === p.id;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() =>
+                            setProviderConfig((prev) => ({
+                              ...prev,
+                              provider: p.id as any,
+                              modelName: prev.provider === p.id ? prev.modelName : p.defaultModel,
+                            }))
+                          }
+                          className={`rounded-lg border px-3 py-2 text-xs font-medium transition-all text-center ${
+                            isActive
+                              ? 'border-olive-700 bg-olive-50/70 text-olive-900 font-bold dark:bg-[#26342B] dark:text-olive-300 dark:border-olive-600'
+                              : 'border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#282827] text-[#202020] dark:text-[#F2F2EE] hover:border-olive-400'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Model Name Input + Suggestion Chips */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-[#6B6964] dark:text-[#9E9C96]">
+                      {t('aiModelNameLabel')}
+                    </label>
+                    <span className="text-[11px] text-[#8C8A85]">
+                      {lang === 'ar' ? 'يدعم أي موديل جديد بحرية' : 'Supports any model string'}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={providerConfig.modelName}
+                    onChange={(e) => setProviderConfig((prev) => ({ ...prev, modelName: e.target.value }))}
+                    placeholder="gpt-4o, claude-3-7-sonnet, gemini-2.5-flash..."
+                    className="w-full rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-[#FAFAF8] dark:bg-[#161615] px-3.5 py-2 text-xs font-mono text-[#202020] dark:text-[#F2F2EE] focus:border-olive-600 focus:outline-none"
+                    required
+                  />
+
+                  {/* Suggestion Chips */}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {(providerConfig.provider === 'gemini'
+                      ? ['gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-1.5-flash']
+                      : providerConfig.provider === 'openai'
+                      ? ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
+                      : providerConfig.provider === 'anthropic'
+                      ? ['claude-3-7-sonnet-20250219', 'claude-3-5-haiku-20241022', 'claude-3-5-sonnet-20241022']
+                      : ['deepseek-chat', 'llama-3.3-70b-versatile', 'qwen-2.5-72b']
+                    ).map((chip) => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => setProviderConfig((prev) => ({ ...prev, modelName: chip }))}
+                        className="rounded-md border border-[#E7E6E2] dark:border-[#2B2B29] bg-[#F7F7F5] dark:bg-[#282827] px-2 py-0.5 text-[11px] font-mono text-[#6B6964] dark:text-[#9E9C96] hover:border-olive-600 hover:text-olive-800 dark:hover:text-olive-300 transition-colors"
+                      >
+                        {chip}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* API Key Input */}
+                <div>
+                  <label className="block text-xs font-semibold text-[#6B6964] dark:text-[#9E9C96] mb-1.5">
+                    {t('aiApiKeyLabel')}
+                  </label>
                   <input
                     type="password"
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
+                    value={providerConfig.apiKey}
+                    onChange={(e) => setProviderConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
                     placeholder={t('aiApiKeyPlaceholder')}
                     className="w-full rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-[#FAFAF8] dark:bg-[#161615] px-3.5 py-2 text-xs font-mono text-[#202020] dark:text-[#F2F2EE] focus:border-olive-600 focus:outline-none"
                   />
                 </div>
 
-                <div className="flex gap-2">
+                {/* Base URL (optional / custom) */}
+                {(providerConfig.provider === 'custom' || providerConfig.provider === 'openai') && (
+                  <div>
+                    <label className="block text-xs font-semibold text-[#6B6964] dark:text-[#9E9C96] mb-1.5">
+                      {t('aiBaseUrlLabel')}
+                    </label>
+                    <input
+                      type="url"
+                      value={providerConfig.baseUrl || ''}
+                      onChange={(e) => setProviderConfig((prev) => ({ ...prev, baseUrl: e.target.value }))}
+                      placeholder="https://api.openai.com/v1 or https://openrouter.ai/api/v1"
+                      className="w-full rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-[#FAFAF8] dark:bg-[#161615] px-3.5 py-2 text-xs font-mono text-[#202020] dark:text-[#F2F2EE] focus:border-olive-600 focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                {/* Submit & Reset actions */}
+                <div className="flex items-center gap-2 pt-2">
                   <button
                     type="submit"
-                    disabled={!apiKeyInput.trim()}
-                    className="rounded-xl bg-[#2E4034] hover:bg-[#24382F] px-4 py-2 text-xs font-semibold text-white transition-colors disabled:opacity-50"
+                    className="rounded-xl bg-[#2E4034] hover:bg-[#24382F] px-5 py-2.5 text-xs font-semibold text-white transition-colors flex items-center gap-2"
                   >
-                    {t('saveApiKey')}
+                    <Check className="h-3.5 w-3.5" />
+                    <span>{t('saveApiKey')}</span>
                   </button>
 
                   {hasCustomKey && (
                     <button
                       type="button"
-                      onClick={handleRemoveApiKey}
-                      className="rounded-xl border border-red-200 dark:border-red-900/60 p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors"
-                      title={t('removeApiKey')}
+                      onClick={handleRemoveAiConfig}
+                      className="rounded-xl border border-red-200 dark:border-red-900/60 px-3.5 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors flex items-center gap-1.5"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>{t('removeApiKey')}</span>
                     </button>
                   )}
                 </div>

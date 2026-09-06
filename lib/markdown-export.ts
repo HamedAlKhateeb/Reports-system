@@ -7,13 +7,18 @@ import JSZip from 'jszip';
  */
 export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
   const lang = report.language;
+  const isAr = lang === 'ar';
   const lines: string[] = [];
+
+  if (isAr) {
+    lines.push('<div dir="rtl">\n');
+  }
 
   // Top Metadata Block
   lines.push(`# ${report.title || t('reportTitle', lang)}`);
   lines.push('');
-  lines.push(`| ${lang === 'ar' ? 'البيان' : 'Field'} | ${lang === 'ar' ? 'القيمة' : 'Value'} |`);
-  lines.push('| --- | --- |');
+  lines.push(`| ${isAr ? 'البيان' : 'Field'} | ${isAr ? 'القيمة' : 'Value'} |`);
+  lines.push(isAr ? '| ---: | ---: |' : '| --- | --- |');
   lines.push(`| **${t('reportNumber', lang)}** | #${report.reportNumber} |`);
   lines.push(`| **${t('author', lang)}** | ${report.author || '-'} |`);
   if (report.authorTitle) {
@@ -27,6 +32,12 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
   lines.push(`| **${t('createdAt', lang)}** | ${new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')} |`);
   if (report.signatureData) {
     lines.push(`| **${lang === 'ar' ? 'المصادقة والتوقيع' : 'Endorsement & Signature'}** | ${report.signatureData} |`);
+  }
+  if (report.themeColor) {
+    lines.push(`| **${isAr ? 'نمط الألوان' : 'Theme'}** | ${report.themeColor} |`);
+  }
+  if (report.backgroundColor) {
+    lines.push(`| **${isAr ? 'لون الخلفية' : 'Background'}** | ${report.backgroundColor} |`);
   }
   lines.push('');
   lines.push('---');
@@ -52,6 +63,7 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
             if (mark.type === 'bold') txt = `**${txt}**`;
             if (mark.type === 'italic') txt = `*${txt}*`;
             if (mark.type === 'code') txt = `\`${txt}\``;
+            if (mark.type === 'link') txt = `[${txt}](${mark.attrs?.href || ''})`;
           }
         }
         return txt;
@@ -87,8 +99,10 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
         const seq = node.attrs?.sequenceNumber || 1;
         const fileName = node.attrs?.fileName || `${t('imageSequencePrefix', lang)}${seq}.png`;
         const caption = node.attrs?.caption || '';
-        // Image format: ![caption](./screenshots/صورة-N.png)
-        return `![${caption}](./screenshots/${fileName})\n*${caption}*\n\n`;
+        const width = node.attrs?.width || '100%';
+        const alignment = node.attrs?.alignment || 'center';
+
+        return `<div align="${alignment}">\n  <img src="./screenshots/${fileName}" alt="${caption}" width="${width}" />\n  <br/>\n  <em>${caption || fileName}</em>\n</div>\n\n`;
       }
 
       case 'table': {
@@ -110,7 +124,7 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
 
           // Insert divider after header row (first row)
           if (rIdx === 0) {
-            const divider = cells.map(() => '---').join(' | ');
+            const divider = cells.map(() => (isAr ? '---:' : '---')).join(' | ');
             mdTableRows.push(`| ${divider} |`);
           }
         });
@@ -130,6 +144,10 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
     lines.push(processNode(node));
   }
 
+  if (isAr) {
+    lines.push('\n</div>\n');
+  }
+
   return lines.join('');
 }
 
@@ -144,8 +162,10 @@ export async function createMarkdownZip(
   const mdContent = tipTapJsonToMarkdown(report.contentJson, report);
   const lang = report.language;
 
-  // Add the markdown file
-  const reportFileName = `report-${report.reportNumber}.md`;
+  // Add the markdown file named after report title
+  const rawTitle = (report.title || (lang === 'ar' ? 'تقرير' : 'report')).trim();
+  const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
+  const reportFileName = `${sanitizedTitle} - #${report.reportNumber}.md`;
   zip.file(reportFileName, mdContent);
 
   // Add screenshots folder

@@ -1,14 +1,32 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { LanguageProvider } from '@/lib/i18n/LanguageContext';
 import { ThemeProvider } from '@/lib/theme-context';
 import { AuthProvider } from '@/lib/auth-context';
 import { Navbar } from '@/components/layout/Navbar';
 import { AuthGuard } from '@/components/layout/AuthGuard';
+import { PwaInstallPrompt } from '@/components/pwa/PwaInstallPrompt';
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: '#2E4034',
+};
 
 export const metadata: Metadata = {
   title: 'نظام إدارة تقارير المراجعة وتتبع المشاكل',
   description: 'منصة متكاملة لكتابة وإدارة تقارير المراجعة، مراجعة جودة الترجمة، وتتبع المشاكل والأخطاء البرمجية.',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'تقارير',
+  },
+  icons: {
+    icon: '/icon.svg',
+    apple: '/icon.svg',
+  },
 };
 
 export default function RootLayout({
@@ -18,7 +36,19 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
-      <body className="font-sans antialiased text-[#202020] bg-[#FAFAF8] dark:bg-[#161615] dark:text-[#F2F2EE] transition-colors duration-200">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800&display=swap"
+          rel="stylesheet"
+        />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+        <meta name="apple-mobile-web-app-title" content="تقارير" />
+        <link rel="apple-touch-icon" href="/icon.svg" />
+      </head>
+      <body className="font-sans antialiased text-[#202020] bg-[#FAFAF8] dark:bg-[#161615] dark:text-[#F2F2EE] transition-colors duration-200 overflow-x-hidden">
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>
@@ -26,6 +56,7 @@ export default function RootLayout({
               <AuthGuard>
                 <main className="min-h-[calc(100vh-4rem)]">{children}</main>
               </AuthGuard>
+              <PwaInstallPrompt />
             </AuthProvider>
           </LanguageProvider>
         </ThemeProvider>

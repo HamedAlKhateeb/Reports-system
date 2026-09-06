@@ -15,14 +15,17 @@ export async function POST(req: NextRequest) {
     }
 
     const docxBuffer = await buildDocxDocument(report, images || []);
-    const filename = `report-${report.reportNumber}.docx`;
+    const rawTitle = (report.title || (report.language === 'ar' ? 'تقرير' : 'report')).trim();
+    const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
+    const filename = `${sanitizedTitle} - #${report.reportNumber}.docx`;
+    const encodedFilename = encodeURIComponent(filename);
 
     return new NextResponse(new Uint8Array(docxBuffer), {
       status: 200,
       headers: {
         'Content-Type':
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Disposition': `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
       },
     });
   } catch (error: any) {

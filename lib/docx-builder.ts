@@ -20,6 +20,34 @@ import {
 import { ReportItem, ReportImageItem } from './types';
 import { t, DICTIONARY } from './i18n/dictionary';
 
+async function resolveImageBuffer(downloadUrl?: string): Promise<Buffer | null> {
+  if (!downloadUrl) return null;
+  try {
+    if (downloadUrl.startsWith('data:image/')) {
+      const parts = downloadUrl.split(',');
+      if (parts.length > 1) {
+        return Buffer.from(parts[1], 'base64');
+      }
+    } else if (downloadUrl.startsWith('http://') || downloadUrl.startsWith('https://')) {
+      const res = await fetch(downloadUrl);
+      if (res.ok) {
+        const arrayBuf = await res.arrayBuffer();
+        return Buffer.from(arrayBuf);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to resolve image buffer for docx', err);
+  }
+  return null;
+}
+
+const THEME_HEX_MAP: Record<string, { primary: string; light: string }> = {
+  olive: { primary: '2E4034', light: 'E8EFE9' },
+  blue: { primary: '1D4ED8', light: 'DBEAFE' },
+  slate: { primary: '334155', light: 'F1F5F9' },
+  emerald: { primary: '047857', light: 'D1FAE5' },
+};
+
 /**
  * Builds a professional DOCX document from TipTap JSON and report metadata
  */
@@ -27,16 +55,37 @@ export async function buildDocxDocument(
   report: ReportItem,
   images: ReportImageItem[] = []
 ): Promise<Buffer> {
-  const isAr = report.language === 'ar';
-  const lang = report.language;
+  const isAr = (report.language || 'ar').toLowerCase().startsWith('ar');
+  const lang = isAr ? 'ar' : 'en';
   const alignment = isAr ? AlignmentType.RIGHT : AlignmentType.LEFT;
+  const theme = THEME_HEX_MAP[report.themeColor || 'olive'] || THEME_HEX_MAP.olive;
+
+  function makeRun(text: string, options: any = {}) {
+    return new TextRun({
+      text,
+      font: {
+        ascii: isAr ? 'Arial' : 'Calibri',
+        hAnsi: isAr ? 'Arial' : 'Calibri',
+        cs: isAr ? 'Arial' : 'Calibri',
+      },
+      language: isAr ? { bidirectional: 'ar-SA' } : undefined,
+      rightToLeft: isAr,
+      ...options,
+    });
+  }
 
   const children: any[] = [];
 
   // Title
   children.push(
     new Paragraph({
-      text: report.title || t('reportTitle', lang),
+      children: [
+        makeRun(report.title || t('reportTitle', lang), {
+          bold: true,
+          size: 36,
+          color: theme.primary,
+        }),
+      ],
       heading: HeadingLevel.TITLE,
       alignment,
       bidirectional: isAr,
@@ -55,6 +104,8 @@ export async function buildDocxDocument(
 
   const metaTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
+    alignment,
+    visuallyRightToLeft: isAr,
     rows: metaRows.map(
       ([k, v]) =>
         new TableRow({
@@ -64,7 +115,7 @@ export async function buildDocxDocument(
               shading: { fill: 'f1f5f9', type: ShadingType.CLEAR, color: 'auto' },
               children: [
                 new Paragraph({
-                  children: [new TextRun({ text: k, bold: true, size: 20 })],
+                  children: [makeRun(k, { bold: true, size: 20 })],
                   alignment,
                   bidirectional: isAr,
                 }),
@@ -74,7 +125,7 @@ export async function buildDocxDocument(
               width: { size: 70, type: WidthType.PERCENTAGE },
               children: [
                 new Paragraph({
-                  children: [new TextRun({ text: v, size: 20 })],
+                  children: [makeRun(v, { size: 20 })],
                   alignment,
                   bidirectional: isAr,
                 }),
@@ -86,7 +137,7 @@ export async function buildDocxDocument(
   });
 
   children.push(metaTable);
-  children.push(new Paragraph({ text: '', spacing: { after: 300 } }));
+  children.push(new Paragraph({ text: '', spacing: { after: 300 }, alignment, bidirectional: isAr }));
 
   // Helper to extract text from a TipTap node
   function extractNodeText(node: any): string {
@@ -107,7 +158,13 @@ export async function buildDocxDocument(
 
         children.push(
           new Paragraph({
-            text,
+            children: [
+              makeRun(text, {
+                bold: true,
+                size: level === 1 ? 30 : level === 2 ? 24 : 20,
+                color: level === 1 ? '0f766e' : level === 2 ? '1e293b' : '334155',
+              }),
+            ],
             heading: headingLevel,
             alignment,
             bidirectional: isAr,
@@ -119,7 +176,11 @@ export async function buildDocxDocument(
         if (text.trim()) {
           children.push(
             new Paragraph({
-              children: [new TextRun({ text, size: 22 })],
+              children: [
+                makeRun(text, {
+                  size: 22,
+                }),
+              ],
               alignment,
               bidirectional: isAr,
               spacing: { after: 120 },
@@ -132,7 +193,11 @@ export async function buildDocxDocument(
           const text = extractNodeText(item);
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: `${idx + 1}.  ${text}`, size: 22 })],
+              children: [
+                makeRun(`${idx + 1}.  ${text}`, {
+                  size: 22,
+                }),
+              ],
               alignment,
               bidirectional: isAr,
               spacing: { after: 60 },
@@ -144,7 +209,11 @@ export async function buildDocxDocument(
           const text = extractNodeText(item);
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: `•  ${text}`, size: 22 })],
+              children: [
+                makeRun(`•  ${text}`, {
+                  size: 22,
+                }),
+              ],
               alignment,
               bidirectional: isAr,
               spacing: { after: 60 },
@@ -165,7 +234,7 @@ export async function buildDocxDocument(
               const lower = cellText.toLowerCase();
 
               // Check if cell is severity to apply color highlighting
-              let cellBg = isHeader ? '1e293b' : 'ffffff';
+              let cellBg = isHeader ? theme.primary : 'ffffff';
               let textColor = isHeader ? 'ffffff' : '000000';
               let isBold = isHeader;
 
@@ -175,23 +244,23 @@ export async function buildDocxDocument(
                   lower.includes('حرجة') ||
                   lower.includes(t('severity_critical', lang).toLowerCase())
                 ) {
-                  cellBg = 'fee2e2'; // Light red
-                  textColor = '991b1b'; // Dark red
+                  cellBg = 'fee2e2';
+                  textColor = '991b1b';
                   isBold = true;
                 } else if (
                   lower.includes('major') ||
                   lower.includes('كبيرة') ||
                   lower.includes(t('severity_major', lang).toLowerCase())
                 ) {
-                  cellBg = 'ffedd5'; // Light orange
-                  textColor = '9a3412'; // Dark orange
+                  cellBg = 'ffedd5';
+                  textColor = '9a3412';
                   isBold = true;
                 } else if (
                   lower.includes('minor') ||
                   lower.includes('طفيفة') ||
                   lower.includes(t('severity_minor', lang).toLowerCase())
                 ) {
-                  cellBg = 'fef9c3'; // Light yellow
+                  cellBg = 'fef9c3';
                   textColor = '854d0e';
                 }
               }
@@ -202,8 +271,7 @@ export async function buildDocxDocument(
                 children: [
                   new Paragraph({
                     children: [
-                      new TextRun({
-                        text: cellText,
+                      makeRun(cellText, {
                         color: textColor,
                         bold: isBold,
                         size: 20,
@@ -228,59 +296,110 @@ export async function buildDocxDocument(
           children.push(
             new Table({
               width: { size: 100, type: WidthType.PERCENTAGE },
+              alignment,
+              visuallyRightToLeft: isAr,
               rows: docxRows,
             })
           );
-          children.push(new Paragraph({ text: '', spacing: { after: 200 } }));
+          children.push(new Paragraph({ text: '', spacing: { after: 200 }, alignment, bidirectional: isAr }));
         }
       } else if (node.type === 'reportImage') {
         const seq = node.attrs?.sequenceNumber || 1;
         const caption = node.attrs?.caption || '';
-        const fileName = node.attrs?.fileName || `${t('imageSequencePrefix', lang)}${seq}.png`;
+        const prefix = isAr ? 'صورة-' : 'image-';
+        const fileName = node.attrs?.fileName || `${prefix}${seq}.png`;
+        let src = node.attrs?.src || '';
 
-        // Image placeholder / reference
-        children.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: `[${t('screenshotsAppendixHeading', lang)}: ${fileName}]`,
-                bold: true,
-                color: '0d9488',
-                size: 20,
-              }),
-            ],
-            alignment,
-            bidirectional: isAr,
-            spacing: { before: 100, after: 40 },
-          })
-        );
+        if (!src && images && images.length > 0) {
+          const found = images.find(
+            (img) =>
+              (node.attrs?.imageId && img.id === node.attrs.imageId) ||
+              img.sequenceNumber === seq ||
+              img.fileName === fileName
+          );
+          if (found) {
+            src = found.downloadUrl;
+          }
+        }
 
-        if (caption) {
+        // Calculate scaled dimensions and alignment based on attributes
+        const widthAttr = node.attrs?.width || '100%';
+        const alignAttr = node.attrs?.alignment || 'center';
+        let scale = 1.0;
+        if (widthAttr === '25%') scale = 0.25;
+        else if (widthAttr === '50%') scale = 0.5;
+        else if (widthAttr === '75%') scale = 0.75;
+        else if (widthAttr === '100%') scale = 1.0;
+        else {
+          const parsed = parseInt(widthAttr, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed <= 100) {
+            scale = parsed / 100;
+          }
+        }
+        const imgWidth = Math.round(520 * scale);
+        const imgHeight = Math.round(300 * scale);
+        const imgAlign =
+          alignAttr === 'left'
+            ? AlignmentType.LEFT
+            : alignAttr === 'right'
+            ? AlignmentType.RIGHT
+            : AlignmentType.CENTER;
+
+        // Try embedding the image directly inline
+        const imgBuffer = await resolveImageBuffer(src);
+        if (imgBuffer) {
           children.push(
             new Paragraph({
               children: [
-                new TextRun({
-                  text: caption,
-                  italics: true,
-                  size: 18,
-                  color: '64748b',
+                new ImageRun({
+                  data: imgBuffer,
+                  transformation: {
+                    width: imgWidth,
+                    height: imgHeight,
+                  },
                 }),
               ],
-              alignment,
-              bidirectional: isAr,
-              spacing: { after: 150 },
+              alignment: imgAlign,
+              spacing: { before: 140, after: 60 },
             })
           );
         }
+
+        // Image caption with RTL support
+        children.push(
+          new Paragraph({
+            children: [
+              makeRun(`${fileName}`, {
+                bold: true,
+                color: theme.primary,
+                size: 20,
+              }),
+              ...(caption
+                ? [
+                    makeRun(` - ${caption}`, {
+                      italics: true,
+                      size: 18,
+                      color: '475569',
+                    }),
+                  ]
+                : []),
+            ],
+            alignment: AlignmentType.CENTER,
+            bidirectional: isAr,
+            spacing: { before: 40, after: 180 },
+          })
+        );
       }
     }
   }
 
   // Endorsement & Signature Section
-  children.push(new Paragraph({ text: '', spacing: { before: 200, after: 100 } }));
+  children.push(new Paragraph({ text: '', spacing: { before: 200, after: 100 }, alignment, bidirectional: isAr }));
   children.push(
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
+      alignment,
+      visuallyRightToLeft: isAr,
       rows: [
         new TableRow({
           cantSplit: true,
@@ -291,8 +410,7 @@ export async function buildDocxDocument(
               children: [
                 new Paragraph({
                   children: [
-                    new TextRun({
-                      text: isAr ? 'المصادقة والتوقيع الرسمي' : 'Official Sign-off & Endorsement',
+                    makeRun(isAr ? 'المصادقة والتوقيع الرسمي' : 'Official Sign-off & Endorsement', {
                       bold: true,
                       size: 24,
                       color: '1e293b',
@@ -304,8 +422,8 @@ export async function buildDocxDocument(
                 }),
                 new Paragraph({
                   children: [
-                    new TextRun({ text: `${t('author', lang)}: `, bold: true, size: 20 }),
-                    new TextRun({ text: report.author || '-', size: 20 }),
+                    makeRun(`${t('author', lang)}: `, { bold: true, size: 20 }),
+                    makeRun(report.author || '-', { size: 20 }),
                   ],
                   alignment,
                   bidirectional: isAr,
@@ -313,8 +431,8 @@ export async function buildDocxDocument(
                 }),
                 new Paragraph({
                   children: [
-                    new TextRun({ text: `${isAr ? 'المنصب الوظيفي' : 'Job Title'}: `, bold: true, size: 20 }),
-                    new TextRun({ text: report.authorTitle || '-', size: 20 }),
+                    makeRun(`${isAr ? 'المنصب الوظيفي' : 'Job Title'}: `, { bold: true, size: 20 }),
+                    makeRun(report.authorTitle || '-', { size: 20 }),
                   ],
                   alignment,
                   bidirectional: isAr,
@@ -322,8 +440,8 @@ export async function buildDocxDocument(
                 }),
                 new Paragraph({
                   children: [
-                    new TextRun({ text: `${isAr ? 'الجهة / القسم' : 'Organization'}: `, bold: true, size: 20 }),
-                    new TextRun({ text: report.organization || '-', size: 20 }),
+                    makeRun(`${isAr ? 'الجهة / القسم' : 'Organization'}: `, { bold: true, size: 20 }),
+                    makeRun(report.organization || '-', { size: 20 }),
                   ],
                   alignment,
                   bidirectional: isAr,
@@ -331,15 +449,17 @@ export async function buildDocxDocument(
                 }),
                 new Paragraph({
                   children: [
-                    new TextRun({
-                      text: report.signatureData
+                    makeRun(
+                      report.signatureData
                         ? `✍️  ${report.signatureData}`
                         : (isAr ? 'التوقيع: _______________________________' : 'Signature: _______________________________'),
-                      italics: true,
-                      bold: true,
-                      size: 22,
-                      color: '0f766e',
-                    }),
+                      {
+                        italics: true,
+                        bold: true,
+                        size: 22,
+                        color: theme.primary,
+                      }
+                    ),
                   ],
                   alignment,
                   bidirectional: isAr,
@@ -358,12 +478,20 @@ export async function buildDocxDocument(
     children.push(
       new Paragraph({
         children: [new PageBreak()],
+        alignment,
+        bidirectional: isAr,
       })
     );
 
     children.push(
       new Paragraph({
-        text: t('screenshotsAppendixHeading', lang),
+        children: [
+          makeRun(t('screenshotsAppendixHeading', lang), {
+            bold: true,
+            size: 28,
+            color: '0f766e',
+          }),
+        ],
         heading: HeadingLevel.HEADING_1,
         alignment,
         bidirectional: isAr,
@@ -375,8 +503,7 @@ export async function buildDocxDocument(
       children.push(
         new Paragraph({
           children: [
-            new TextRun({
-              text: `${img.fileName || `${t('imageSequencePrefix', lang)}${img.sequenceNumber}.png`}:`,
+            makeRun(`${img.fileName || `${t('imageSequencePrefix', lang)}${img.sequenceNumber}.png`}:`, {
               bold: true,
               size: 22,
             }),
@@ -389,16 +516,7 @@ export async function buildDocxDocument(
 
       // Fetch and embed image bytes if possible
       try {
-        let imgBuffer: Buffer | null = null;
-        if (img.downloadUrl.startsWith('data:image/')) {
-          const base64 = img.downloadUrl.split(',')[1];
-          imgBuffer = Buffer.from(base64, 'base64');
-        } else if (img.downloadUrl.startsWith('http')) {
-          const res = await fetch(img.downloadUrl);
-          const arrayBuf = await res.arrayBuffer();
-          imgBuffer = Buffer.from(arrayBuf);
-        }
-
+        const imgBuffer = await resolveImageBuffer(img.downloadUrl);
         if (imgBuffer) {
           children.push(
             new Paragraph({
@@ -406,8 +524,8 @@ export async function buildDocxDocument(
                 new ImageRun({
                   data: imgBuffer,
                   transformation: {
-                    width: 500,
-                    height: 300,
+                    width: 520,
+                    height: 320,
                   },
                 }),
               ],
@@ -423,8 +541,7 @@ export async function buildDocxDocument(
         children.push(
           new Paragraph({
             children: [
-              new TextRun({
-                text: img.caption,
+              makeRun(img.caption, {
                 italics: true,
                 size: 18,
                 color: '475569',
@@ -440,6 +557,97 @@ export async function buildDocxDocument(
   }
 
   const doc = new Document({
+    styles: {
+      default: {
+        document: {
+          run: {
+            font: {
+              ascii: isAr ? 'Arial' : 'Calibri',
+              hAnsi: isAr ? 'Arial' : 'Calibri',
+              cs: isAr ? 'Arial' : 'Calibri',
+            },
+            rightToLeft: isAr,
+            language: isAr ? { bidirectional: 'ar-SA' } : undefined,
+          },
+          paragraph: {
+            alignment,
+            ...(isAr ? { bidirectional: true } : {}),
+          } as any,
+        },
+        heading1: {
+          run: {
+            font: {
+              ascii: isAr ? 'Arial' : 'Calibri',
+              hAnsi: isAr ? 'Arial' : 'Calibri',
+              cs: isAr ? 'Arial' : 'Calibri',
+            },
+            rightToLeft: isAr,
+            color: '0f766e',
+            bold: true,
+            size: 30,
+          },
+          paragraph: {
+            alignment,
+            spacing: { before: 240, after: 120 },
+            ...(isAr ? { bidirectional: true } : {}),
+          } as any,
+        },
+        heading2: {
+          run: {
+            font: {
+              ascii: isAr ? 'Arial' : 'Calibri',
+              hAnsi: isAr ? 'Arial' : 'Calibri',
+              cs: isAr ? 'Arial' : 'Calibri',
+            },
+            rightToLeft: isAr,
+            color: '1e293b',
+            bold: true,
+            size: 24,
+          },
+          paragraph: {
+            alignment,
+            spacing: { before: 200, after: 100 },
+            ...(isAr ? { bidirectional: true } : {}),
+          } as any,
+        },
+        heading3: {
+          run: {
+            font: {
+              ascii: isAr ? 'Arial' : 'Calibri',
+              hAnsi: isAr ? 'Arial' : 'Calibri',
+              cs: isAr ? 'Arial' : 'Calibri',
+            },
+            rightToLeft: isAr,
+            color: '334155',
+            bold: true,
+            size: 20,
+          },
+          paragraph: {
+            alignment,
+            spacing: { before: 160, after: 80 },
+            ...(isAr ? { bidirectional: true } : {}),
+          } as any,
+        },
+        title: {
+          run: {
+            font: {
+              ascii: isAr ? 'Arial' : 'Calibri',
+              hAnsi: isAr ? 'Arial' : 'Calibri',
+              cs: isAr ? 'Arial' : 'Calibri',
+            },
+            rightToLeft: isAr,
+            color: theme.primary,
+            bold: true,
+            size: 36,
+          },
+          paragraph: {
+            alignment,
+            spacing: { after: 200 },
+            ...(isAr ? { bidirectional: true } : {}),
+          } as any,
+        },
+      },
+    },
     sections: [
       {
         properties: {
@@ -457,13 +665,12 @@ export async function buildDocxDocument(
             children: [
               new Paragraph({
                 children: [
-                  new TextRun({
-                    text: `${report.title || t('reportTitle', lang)} | #${report.reportNumber}`,
+                  makeRun(`${report.title || t('reportTitle', lang)} | #${report.reportNumber}`, {
                     size: 18,
                     color: '64748b',
                   }),
                 ],
-                alignment: isAr ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                alignment,
                 bidirectional: isAr,
               }),
             ],
@@ -474,8 +681,7 @@ export async function buildDocxDocument(
             children: [
               new Paragraph({
                 children: [
-                  new TextRun({
-                    text: isAr ? 'نظام إدارة تقارير المراجعة  |  صفحة ' : 'Review Reports System  |  Page ',
+                  makeRun(isAr ? 'نظام إدارة تقارير المراجعة  |  صفحة ' : 'Review Reports System  |  Page ', {
                     size: 18,
                     color: '94a3b8',
                   }),
@@ -483,9 +689,9 @@ export async function buildDocxDocument(
                     children: [PageNumber.CURRENT],
                     size: 18,
                     color: '94a3b8',
+                    rightToLeft: isAr,
                   }),
-                  new TextRun({
-                    text: isAr ? ' من ' : ' of ',
+                  makeRun(isAr ? ' من ' : ' of ', {
                     size: 18,
                     color: '94a3b8',
                   }),
@@ -493,9 +699,11 @@ export async function buildDocxDocument(
                     children: [PageNumber.TOTAL_PAGES],
                     size: 18,
                     color: '94a3b8',
+                    rightToLeft: isAr,
                   }),
                 ],
                 alignment: AlignmentType.CENTER,
+                bidirectional: isAr,
               }),
             ],
           }),

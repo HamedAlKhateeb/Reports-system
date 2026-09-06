@@ -17,7 +17,11 @@ export async function POST(req: NextRequest) {
     }
 
     const docxBuffer = await buildDocxDocument(report, images || []);
-    const pdfFilename = `report-${report.reportNumber}.pdf`;
+    const rawTitle = (report.title || (report.language === 'ar' ? 'تقرير' : 'report')).trim();
+    const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
+    const pdfFilename = `${sanitizedTitle} - #${report.reportNumber}.pdf`;
+    const fallbackFilename = `${sanitizedTitle} - #${report.reportNumber}.docx`;
+    const encodedPdfFilename = encodeURIComponent(pdfFilename);
 
     try {
       const pdfBuffer = await convertDocxToPdf(docxBuffer);
@@ -26,7 +30,7 @@ export async function POST(req: NextRequest) {
         status: 200,
         headers: {
           'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="${pdfFilename}"`,
+          'Content-Disposition': `attachment; filename="${encodedPdfFilename}"; filename*=UTF-8''${encodedPdfFilename}`,
         },
       });
     } catch (conversionErr: any) {
@@ -38,7 +42,7 @@ export async function POST(req: NextRequest) {
             fallbackToDocx: true,
             message: t('pdfNoticeWithoutLibreOffice', report.language),
             docxBase64: docxBuffer.toString('base64'),
-            fallbackFilename: `report-${report.reportNumber}.docx`,
+            fallbackFilename,
           },
           { status: 200 }
         );

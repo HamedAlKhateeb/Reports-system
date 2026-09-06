@@ -2,7 +2,7 @@ import { AppLanguage, IssueSeverity, IssueStatus } from './i18n/dictionary';
 
 export interface ReportItem {
   id: string;
-  reportNumber: number;
+  reportNumber: number | string;
   title: string;
   language: AppLanguage; // Content language of this specific report
   author: string;
@@ -38,6 +38,7 @@ export interface IssueItem {
   status: IssueStatus;     // 'open' | 'in_progress' | 'done'
   severity: IssueSeverity; // 'critical' | 'major' | 'minor'
   linkedReportId: string | null;
+  ownerUid?: string;
   createdAt: string;
   updatedAt: string;
   commentsCount?: number;

@@ -109,6 +109,70 @@ export const DICTIONARY = {
     ar: 'وضع تجريبي: يمكنك تسجيل الدخول بحساب تجريبي أو استخدام حساب Google أو الضغط على الدخول كضيف.',
     en: 'Demo Mode: You can sign in with authorized credentials, Google, or Continue as Guest.',
   },
+  signUp: {
+    ar: 'إنشاء حساب جديد',
+    en: 'Create New Account',
+  },
+  signUpTitle: {
+    ar: 'إنشاء حساب جديد في النظام',
+    en: 'Create an Account in System',
+  },
+  signUpSubtitle: {
+    ar: 'سجل حسابك للبدء في كتابة تقاريرك الخاصة وتتبع المشاكل بشكل مستقل',
+    en: 'Register your account to manage your isolated reports and issues',
+  },
+  displayName: {
+    ar: 'الاسم الكامل / اسم العرض',
+    en: 'Full Name / Display Name',
+  },
+  displayNamePlaceholder: {
+    ar: 'مثال: أحمد محمد أو Eng. Sarah',
+    en: 'e.g. John Doe or Eng. Sarah',
+  },
+  confirmPassword: {
+    ar: 'تأكيد كلمة المرور',
+    en: 'Confirm Password',
+  },
+  passwordsDoNotMatch: {
+    ar: 'كلمتا المرور غير متطابقتين، يرجى التأكد من إدخال نفس كلمة المرور.',
+    en: 'Passwords do not match. Please ensure both fields are identical.',
+  },
+  passwordTooShort: {
+    ar: 'يجب ألا تقل كلمة المرور عن 6 أحرف.',
+    en: 'Password must be at least 6 characters long.',
+  },
+  signUpSuccess: {
+    ar: 'تم إنشاء الحساب بنجاح! جاري تسجيل الدخول...',
+    en: 'Account created successfully! Signing in...',
+  },
+  alreadyHaveAccount: {
+    ar: 'لديك حساب بالفعل؟ تسجيل الدخول',
+    en: 'Already have an account? Sign In',
+  },
+  dontHaveAccount: {
+    ar: 'ليس لديك حساب؟ إنشاء حساب جديد',
+    en: "Don't have an account? Create one",
+  },
+  createAccountBtn: {
+    ar: 'إنشاء الحساب وبدء الاستخدام',
+    en: 'Create Account & Start',
+  },
+  installApp: {
+    ar: 'تثبيت التطبيق على هاتفك',
+    en: 'Install App on Phone',
+  },
+  installAppDesc: {
+    ar: 'يمكنك تثبيت واستخدام هذا النظام كتطبيق سريع ومستقل على شاشة هاتفك المحمول.',
+    en: 'Install and use this system as a standalone fast app on your mobile home screen.',
+  },
+  installNow: {
+    ar: 'تثبيت الآن',
+    en: 'Install Now',
+  },
+  iosInstallTip: {
+    ar: 'لتثبيت التطبيق على iPhone: اضغط على زر المشاركة (Share) في Safari ثم اختر "إضافة إلى الشاشة الرئيسية" (Add to Home Screen).',
+    en: 'To install on iPhone: tap the Share button in Safari, then select "Add to Home Screen".',
+  },
 
   // Statuses (language-neutral keys in DB, localized only in UI and exports)
   status_open: {
@@ -192,6 +256,62 @@ export const DICTIONARY = {
   templateEmptyDesc: {
     ar: 'صفحة فارغة جاهزة لكتابة تقرير حر من البداية',
     en: 'Empty document ready for custom content',
+  },
+  templateProblemReport: {
+    ar: 'تقرير وتحليل المشاكل والأخطاء (Problem Report & Analysis)',
+    en: 'Problem Report & Analysis',
+  },
+  templateProblemReportDesc: {
+    ar: 'ملخص تفصيلي للمشاكل ودرجة خطورتها، الأسباب الجذرية، والإجراءات التصحيحية المقترحة',
+    en: 'Summary of problems, severity levels, root causes, and recommended corrective actions',
+  },
+  templateFreelancerWork: {
+    ar: 'تقرير أعمال المستقلين والمتعاقدين (Freelancer Work Report)',
+    en: 'Freelancer Work Report',
+  },
+  templateFreelancerWorkDesc: {
+    ar: 'توثيق دقيق للمهام: ما تم إنجازه، المطلوب، الحالة، الساعات والمجهود، والمبالغ المستحقة',
+    en: 'Deliverables tracking: completed work, pending tasks, status, hours/effort, and payments',
+  },
+  templateMarketCompetitor: {
+    ar: 'دراسة وتحليل السوق والمنافسين (Market & Competitor Analysis)',
+    en: 'Market & Competitor Analysis',
+  },
+  templateMarketCompetitorDesc: {
+    ar: 'استكشاف مشهد السوق، مقارنة المنافسين، المزايا التنافسية، الفرص المتاحة، وحجم الطلب',
+    en: 'Market landscape, competitor comparison, advantages, identified opportunities, and demand size',
+  },
+  templateRequirementsProduct: {
+    ar: 'تحليل المتطلبات والمنتج (Requirements & Product Analysis)',
+    en: 'Requirements & Product Analysis',
+  },
+  templateRequirementsProductDesc: {
+    ar: 'تحديد النطاق، الميزات المطلوبة (Features)، المشاكل المحددة، وحالات الاستخدام (Use Cases)',
+    en: 'Scope definition, required features, identified pain points, and user stories/use cases',
+  },
+  templateProductPerformance: {
+    ar: 'تقرير أداء المنتج والمستخدمين (Product Performance Report)',
+    en: 'Product Performance Report',
+  },
+  templateProductPerformanceDesc: {
+    ar: 'مؤشرات الأداء الرئيسية (KPIs)، أعداد وسلوك المستخدمين، التحويل (Conversion)، والاحتفاظ (Retention)',
+    en: 'Core KPIs, user metrics, conversion rates, user retention, and actionable results',
+  },
+  templateFinancialPerformance: {
+    ar: 'تقرير الأداء المالي والميزانية (Financial Performance Report)',
+    en: 'Financial Performance Report',
+  },
+  templateFinancialPerformanceDesc: {
+    ar: 'الإيرادات المحققة، التكاليف والمصروفات، صافي الأرباح، العائد على الاستثمار (ROI)، ومتابعة الميزانية',
+    en: 'Revenue, operational costs, net profit, return on investment (ROI), and budget variance',
+  },
+  templateDecisionRecommendation: {
+    ar: 'تقرير دراسة القرارات والتوصيات (Decision & Recommendation Report)',
+    en: 'Decision & Recommendation Report',
+  },
+  templateDecisionRecommendationDesc: {
+    ar: 'مقارنة الخيارات والبدائل، تقييم المخاطر، التوصية الاستراتيجية النهائية، وخطة التنفيذ',
+    en: 'Comparison of alternatives, risk assessment, final recommendation, and execution plan',
   },
   templateBugReport: {
     ar: 'تقرير أخطاء النظام (Software Bugs)',
@@ -589,42 +709,86 @@ export const DICTIONARY = {
     en: 'System Default',
   },
 
-  // User AI API Key Settings
+  // User AI API Key Settings & Multi-Provider
   aiApiKeyTitle: {
-    ar: 'مفتاح API للذكاء الاصطناعي (Google Gemini)',
-    en: 'AI API Key (Google Gemini)',
+    ar: 'إعدادات مزودات ونماذج الذكاء الاصطناعي (AI Providers)',
+    en: 'AI Provider & Model Settings',
   },
   aiApiKeyDesc: {
-    ar: 'أضف مفتاح API الخاص بك لتمكين التحليل المباشر للمستندات الضخمة وتدقيق MQM بلا حدود. يُحفظ المفتاح محلياً على جهازك بأمان.',
-    en: 'Provide your personal Google Gemini API key for unrestricted document auditing and MQM analysis. Stored securely on your device.',
+    ar: 'اختر المزود وأدخل اسم الموديل ومفتاح الـ API الخاص بك (OpenAI, Anthropic, Gemini, أو أي مزود متوافق). يُحفظ المفتاح محلياً على جهازك بأمان.',
+    en: 'Select provider, specify your model name and API key (OpenAI, Anthropic, Gemini, or compatible endpoint). Stored securely on your device.',
+  },
+  aiProviderLabel: {
+    ar: 'مزود الخدمة (Provider)',
+    en: 'Provider',
+  },
+  aiModelNameLabel: {
+    ar: 'اسم النموذج / الموديل (Model Name)',
+    en: 'Model Name',
+  },
+  aiModelNamePlaceholder: {
+    ar: 'مثال: gpt-4o أو claude-3-7-sonnet أو gemini-2.5-flash',
+    en: 'e.g. gpt-4o, claude-3-7-sonnet, gemini-2.5-flash',
+  },
+  aiApiKeyLabel: {
+    ar: 'مفتاح الـ API (API Key)',
+    en: 'API Key',
   },
   aiApiKeyPlaceholder: {
-    ar: 'أدخل مفتاح Gemini API هنا (AIzaSy...)',
-    en: 'Enter your Gemini API key (AIzaSy...)',
+    ar: 'أدخل مفتاح API الخاص بالمزود المختار',
+    en: 'Enter your API key for selected provider',
+  },
+  aiBaseUrlLabel: {
+    ar: 'رابط المزود المخصص (Base URL - اختياري)',
+    en: 'Custom Base URL (Optional)',
+  },
+  aiBaseUrlPlaceholder: {
+    ar: 'https://api.openai.com/v1 أو عنوان الخادم الخاص بك',
+    en: 'https://api.openai.com/v1 or custom server URL',
   },
   saveApiKey: {
-    ar: 'حفظ المفتاح',
-    en: 'Save API Key',
+    ar: 'حفظ الإعدادات',
+    en: 'Save Settings',
   },
   apiKeySavedSuccess: {
-    ar: 'تم حفظ مفتاح API بنجاح',
-    en: 'API key saved successfully',
+    ar: 'تم حفظ إعدادات الذكاء الاصطناعي بنجاح',
+    en: 'AI settings saved successfully',
   },
   apiKeyRemoved: {
-    ar: 'تم إزالة المفتاح، سيعمل المساعد بالمحرك الافتراضي',
-    en: 'API Key removed; using default engine',
+    ar: 'تمت إزالة الإعدادات المخصصة، سيعمل المساعد بالمحرك المدمج',
+    en: 'Custom settings removed; using built-in engine',
   },
   apiKeyStatusActive: {
-    ar: 'مفتاح مخصص مفعّل',
-    en: 'Custom Key Active',
+    ar: 'مزود مخصص مفعّل',
+    en: 'Custom Provider Active',
   },
   apiKeyStatusDefault: {
-    ar: 'المحرك الافتراضي يعمل (بدون مفتاح)',
-    en: 'Using default engine (No key)',
+    ar: 'المحرك المدمج الذكي (بدون مفتاح)',
+    en: 'Built-in Engine (No key)',
   },
   removeApiKey: {
-    ar: 'حذف المفتاح',
-    en: 'Remove Key',
+    ar: 'استعادة المحرك المدمج',
+    en: 'Reset to Built-in Engine',
+  },
+  aiChipCurrentReport: {
+    ar: '📊 تحليل التقرير الحالي',
+    en: '📊 Analyze Current Report',
+  },
+  aiChipOpenIssues: {
+    ar: '🚨 ملخص المشاكل المفتوحة والحرجة',
+    en: '🚨 Critical Open Issues',
+  },
+  aiChipAllReports: {
+    ar: '📑 استنتاج اتجاهات ومقارنة التقارير',
+    en: '📑 Compare & Analyze Reports',
+  },
+  aiChipDraftReport: {
+    ar: '✍️ اقتراح مسودة تقرير عمل/أداء جديد',
+    en: '✍️ Draft New Report',
+  },
+  aiContextLinkedReport: {
+    ar: 'مرتبط بالتقرير الحالي:',
+    en: 'Linked to current report:',
   },
   // Customization & Colors
   textColor: {
