@@ -35,8 +35,14 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { Button } from '@/components/ui/button';
+import { Card, CardHeader, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { saveCustomTemplate } from '@/lib/custom-templates';
 import { useAuth } from '@/lib/auth-context';
+import { cn } from '@/lib/utils';
 
 const TipTapEditor = dynamic(
   () => import('@/components/editor/TipTapEditor').then((m) => m.TipTapEditor),
@@ -307,15 +313,19 @@ export default function ReportDetailPage() {
     <div className="mx-auto max-w-6xl px-2.5 sm:px-6 lg:px-8 py-6 sm:py-8 w-full max-w-full">
       {/* Top Navigation & Actions Bar */}
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Link
-          href="/reports"
-          className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-teal-700 transition-colors"
+        <Button
+          asChild
+          variant="ghost"
+          size="sm"
+          className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground self-start rounded-lg"
         >
-          <BackIcon className="h-4 w-4" />
-          <span>{t('reports')}</span>
-        </Link>
+          <Link href="/reports">
+            <BackIcon className="h-4 w-4" />
+            <span>{t('reports')}</span>
+          </Link>
+        </Button>
 
-        {/* Export Buttons */}
+        {/* Export & Action Buttons with Unified Styling */}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
@@ -323,9 +333,10 @@ export default function ReportDetailPage() {
             size="sm"
             disabled={!!exporting}
             onClick={() => handleExport('md')}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
             title={t('exportMarkdown')}
           >
-            <FileCode className="h-3.5 w-3.5 text-indigo-600" />
+            <FileCode className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
             <span>Markdown (ZIP)</span>
           </Button>
 
@@ -335,9 +346,10 @@ export default function ReportDetailPage() {
             size="sm"
             disabled={!!exporting}
             onClick={() => handleExport('docx')}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
             title={t('exportDocx')}
           >
-            <FileText className="h-3.5 w-3.5 text-blue-600" />
+            <FileText className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
             <span>Word (DOCX)</span>
           </Button>
 
@@ -346,6 +358,7 @@ export default function ReportDetailPage() {
             size="sm"
             disabled={!!exporting}
             onClick={() => handleExport('pdf')}
+            className="h-9 gap-1.5 rounded-lg bg-[#2E4034] hover:bg-[#24382F] text-white text-xs font-semibold shadow-xs"
             title={t('exportPdf')}
           >
             <FileDown className="h-3.5 w-3.5" />
@@ -360,10 +373,10 @@ export default function ReportDetailPage() {
               setCustomTemplateName(title || report.title || '');
               setShowSaveTemplateModal(true);
             }}
-            className="border-olive-300 dark:border-olive-800 text-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950"
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-olive-300/80 text-olive-800 dark:border-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950 shadow-2xs"
             title={lang === 'ar' ? 'حفظ هذا التقرير كقالب مخصص دائم' : 'Save as permanent custom template'}
           >
-            <BookmarkPlus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400 me-1" />
+            <BookmarkPlus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
             <span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span>
           </Button>
         </div>
@@ -385,241 +398,266 @@ export default function ReportDetailPage() {
       )}
 
       {/* Report Metadata Card */}
-      <div className="mb-6 rounded-2xl border border-slate-200 dark:border-border/80 bg-white dark:bg-card p-4 sm:p-6 shadow-sm">
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-          {/* Title and Editable Report # */}
-          <div className="md:col-span-8">
-            <div className="flex flex-wrap items-center gap-3 mb-2.5">
-              {/* Editable Report Number Badge */}
-              <div className="inline-flex items-center rounded-lg border border-teal-200 dark:border-teal-800/70 bg-teal-50/90 dark:bg-teal-950/50 px-2.5 py-1 shadow-xs transition-all focus-within:ring-2 focus-within:ring-teal-500 focus-within:border-teal-500">
-                <span className="text-xs font-bold text-teal-800 dark:text-teal-300 me-1">#</span>
-                <input
-                  type="text"
-                  value={reportNumber}
-                  onChange={(e) => setReportNumber(e.target.value)}
-                  onBlur={handleMetaBlur}
-                  title={lang === 'ar' ? 'رقم التقرير (قابل للتعديل)' : 'Report Number (Editable)'}
-                  placeholder="101"
-                  className="w-16 bg-transparent text-xs font-bold text-teal-900 dark:text-teal-200 outline-none focus:outline-none"
-                />
-                <Edit3 className="h-3 w-3 text-teal-600 dark:text-teal-400 opacity-60 ms-0.5" />
-              </div>
-
-              {/* Date */}
-              <div className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
-                <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                <span>
-                  {new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}
-                </span>
-              </div>
-            </div>
-
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={t('reportTitle')}
-              className="w-full text-xl sm:text-2xl font-bold text-slate-900 dark:text-foreground border-b border-transparent hover:border-slate-200 dark:hover:border-border focus:border-teal-500 focus:outline-none py-1 transition-colors"
-            />
-          </div>
-
-          {/* Report Content Language Switcher */}
-          <div className="md:col-span-4 flex md:justify-end">
-            <div className="flex flex-col items-start md:items-end">
-              <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">
-                {t('reportLanguage')}
-              </label>
-              <div className="flex rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 p-0.5">
-                <button
-                  type="button"
-                  onClick={() => handleLanguageToggle('ar')}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    reportLanguage === 'ar'
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
-                  }`}
-                >
-                  العربية (RTL)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleLanguageToggle('en')}
-                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                    reportLanguage === 'en'
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'text-slate-600 dark:text-slate-300 hover:text-slate-900'
-                  }`}
-                >
-                  English (LTR)
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Reviewer & System Metadata Inputs - Spacious Responsive Grid */}
-        <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 border-t border-slate-100 dark:border-border/60 pt-4 text-xs">
-          {/* System Under Review */}
-          <div className="space-y-1.5 rounded-xl border border-slate-200/80 dark:border-border/60 bg-slate-50/50 dark:bg-card/40 p-3 transition-all hover:border-slate-300 dark:hover:border-border">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-              <Cpu className="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-              <span>{t('systemUnderReview')}</span>
-            </div>
-            <input
-              type="text"
-              value={systemUnderReview}
-              onChange={(e) => setSystemUnderReview(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={lang === 'ar' ? 'مثال: النظام الأساسي أو بوابة الدفع v2.4' : 'e.g. Core Platform or Payment Gateway'}
-              className="w-full rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-foreground placeholder:text-slate-400 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all"
-            />
-          </div>
-
-          {/* Author / Reviewer */}
-          <div className="space-y-1.5 rounded-xl border border-slate-200/80 dark:border-border/60 bg-slate-50/50 dark:bg-card/40 p-3 transition-all hover:border-slate-300 dark:hover:border-border">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-              <UserIcon className="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-              <span>{t('author')}</span>
-            </div>
-            <input
-              type="text"
-              value={author}
-              onChange={(e) => setAuthor(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={lang === 'ar' ? 'اسم المدقق / المراجع' : 'Auditor / Reviewer Name'}
-              className="w-full rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-foreground placeholder:text-slate-400 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all"
-            />
-          </div>
-
-          {/* Job Title */}
-          <div className="space-y-1.5 rounded-xl border border-slate-200/80 dark:border-border/60 bg-slate-50/50 dark:bg-card/40 p-3 transition-all hover:border-slate-300 dark:hover:border-border">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-              <Briefcase className="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-              <span>{t('jobTitle')}</span>
-            </div>
-            <input
-              type="text"
-              value={authorTitle}
-              onChange={(e) => setAuthorTitle(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={t('jobTitlePlaceholder')}
-              className="w-full rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-foreground placeholder:text-slate-400 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all"
-            />
-          </div>
-
-          {/* Organization */}
-          <div className="space-y-1.5 rounded-xl border border-slate-200/80 dark:border-border/60 bg-slate-50/50 dark:bg-card/40 p-3 transition-all hover:border-slate-300 dark:hover:border-border">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-              <Building2 className="h-4 w-4 text-teal-600 dark:text-teal-400 flex-shrink-0" />
-              <span>{t('organization')}</span>
-            </div>
-            <input
-              type="text"
-              value={organization}
-              onChange={(e) => setOrganization(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={t('organizationPlaceholder')}
-              className="w-full rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-foreground placeholder:text-slate-400 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none transition-all"
-            />
-          </div>
-        </div>
-
-        {/* Signature & Appearance Controls */}
-        <div className="mt-4 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 border-t border-slate-100 dark:border-border/60 pt-4 text-xs">
-          {/* Signature Endorsement */}
-          <div className="flex-1 flex flex-col sm:flex-row items-start sm:items-center gap-2.5">
-            <div className="flex items-center gap-1.5 font-medium text-slate-600 dark:text-slate-300 min-w-max">
-              <PenTool className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-              <span className="font-semibold">{t('signature')}:</span>
-            </div>
-            <input
-              type="text"
-              value={signatureData}
-              onChange={(e) => setSignatureData(e.target.value)}
-              onBlur={handleMetaBlur}
-              placeholder={t('signaturePlaceholder')}
-              className="w-full sm:max-w-md rounded-lg border border-slate-200 dark:border-border bg-white dark:bg-background px-3 py-1.5 text-slate-800 dark:text-foreground italic font-serif focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
-            />
-          </div>
-
-          {/* Theme & Background Controls */}
-          <div className="flex flex-wrap items-center gap-4">
-            {/* Color Palette Selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{t('reportTheme')}:</span>
-              <div className="flex items-center gap-1.5">
-                {[
-                  { id: 'olive', bg: 'bg-[#2E4034]', label: t('themeOlive') },
-                  { id: 'blue', bg: 'bg-blue-600', label: t('themeBlue') },
-                  { id: 'slate', bg: 'bg-slate-700', label: t('themeSlate') },
-                  { id: 'emerald', bg: 'bg-emerald-600', label: t('themeEmerald') },
-                ].map((th) => (
-                  <button
-                    key={th.id}
-                    type="button"
-                    onClick={() => handleThemeChange(th.id)}
-                    className={`h-5 w-5 rounded-full ${th.bg} transition-all ${
-                      themeColor === th.id
-                        ? 'ring-2 ring-offset-2 ring-teal-500 scale-110'
-                        : 'opacity-70 hover:opacity-100 hover:scale-105'
-                    }`}
-                    title={th.label}
+      <Card className="mb-6 border-border/80 bg-card text-card-foreground shadow-2xs rounded-xl overflow-hidden">
+        <CardHeader className="p-4 sm:p-6 pb-4 sm:pb-4">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+            {/* Title and Editable Report # */}
+            <div className="md:col-span-8 space-y-2.5">
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Editable Report Number Badge */}
+                <div className="inline-flex items-center rounded-lg border border-teal-200 dark:border-teal-800/70 bg-teal-50/80 dark:bg-teal-950/50 px-2.5 py-1 shadow-2xs transition-all focus-within:ring-2 focus-within:ring-teal-500 focus-within:border-teal-500">
+                  <span className="text-xs font-bold text-teal-800 dark:text-teal-300 me-1">#</span>
+                  <input
+                    type="text"
+                    value={reportNumber}
+                    onChange={(e) => setReportNumber(e.target.value)}
+                    onBlur={handleMetaBlur}
+                    title={lang === 'ar' ? 'رقم التقرير (قابل للتعديل)' : 'Report Number (Editable)'}
+                    placeholder="101"
+                    className="w-16 bg-transparent text-xs font-bold text-teal-900 dark:text-teal-200 outline-none focus:outline-none"
                   />
-                ))}
+                  <Edit3 className="h-3 w-3 text-teal-600 dark:text-teal-400 opacity-60 ms-0.5" />
+                </div>
+
+                {/* Date */}
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Calendar className="h-3.5 w-3.5 opacity-70" />
+                  <span>
+                    {new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}
+                  </span>
+                </div>
               </div>
+
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={t('reportTitle')}
+                className="w-full text-xl sm:text-2xl font-bold text-foreground bg-transparent border-b border-border/50 hover:border-border focus:border-olive-600 focus:outline-none py-1 transition-colors"
+              />
             </div>
 
-            {/* Background Style Selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">{t('reportBackground')}:</span>
-              <div className="flex rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 p-0.5">
-                {[
-                  { id: 'white', label: t('bgWhite') },
-                  { id: 'cream', label: t('bgCream') },
-                  { id: 'cool', label: t('bgCool') },
-                ].map((bg) => (
-                  <button
-                    key={bg.id}
-                    type="button"
-                    onClick={() => handleBackgroundChange(bg.id)}
-                    className={`rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      backgroundColor === bg.id
-                        ? 'bg-white dark:bg-card text-foreground shadow-sm font-bold'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {bg.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Linked Issues Indicator */}
-        {linkedIssues.length > 0 && (
-          <div className="mt-4 border-t border-slate-100 dark:border-border/60 pt-3 flex items-center gap-2 text-xs text-slate-600 dark:text-muted-foreground">
-            <Layers className="h-3.5 w-3.5 text-olive-600" />
-            <span>
-              {lang === 'ar'
-                ? `مرتبط بـ ${linkedIssues.length} مشكلة في لوحة المتابعة:`
-                : `Linked to ${linkedIssues.length} issues in tracker:`}
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {linkedIssues.map((iss) => (
-                <Link
-                  key={iss.id}
-                  href="/dashboard"
-                  className="rounded bg-olive-50 dark:bg-olive-900/30 px-2 py-0.5 text-[11px] font-semibold text-olive-800 dark:text-olive-300 hover:bg-olive-100"
+            {/* Report Content Language Switcher */}
+            <div className="md:col-span-4 flex md:justify-end">
+              <div className="flex flex-col items-start md:items-end gap-1">
+                <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                  {t('reportLanguage')}
+                </label>
+                <Tabs
+                  value={reportLanguage}
+                  onValueChange={(val) => handleLanguageToggle(val as AppLanguage)}
                 >
-                  {iss.title}
-                </Link>
-              ))}
+                  <TabsList className="h-8 p-0.5 bg-muted/60 rounded-lg">
+                    <TabsTrigger
+                      value="ar"
+                      className="text-xs px-3 py-1 font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
+                    >
+                      العربية (RTL)
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="en"
+                      className="text-xs px-3 py-1 font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
+                    >
+                      English (LTR)
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </div>
             </div>
           </div>
-        )}
-      </div>
+        </CardHeader>
+
+        <Separator className="bg-border/60" />
+
+        <CardContent className="p-4 sm:p-6 pt-4 sm:pt-5 space-y-4">
+          {/* Reviewer & System Metadata Inputs - Enhanced Visual Hierarchy */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            {/* System Under Review */}
+            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300">
+                  <Cpu className="h-3.5 w-3.5" />
+                </div>
+                <span>{t('systemUnderReview')}</span>
+              </div>
+              <Input
+                type="text"
+                value={systemUnderReview}
+                onChange={(e) => setSystemUnderReview(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={lang === 'ar' ? 'مثال: النظام الأساسي أو بوابة الدفع v2.4' : 'e.g. Core Platform or Payment Gateway'}
+                className="h-8 text-xs bg-background/80"
+              />
+            </div>
+
+            {/* Author / Reviewer */}
+            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-olive-50 dark:bg-olive-950/60 text-olive-700 dark:text-olive-300">
+                  <UserIcon className="h-3.5 w-3.5" />
+                </div>
+                <span>{t('author')}</span>
+              </div>
+              <Input
+                type="text"
+                value={author}
+                onChange={(e) => setAuthor(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={lang === 'ar' ? 'اسم المدقق / المراجع' : 'Auditor / Reviewer Name'}
+                className="h-8 text-xs bg-background/80"
+              />
+            </div>
+
+            {/* Job Title */}
+            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
+                  <Briefcase className="h-3.5 w-3.5" />
+                </div>
+                <span>{t('jobTitle')}</span>
+              </div>
+              <Input
+                type="text"
+                value={authorTitle}
+                onChange={(e) => setAuthorTitle(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={t('jobTitlePlaceholder')}
+                className="h-8 text-xs bg-background/80"
+              />
+            </div>
+
+            {/* Organization */}
+            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
+              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300">
+                  <Building2 className="h-3.5 w-3.5" />
+                </div>
+                <span>{t('organization')}</span>
+              </div>
+              <Input
+                type="text"
+                value={organization}
+                onChange={(e) => setOrganization(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={t('organizationPlaceholder')}
+                className="h-8 text-xs bg-background/80"
+              />
+            </div>
+          </div>
+
+          <Separator className="bg-border/60" />
+
+          {/* Signature & Appearance Controls - Clean Unified Section */}
+          <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 text-xs pt-1">
+            {/* Signature Endorsement */}
+            <div className="flex-1 flex flex-col sm:flex-row items-start sm:items-center gap-2.5">
+              <div className="flex items-center gap-1.5 font-semibold text-foreground min-w-max">
+                <PenTool className="h-4 w-4 text-olive-700 dark:text-olive-400" />
+                <span>{t('signature')}:</span>
+              </div>
+              <Input
+                type="text"
+                value={signatureData}
+                onChange={(e) => setSignatureData(e.target.value)}
+                onBlur={handleMetaBlur}
+                placeholder={t('signaturePlaceholder')}
+                className="w-full sm:max-w-md h-8 text-xs italic font-serif bg-background/80"
+              />
+            </div>
+
+            {/* Theme & Background Controls */}
+            <div className="flex flex-wrap items-center gap-4">
+              {/* Color Palette Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-muted-foreground">{t('reportTheme')}:</span>
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { id: 'olive', bg: 'bg-[#2E4034]', label: t('themeOlive') },
+                    { id: 'blue', bg: 'bg-blue-600', label: t('themeBlue') },
+                    { id: 'slate', bg: 'bg-slate-700', label: t('themeSlate') },
+                    { id: 'emerald', bg: 'bg-emerald-600', label: t('themeEmerald') },
+                  ].map((th) => (
+                    <button
+                      key={th.id}
+                      type="button"
+                      onClick={() => handleThemeChange(th.id)}
+                      className={cn(
+                        'h-5 w-5 rounded-full transition-all focus:outline-none cursor-pointer',
+                        th.bg,
+                        themeColor === th.id
+                          ? 'ring-2 ring-olive-600 ring-offset-2 ring-offset-card scale-110 shadow-xs'
+                          : 'opacity-70 hover:opacity-100 hover:scale-105'
+                      )}
+                      title={th.label}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              <Separator orientation="vertical" className="hidden sm:block h-5 bg-border/60" />
+
+              {/* Background Style Selector */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-muted-foreground">{t('reportBackground')}:</span>
+                <div className="flex rounded-lg border border-border bg-muted/40 p-0.5 shadow-2xs">
+                  {[
+                    { id: 'white', label: t('bgWhite') },
+                    { id: 'cream', label: t('bgCream') },
+                    { id: 'cool', label: t('bgCool') },
+                  ].map((bg) => (
+                    <button
+                      key={bg.id}
+                      type="button"
+                      onClick={() => handleBackgroundChange(bg.id)}
+                      className={cn(
+                        'rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer',
+                        backgroundColor === bg.id
+                          ? 'bg-background text-foreground font-bold shadow-2xs'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {bg.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Linked Issues Indicator */}
+          {linkedIssues.length > 0 && (
+            <>
+              <Separator className="bg-border/60" />
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pt-1">
+                <div className="flex items-center gap-1.5 font-semibold text-foreground">
+                  <Layers className="h-3.5 w-3.5 text-olive-700 dark:text-olive-400" />
+                  <span>
+                    {lang === 'ar'
+                      ? `مرتبط بـ ${linkedIssues.length} مشكلة في لوحة المتابعة:`
+                      : `Linked to ${linkedIssues.length} issues in tracker:`}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {linkedIssues.map((iss) => (
+                    <Button
+                      key={iss.id}
+                      asChild
+                      variant="secondary"
+                      size="sm"
+                      className="h-6 px-2 text-[11px] font-medium rounded-md"
+                    >
+                      <Link href="/dashboard">
+                        {iss.title}
+                      </Link>
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* TipTap Rich Text Editor */}
       <TipTapEditor

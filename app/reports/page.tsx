@@ -39,6 +39,11 @@ import {
   deleteCustomTemplate,
   CustomTemplateItem,
 } from '@/lib/custom-templates';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function ReportsPage() {
   const router = useRouter();
@@ -263,30 +268,30 @@ export default function ReportsPage() {
       {/* Top Header */}
       <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2.5">
-            <FileText className="h-7 w-7 text-teal-600" />
+          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2.5">
+            <FileText className="h-7 w-7 text-olive-700 dark:text-olive-400" />
             <span>{t('reports')}</span>
           </h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-muted-foreground">
             {lang === 'ar'
               ? 'إدارة وتوثيق تقارير المراجعة، الفحص الفني، وتدقيق جودة الترجمات'
               : 'Manage and document review reports, defect analysis, and localization QA'}
           </p>
         </div>
 
-        <button
+        <Button
           type="button"
           onClick={handleOpenTemplateModal}
-          className="flex items-center justify-center gap-2 rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-teal-700 transition-colors"
+          className="h-9 gap-2 rounded-lg bg-[#2E4034] hover:bg-[#24382F] text-white text-xs font-semibold shadow-xs"
         >
           <Plus className="h-4 w-4" />
           <span>{t('createNewReport')}</span>
-        </button>
+        </Button>
       </div>
 
       {/* Delete Error Alert */}
       {deleteError && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 flex items-center justify-between">
+        <div className="mb-6 rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-4 text-xs text-red-800 dark:text-red-300 flex items-center justify-between">
           <span>{deleteError}</span>
           <button
             type="button"
@@ -301,15 +306,15 @@ export default function ReportsPage() {
       {/* Search Bar */}
       <div className="mb-6">
         <div className="relative max-w-md">
-          <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-slate-400">
+          <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
             <Search className="h-4 w-4" />
           </div>
-          <input
+          <Input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('searchReports')}
-            className="w-full rounded-lg border border-slate-300 bg-white ps-10 pe-4 py-2 text-sm text-slate-900 placeholder-slate-400 shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+            className="ps-9 h-9 text-xs rounded-lg"
           />
         </div>
       </div>
@@ -317,158 +322,161 @@ export default function ReportsPage() {
       {/* Reports Grid */}
       {loading ? (
         <div className="flex h-64 items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-olive-700 border-t-transparent" />
         </div>
       ) : filteredReports.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-white p-12 text-center">
-          <FileText className="h-12 w-12 text-slate-300 mb-3" />
-          <p className="text-base font-medium text-slate-700">{t('noReportsFound')}</p>
+        <div className="flex flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-card p-12 text-center">
+          <FileText className="h-12 w-12 text-muted-foreground/50 mb-3" />
+          <p className="text-base font-medium text-foreground">{t('noReportsFound')}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredReports.map((report) => (
-            <Link
+            <Card
               key={report.id}
-              href={`/reports/${report.id}`}
-              className="group relative flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-all hover:border-teal-400 hover:shadow-md"
+              className="group relative flex flex-col justify-between border-border/80 hover:border-olive-600/60 transition-all hover:shadow-md cursor-pointer overflow-hidden rounded-xl bg-card"
+              onClick={() => router.push(`/reports/${report.id}`)}
             >
-              <div>
-                {/* Header: Report # & Language */}
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <span className="rounded-md bg-teal-50 px-2.5 py-1 text-xs font-bold text-teal-800">
-                    #{report.reportNumber}
-                  </span>
-                  <div className="flex items-center gap-1 text-xs font-semibold text-slate-500 uppercase bg-slate-100 px-2 py-0.5 rounded">
-                    <Globe className="h-3 w-3" />
-                    <span>{report.language}</span>
+              <CardContent className="p-5 flex flex-col justify-between h-full">
+                <div>
+                  {/* Header: Report # & Language */}
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <Badge
+                      variant="outline"
+                      className="border-teal-200 dark:border-teal-800/80 bg-teal-50/70 dark:bg-teal-950/40 text-teal-800 dark:text-teal-300 font-bold text-xs"
+                    >
+                      #{report.reportNumber}
+                    </Badge>
+                    <Badge
+                      variant="secondary"
+                      className="gap-1 text-[11px] uppercase font-semibold text-muted-foreground"
+                    >
+                      <Globe className="h-3 w-3" />
+                      <span>{report.language}</span>
+                    </Badge>
+                  </div>
+
+                  {/* Title */}
+                  <h2 className="text-base font-bold text-foreground group-hover:text-olive-700 dark:group-hover:text-olive-400 transition-colors line-clamp-2">
+                    {report.title}
+                  </h2>
+
+                  {/* System under review */}
+                  <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Cpu className="h-3.5 w-3.5 opacity-70" />
+                    <span className="font-medium truncate">{report.systemUnderReview || '-'}</span>
+                  </div>
+
+                  {/* Author */}
+                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <UserIcon className="h-3.5 w-3.5 opacity-70" />
+                    <span className="truncate">{report.author}</span>
                   </div>
                 </div>
 
-                {/* Title */}
-                <h2 className="text-base font-bold text-slate-900 group-hover:text-teal-700 transition-colors line-clamp-2">
-                  {report.title}
-                </h2>
+                {/* Footer: Date and Delete button */}
+                <div className="mt-4 flex items-center justify-between border-t border-border/60 pt-3 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <Calendar className="h-3.5 w-3.5 opacity-70" />
+                    <span>
+                      {new Date(report.updatedAt || report.createdAt).toLocaleDateString(
+                        lang === 'ar' ? 'ar-EG' : 'en-US'
+                      )}
+                    </span>
+                  </div>
 
-                {/* System under review */}
-                <div className="mt-3 flex items-center gap-1.5 text-xs text-slate-600">
-                  <Cpu className="h-3.5 w-3.5 text-slate-400" />
-                  <span className="font-medium truncate">{report.systemUnderReview || '-'}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleDelete(e, report.id)}
+                    className="h-7 w-7 p-0 rounded-lg text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50"
+                    title={t('delete')}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
-
-                {/* Author */}
-                <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
-                  <UserIcon className="h-3.5 w-3.5 text-slate-400" />
-                  <span className="truncate">{report.author}</span>
-                </div>
-              </div>
-
-              {/* Footer: Date and Delete button */}
-              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-xs text-slate-400">
-                <div className="flex items-center gap-1">
-                  <Calendar className="h-3.5 w-3.5" />
-                  <span>
-                    {new Date(report.updatedAt || report.createdAt).toLocaleDateString(
-                      lang === 'ar' ? 'ar-EG' : 'en-US'
-                    )}
-                  </span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={(e) => handleDelete(e, report.id)}
-                  className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                  title={t('delete')}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
-            </Link>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}
 
       {/* New Report Modal with Templates */}
       {showTemplateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="w-full max-w-3xl rounded-2xl bg-white p-6 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <h2 className="text-lg font-bold text-slate-900">{t('chooseTemplate')}</h2>
-              <button
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="w-full max-w-3xl rounded-xl bg-card border border-border p-6 shadow-xl text-card-foreground">
+            <div className="flex items-center justify-between border-b border-border/60 pb-4">
+              <h2 className="text-lg font-bold text-foreground">{t('chooseTemplate')}</h2>
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={() => setShowTemplateModal(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                className="h-8 w-8 p-0 rounded-lg text-muted-foreground hover:text-foreground"
               >
-                <X className="h-5 w-5" />
-              </button>
+                <X className="h-4 w-4" />
+              </Button>
             </div>
 
             {/* Language Selector for the new report */}
-            <div className="mt-4 rounded-lg bg-slate-50 p-3 border border-slate-200">
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+            <div className="mt-4 rounded-lg bg-muted/40 p-3 border border-border/60">
+              <label className="block text-xs font-semibold text-muted-foreground mb-1.5">
                 {t('reportLanguage')}
               </label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setNewReportLang('ar')}
-                  className={`flex-1 rounded-md py-1.5 text-xs font-semibold transition-colors ${
-                    newReportLang === 'ar'
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  العربية (RTL)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setNewReportLang('en')}
-                  className={`flex-1 rounded-md py-1.5 text-xs font-semibold transition-colors ${
-                    newReportLang === 'en'
-                      ? 'bg-teal-600 text-white shadow-sm'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  English (LTR)
-                </button>
-              </div>
+              <Tabs
+                value={newReportLang}
+                onValueChange={(val) => setNewReportLang(val as AppLanguage)}
+              >
+                <TabsList className="grid w-full grid-cols-2 h-9 p-0.5 bg-muted/70 rounded-lg">
+                  <TabsTrigger
+                    value="ar"
+                    className="text-xs font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
+                  >
+                    العربية (RTL)
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="en"
+                    className="text-xs font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
+                  >
+                    English (LTR)
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
 
             {/* Template Tabs: Standard vs Custom */}
-            <div className="mt-4 flex border-b border-slate-200">
-              <button
-                type="button"
-                onClick={() => setTemplateTab('builtin')}
-                className={`flex items-center gap-1.5 pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors ${
-                  templateTab === 'builtin'
-                    ? 'border-teal-600 text-teal-800'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>{lang === 'ar' ? 'القوالب الرسمية المعيارية' : 'Standard Templates'}</span>
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
-                  {templateOptions.length}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setCustomTemplates(getCustomTemplates());
-                  setTemplateTab('custom');
+            <div className="mt-4">
+              <Tabs
+                value={templateTab}
+                onValueChange={(v) => {
+                  if (v === 'custom') setCustomTemplates(getCustomTemplates(user?.uid));
+                  setTemplateTab(v as 'builtin' | 'custom');
                 }}
-                className={`flex items-center gap-1.5 pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors ${
-                  templateTab === 'custom'
-                    ? 'border-teal-600 text-teal-800'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
               >
-                <Bookmark className="h-3.5 w-3.5" />
-                <span>{lang === 'ar' ? 'قوالبي المخصصة المحفوظة' : 'My Custom Templates'}</span>
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">
-                  {customTemplates.length}
-                </span>
-              </button>
+                <TabsList className="h-9 p-0.5 bg-muted/60 rounded-lg">
+                  <TabsTrigger
+                    value="builtin"
+                    className="text-xs font-semibold gap-1.5 data-[state=active]:bg-card data-[state=active]:text-foreground rounded-md transition-all"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-olive-700 dark:text-olive-400" />
+                    <span>{lang === 'ar' ? 'القوالب الرسمية المعيارية' : 'Standard Templates'}</span>
+                    <Badge variant="secondary" className="ms-1 px-1.5 py-0 text-[10px] rounded-md">
+                      {templateOptions.length}
+                    </Badge>
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="custom"
+                    className="text-xs font-semibold gap-1.5 data-[state=active]:bg-card data-[state=active]:text-foreground rounded-md transition-all"
+                  >
+                    <Bookmark className="h-3.5 w-3.5 text-olive-700 dark:text-olive-400" />
+                    <span>{lang === 'ar' ? 'قوالبي المخصصة المحفوظة' : 'My Custom Templates'}</span>
+                    <Badge variant="secondary" className="ms-1 px-1.5 py-0 text-[10px] rounded-md">
+                      {customTemplates.length}
+                    </Badge>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </div>
 
             {/* Template options */}
@@ -482,20 +490,20 @@ export default function ReportsPage() {
                       key={tpl.type}
                       type="button"
                       onClick={() => setSelectedTemplate(tpl.type)}
-                      className={`flex flex-col text-start rounded-xl border p-4 transition-all ${
+                      className={`flex flex-col text-start rounded-xl border p-4 transition-all cursor-pointer ${
                         isSelected
-                          ? 'border-teal-600 bg-teal-50/60 ring-2 ring-teal-600'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                          ? 'border-[#2E4034] bg-[#2E4034]/5 ring-2 ring-[#2E4034]'
+                          : 'border-border/80 bg-card hover:border-border hover:bg-muted/30'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-100 text-teal-800">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-olive-100 dark:bg-olive-950 text-olive-800 dark:text-olive-300">
                           <Icon className="h-4 w-4" />
                         </div>
-                        {isSelected && <CheckCircle2 className="h-5 w-5 text-teal-600" />}
+                        {isSelected && <CheckCircle2 className="h-5 w-5 text-[#2E4034] dark:text-olive-400" />}
                       </div>
-                      <span className="text-sm font-bold text-slate-900">{tpl.title}</span>
-                      <span className="mt-1 text-xs text-slate-500 leading-relaxed">{tpl.desc}</span>
+                      <span className="text-sm font-bold text-foreground">{tpl.title}</span>
+                      <span className="mt-1 text-xs text-muted-foreground leading-relaxed">{tpl.desc}</span>
                     </button>
                   );
                 })}
@@ -503,14 +511,14 @@ export default function ReportsPage() {
             ) : (
               <div className="mt-4 max-h-[420px] overflow-y-auto p-1">
                 {customTemplates.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-10 text-center text-slate-500">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-400 mb-3">
+                  <div className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground mb-3">
                       <Bookmark className="h-6 w-6" />
                     </div>
-                    <p className="text-sm font-bold text-slate-700">
+                    <p className="text-sm font-bold text-foreground">
                       {lang === 'ar' ? 'لا توجد قوالب مخصصة محفوظة بعد' : 'No custom templates saved yet'}
                     </p>
-                    <p className="text-xs text-slate-400 mt-1 max-w-sm">
+                    <p className="text-xs text-muted-foreground mt-1 max-w-sm">
                       {lang === 'ar'
                         ? 'يمكنك إنشاء أي تقرير مخصص وحفظ هيكله كقالب دائم بالضغط على زر "حفظ كقالب" في صفحة التقرير.'
                         : 'You can create a report and save its structure as a permanent template by clicking "Save as Template" in the report page.'}
@@ -526,18 +534,20 @@ export default function ReportsPage() {
                           onClick={() => setSelectedCustomTemplateId(ct.id)}
                           className={`relative flex flex-col text-start rounded-xl border p-4 cursor-pointer transition-all ${
                             isSelected
-                              ? 'border-teal-600 bg-teal-50/60 ring-2 ring-teal-600'
-                              : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                              ? 'border-[#2E4034] bg-[#2E4034]/5 ring-2 ring-[#2E4034]'
+                              : 'border-border/80 bg-card hover:border-border hover:bg-muted/30'
                           }`}
                         >
                           <div className="flex items-center justify-between mb-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-olive-100 text-olive-800">
-                              <Bookmark className="h-4 w-4 text-olive-700" />
+                            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-olive-100 dark:bg-olive-950 text-olive-800 dark:text-olive-300">
+                              <Bookmark className="h-4 w-4 text-olive-700 dark:text-olive-300" />
                             </div>
                             <div className="flex items-center gap-1.5">
-                              {isSelected && <CheckCircle2 className="h-5 w-5 text-teal-600" />}
-                              <button
+                              {isSelected && <CheckCircle2 className="h-5 w-5 text-[#2E4034] dark:text-olive-400" />}
+                              <Button
                                 type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (
@@ -547,30 +557,32 @@ export default function ReportsPage() {
                                         : 'Are you sure you want to delete this custom template?'
                                     )
                                   ) {
-                                    deleteCustomTemplate(ct.id);
-                                    const updated = getCustomTemplates();
+                                    deleteCustomTemplate(ct.id, user?.uid);
+                                    const updated = getCustomTemplates(user?.uid);
                                     setCustomTemplates(updated);
                                     if (selectedCustomTemplateId === ct.id) {
                                       setSelectedCustomTemplateId(updated[0]?.id || null);
                                     }
                                   }
                                 }}
-                                className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-lg"
                                 title={lang === 'ar' ? 'حذف القالب' : 'Delete Template'}
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              </Button>
                             </div>
                           </div>
-                          <span className="text-sm font-bold text-slate-900">{ct.name}</span>
-                          <span className="mt-1 text-xs text-slate-500 leading-relaxed line-clamp-2">
+                          <span className="text-sm font-bold text-foreground">{ct.name}</span>
+                          <span className="mt-1 text-xs text-muted-foreground leading-relaxed line-clamp-2">
                             {ct.description}
                           </span>
-                          <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400 border-t border-slate-100 pt-2">
+                          <div className="mt-3 flex items-center justify-between text-[11px] text-muted-foreground border-t border-border/60 pt-2">
                             <span>
                               {new Date(ct.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}
                             </span>
-                            <span className="uppercase font-semibold text-teal-700">{ct.language}</span>
+                            <Badge variant="outline" className="uppercase text-[10px] font-semibold text-olive-800 dark:text-olive-300">
+                              {ct.language}
+                            </Badge>
                           </div>
                         </div>
                       );
@@ -581,22 +593,25 @@ export default function ReportsPage() {
             )}
 
             {/* Modal Actions */}
-            <div className="mt-6 flex justify-end gap-3 border-t border-slate-100 pt-4">
-              <button
+            <div className="mt-6 flex justify-end gap-2.5 border-t border-border/60 pt-4">
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 onClick={() => setShowTemplateModal(false)}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="h-9 rounded-lg text-xs"
               >
                 {t('cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                size="sm"
                 disabled={creating}
                 onClick={handleCreateReport}
-                className="rounded-lg bg-teal-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-teal-700 disabled:opacity-50"
+                className="h-9 rounded-lg bg-[#2E4034] hover:bg-[#24382F] text-white text-xs font-semibold shadow-xs"
               >
                 {creating ? t('loading') : t('create')}
-              </button>
+              </Button>
             </div>
           </div>
         </div>
