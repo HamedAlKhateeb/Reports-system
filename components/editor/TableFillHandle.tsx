@@ -195,8 +195,15 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
         minCol = Math.min(minCol, rect.left);
         maxCol = Math.max(maxCol, rect.right - 1);
 
-        const domNode = view.nodeDOM(pos) as HTMLElement;
-        if (domNode) selectedCells.push(domNode);
+        try {
+          const domAt = view.domAtPos(pos + 1);
+          const targetEl = domAt.node instanceof Element ? domAt.node : domAt.node.parentElement;
+          const cellEl = (targetEl?.closest('td, th') as HTMLElement) || (view.nodeDOM(pos) as HTMLElement);
+          if (cellEl) selectedCells.push(cellEl);
+        } catch (_) {
+          const domNode = view.nodeDOM(pos) as HTMLElement;
+          if (domNode) selectedCells.push(domNode);
+        }
       });
 
       startCoords = { row: minRow, col: minCol };
@@ -221,18 +228,42 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
       startCoords = { row: rect.top, col: rect.left };
       endCoords = { row: rect.bottom - 1, col: rect.right - 1 };
 
-      const domNode = view.nodeDOM(cellPos) as HTMLElement;
-      if (domNode) selectedCells.push(domNode);
+      try {
+        const domAt = view.domAtPos(cellPos + 1);
+        const targetEl = domAt.node instanceof Element ? domAt.node : domAt.node.parentElement;
+        const cellEl = (targetEl?.closest('td, th') as HTMLElement) || (view.nodeDOM(cellPos) as HTMLElement);
+        if (cellEl) selectedCells.push(cellEl);
+      } catch (_) {
+        const domNode = view.nodeDOM(cellPos) as HTMLElement;
+        if (domNode) selectedCells.push(domNode);
+      }
     }
 
-    if (selectedCells.length === 0) {
+    // Robust table element resolution
+    let tableEl = selectedCells[0]?.closest('table') as HTMLTableElement | null;
+    if (!tableEl) {
+      try {
+        const domAt = view.domAtPos(tablePos + 1);
+        const targetEl = domAt.node instanceof Element ? domAt.node : domAt.node.parentElement;
+        tableEl = targetEl?.closest('table') as HTMLTableElement | null;
+      } catch (_) {
+        tableEl = (view.nodeDOM(tablePos) as HTMLElement)?.querySelector('table') || null;
+      }
+    }
+
+    if (!tableEl) {
       setHandlePos(null);
       activeTableInfoRef.current = null;
       return;
     }
 
-    const tableEl = selectedCells[0]?.closest('table') as HTMLTableElement | null;
-    if (!tableEl) {
+    // Fallback if selectedCells couldn't be resolved from domAtPos
+    if (selectedCells.length === 0) {
+      const cellFromTable = tableEl.rows[startCoords.row]?.cells[startCoords.col] as HTMLElement;
+      if (cellFromTable) selectedCells.push(cellFromTable);
+    }
+
+    if (selectedCells.length === 0) {
       setHandlePos(null);
       activeTableInfoRef.current = null;
       return;
@@ -248,7 +279,7 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
       tableEl,
     };
 
-    const containerEl = containerRef.current;
+    const containerEl = containerRef.current || (view.dom.closest('.relative') as HTMLElement) || (view.dom.parentElement as HTMLElement);
     if (!containerEl) return;
     const containerRect = containerEl.getBoundingClientRect();
 
@@ -272,8 +303,9 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
     // Check table text direction (computed)
     const isRtlTable = window.getComputedStyle(selectedCells[0]).direction === 'rtl';
-    const handleLeft = isRtlTable ? selLeft - 4 : selLeft + selWidth - 4;
-    const handleTop = selTop + selHeight - 4;
+    // 14px handle centered at the corner (offset 7px)
+    const handleLeft = isRtlTable ? selLeft - 7 : selLeft + selWidth - 7;
+    const handleTop = selTop + selHeight - 7;
 
     setHandlePos({
       top: handleTop,
@@ -288,7 +320,7 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
     });
   }, [editor, isDragging]);
 
-  // Update on editor transaction or scroll/resize
+  // Update on editor transaction, click, or scroll/resize
   useEffect(() => {
     if (!editor) return;
 
@@ -298,6 +330,13 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
     editor.on('transaction', handleUpdate);
     editor.on('selectionUpdate', handleUpdate);
+    editor.on('focus', handleUpdate);
+
+    const editorDom = editor.view.dom;
+    editorDom.addEventListener('click', handleUpdate);
+    editorDom.addEventListener('keyup', handleUpdate);
+    editorDom.addEventListener('mouseup', handleUpdate);
+
     window.addEventListener('resize', handleUpdate);
     window.addEventListener('scroll', handleUpdate, true);
 
@@ -306,6 +345,12 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
     return () => {
       editor.off('transaction', handleUpdate);
       editor.off('selectionUpdate', handleUpdate);
+      editor.off('focus', handleUpdate);
+
+      editorDom.removeEventListener('click', handleUpdate);
+      editorDom.removeEventListener('keyup', handleUpdate);
+      editorDom.removeEventListener('mouseup', handleUpdate);
+
       window.removeEventListener('resize', handleUpdate);
       window.removeEventListener('scroll', handleUpdate, true);
     };
@@ -571,26 +616,44 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
     }
   };
 
-  if (!handlePos || !handlePos.visible) return null;
-
   return (
     <div
       ref={containerRef}
-      className="absolute top-0 left-0 w-full h-full pointer-events-none z-30"
+      className="absolute inset-0 pointer-events-none z-30"
     >
-      {/* Draggable Excel-style Fill Handle */}
-      <div
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onDoubleClick={handleDoubleClick}
-        style={{
-          top: `${handlePos.top}px`,
-          left: `${handlePos.left}px`,
-        }}
-        className="absolute w-2.5 h-2.5 bg-[#2E4034] dark:bg-olive-500 border border-white dark:border-[#161615] rounded-none cursor-crosshair pointer-events-auto shadow-sm hover:scale-125 transition-transform z-40"
-        title={isAr ? 'مقبض التعبئة التلقائية (اسحب لأسفل لإضافة صفوف جديدة، أو انقر مرتين لإضافة صف سريع)' : 'Auto-Fill Handle (Drag down to add rows, or double-click to add 1 row)'}
-      />
+      {handlePos && handlePos.visible && (
+        <>
+          {/* Excel-style Active Cell Outline Border */}
+          <div
+            style={{
+              top: `${handlePos.rect.top}px`,
+              left: `${handlePos.rect.left}px`,
+              width: `${handlePos.rect.width}px`,
+              height: `${handlePos.rect.height}px`,
+            }}
+            className="absolute border-2 border-[#2E4034] dark:border-olive-400 pointer-events-none z-30 transition-all duration-75"
+          />
+
+          {/* Draggable Excel-style Fill Handle */}
+          <div
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onDoubleClick={handleDoubleClick}
+            style={{
+              top: `${handlePos.top}px`,
+              left: `${handlePos.left}px`,
+            }}
+            className="group/handle absolute w-3.5 h-3.5 bg-[#2E4034] dark:bg-olive-500 border-2 border-white dark:border-[#161615] rounded-[2px] cursor-crosshair pointer-events-auto shadow-md hover:scale-125 transition-transform z-40 flex items-center justify-center"
+            title={isAr ? 'مقبض التعبئة التلقائية (اسحب لأسفل لإضافة صفوف جديدة، أو انقر مرتين لإضافة صف فوري)' : 'Auto-Fill Handle (Drag down to add rows, or double-click to add 1 row)'}
+          >
+            {/* Tooltip hint on hover */}
+            <span className="opacity-0 group-hover/handle:opacity-100 transition-opacity duration-150 pointer-events-none absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-[#2E4034] text-white text-[11px] font-bold px-2 py-0.5 shadow-xl border border-white/20 z-50">
+              {isAr ? '+ سحب لإضافة صفوف' : '+ Drag to fill'}
+            </span>
+          </div>
+        </>
+      )}
 
       {/* Visual Dashed Drag Box preview covering full table rows */}
       {isDragging && dragBox && (
@@ -601,7 +664,7 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
             width: `${dragBox.width}px`,
             height: `${dragBox.height}px`,
           }}
-          className="absolute border-2 border-dashed border-[#2E4034] dark:border-olive-400 bg-[#2E4034]/10 dark:bg-olive-500/10 pointer-events-none transition-all duration-75 z-35 flex items-end justify-center pb-2"
+          className="absolute border-2 border-dashed border-[#2E4034] dark:border-olive-400 bg-[#2E4034]/15 dark:bg-olive-500/15 pointer-events-none transition-all duration-75 z-35 flex items-end justify-center pb-2"
         >
           {dragPreviewText && (
             <span className="rounded-md bg-[#2E4034] dark:bg-olive-800 text-white dark:text-olive-100 px-2.5 py-1 text-xs font-semibold shadow-lg border border-white/20">
