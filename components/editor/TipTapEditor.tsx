@@ -17,6 +17,7 @@ import { uploadReportImage } from '@/lib/db';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { Check, AlertCircle, Loader2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 
 interface TipTapEditorProps {
   reportId: string;
@@ -196,29 +197,29 @@ export function TipTapEditor({
         <div className="flex items-center justify-between bg-muted/30 px-3 sm:px-4 py-1.5 text-xs text-muted-foreground border-b border-border/50">
           <div className="flex items-center gap-1.5 font-medium">
             <span>{t('reportLanguage')}:</span>
-            <span className="rounded bg-muted px-1.5 py-0.5 font-bold uppercase text-foreground">
+            <Badge variant="secondary" className="px-1.5 py-0 font-bold uppercase text-[10px] rounded-md">
               {reportLanguage}
-            </span>
+            </Badge>
           </div>
 
           <div className="flex items-center gap-2">
             {saveStatus === 'saving' && (
-              <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Badge variant="outline" className="gap-1 border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400 text-[11px] py-0.5 font-semibold">
+                <Loader2 className="h-3 w-3 animate-spin" />
                 <span>{t('autosaving')}</span>
-              </div>
+              </Badge>
             )}
             {saveStatus === 'saved' && (
-              <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                <Check className="h-3.5 w-3.5" />
+              <Badge variant="outline" className="gap-1 border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-400 text-[11px] py-0.5 font-semibold">
+                <Check className="h-3 w-3" />
                 <span>{t('autosaved')}</span>
-              </div>
+              </Badge>
             )}
             {saveStatus === 'error' && (
-              <div className="flex items-center gap-1 text-red-600 dark:text-red-400">
-                <AlertCircle className="h-3.5 w-3.5" />
+              <Badge variant="destructive" className="gap-1 text-[11px] py-0.5 font-semibold">
+                <AlertCircle className="h-3 w-3" />
                 <span>{t('saveFailed')}</span>
-              </div>
+              </Badge>
             )}
           </div>
         </div>

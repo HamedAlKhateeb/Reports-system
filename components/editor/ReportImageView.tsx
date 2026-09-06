@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { updateImageCaption } from '@/lib/db';
+import { cn } from '@/lib/utils';
 
 const WIDTH_PRESETS = [
   { label: '25%', value: '25%' },
@@ -79,17 +80,18 @@ export function ReportImageView(props: NodeViewProps) {
           {/* Quick Controls: Presets (25%, 50%, 75%, 100%) and Alignment (L, C, R) */}
           <div className="flex flex-wrap items-center gap-1 max-w-full">
             {/* Width Presets */}
-            <div className="flex items-center rounded-md border border-border/70 bg-background/80 p-0.5 shadow-2xs">
+            <div className="flex items-center rounded-lg border border-border/70 bg-background/80 p-0.5 shadow-2xs">
               {WIDTH_PRESETS.map((p) => (
                 <button
                   key={p.value}
                   type="button"
                   onClick={() => handleSetWidth(p.value)}
-                  className={`rounded px-1.5 py-0.5 text-[10px] font-bold transition-colors ${
+                  className={cn(
+                    "rounded-md px-2 py-0.5 text-[10px] font-bold transition-colors cursor-pointer",
                     width === p.value
-                      ? 'bg-olive-600 text-white shadow-2xs'
-                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-                  }`}
+                      ? "bg-[#2E4034] text-white shadow-2xs"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  )}
                   title={`${isAr ? 'عرض' : 'Width'}: ${p.label}`}
                 >
                   {p.label}
@@ -98,54 +100,58 @@ export function ReportImageView(props: NodeViewProps) {
               <button
                 type="button"
                 onClick={() => setShowCustomSlider(!showCustomSlider)}
-                className={`rounded p-1 text-[10px] transition-colors ${
+                className={cn(
+                  "rounded-md p-1 text-[10px] transition-colors cursor-pointer",
                   showCustomSlider
-                    ? 'bg-olive-100 text-olive-800 dark:bg-olive-950 dark:text-olive-200'
-                    : 'text-muted-foreground hover:bg-muted'
-                }`}
+                    ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-950 dark:text-olive-200"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
                 title={isAr ? 'شريط تحكم دقيق بالعرض' : 'Custom Width Slider'}
               >
-                <Sliders className="h-2.5 w-2.5" />
+                <Sliders className="h-3 w-3" />
               </button>
             </div>
 
             {/* Alignment Controls */}
-            <div className="flex items-center rounded-md border border-border/70 bg-background/80 p-0.5 shadow-2xs">
+            <div className="flex items-center rounded-lg border border-border/70 bg-background/80 p-0.5 shadow-2xs">
               <button
                 type="button"
                 onClick={() => handleSetAlignment('right')}
-                className={`rounded p-1 transition-colors ${
+                className={cn(
+                  "rounded-md p-1 transition-colors cursor-pointer",
                   alignment === 'right'
-                    ? 'bg-olive-600 text-white shadow-2xs'
-                    : 'text-muted-foreground hover:bg-muted'
-                }`}
+                    ? "bg-[#2E4034] text-white shadow-2xs"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
                 title={isAr ? 'محاذاة لليمين' : 'Align Right'}
               >
-                <AlignRight className="h-3 w-3" />
+                <AlignRight className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={() => handleSetAlignment('center')}
-                className={`rounded p-1 transition-colors ${
+                className={cn(
+                  "rounded-md p-1 transition-colors cursor-pointer",
                   alignment === 'center'
-                    ? 'bg-olive-600 text-white shadow-2xs'
-                    : 'text-muted-foreground hover:bg-muted'
-                }`}
+                    ? "bg-[#2E4034] text-white shadow-2xs"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
                 title={isAr ? 'محاذاة للوسط' : 'Align Center'}
               >
-                <AlignCenter className="h-3 w-3" />
+                <AlignCenter className="h-3.5 w-3.5" />
               </button>
               <button
                 type="button"
                 onClick={() => handleSetAlignment('left')}
-                className={`rounded p-1 transition-colors ${
+                className={cn(
+                  "rounded-md p-1 transition-colors cursor-pointer",
                   alignment === 'left'
-                    ? 'bg-olive-600 text-white shadow-2xs'
-                    : 'text-muted-foreground hover:bg-muted'
-                }`}
+                    ? "bg-[#2E4034] text-white shadow-2xs"
+                    : "text-muted-foreground hover:bg-muted"
+                )}
                 title={isAr ? 'محاذاة لليسار' : 'Align Left'}
               >
-                <AlignLeft className="h-3 w-3" />
+                <AlignLeft className="h-3.5 w-3.5" />
               </button>
             </div>
           </div>
@@ -162,7 +168,7 @@ export function ReportImageView(props: NodeViewProps) {
               step="5"
               value={parseInt(width, 10) || 100}
               onChange={(e) => handleSetWidth(`${e.target.value}%`)}
-              className="flex-1 accent-olive-600 h-1.5 rounded-lg cursor-pointer bg-muted"
+              className="flex-1 accent-[#2E4034] h-1.5 rounded-lg cursor-pointer bg-muted"
             />
             <span className="font-mono font-bold text-foreground w-10 text-end">{width}</span>
           </div>
@@ -189,7 +195,7 @@ export function ReportImageView(props: NodeViewProps) {
               onChange={handleCaptionChange}
               onKeyDown={(e) => e.stopPropagation()} // Prevent TipTap cursor interception
               placeholder={t('imageCaptionPlaceholder')}
-              className="w-full rounded-md border border-border bg-muted/30 px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground transition-colors focus:border-olive-600 focus:bg-card focus:outline-none focus:ring-1 focus:ring-olive-600 italic"
+              className="w-full rounded-lg border border-border bg-muted/20 px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground transition-colors focus:border-[#2E4034] focus:bg-background focus:outline-none focus:ring-1 focus:ring-[#2E4034] italic"
             />
           </div>
         </div>

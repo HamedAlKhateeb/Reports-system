@@ -31,6 +31,10 @@ import {
   Unlink,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 const TEXT_COLORS = [
   { name: 'Red', hex: '#dc2626', labelAr: 'أحمر داكن', labelEn: 'Dark Red' },
@@ -93,79 +97,98 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
         />
 
         {/* Headings */}
-        <div className="flex items-center gap-0.5 border-e border-border pe-1.5 me-1">
-          <button
+        <div className="flex items-center gap-0.5">
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 1 })
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200 font-bold'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('heading1')}
           >
             <Heading1 className="h-4 w-4" />
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 2 })
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200 font-bold'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('heading2')}
           >
             <Heading2 className="h-4 w-4" />
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 3 })
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200 font-bold'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('heading3')}
           >
             <Heading3 className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
-        {/* Formatting: Bold, Italic */}
-        <div className="flex items-center gap-0.5 border-e border-border pe-1.5 me-1">
-          <button
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
+        {/* Formatting: Bold, Italic, Link */}
+        <div className="flex items-center gap-0.5">
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleBold().run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('bold')
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200 font-bold'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('bold')}
           >
             <Bold className="h-4 w-4" />
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleItalic().run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('italic')
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200 font-bold'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('italic')}
           >
             <Italic className="h-4 w-4" />
-          </button>
+          </Button>
 
           {/* Link Button and Popover */}
           <div className="relative">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => {
                 const prev = editor.getAttributes('link').href || '';
                 setLinkUrlInput(prev);
@@ -173,15 +196,16 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 setShowColorPicker(false);
                 setShowHighlightPicker(false);
               }}
-              className={`rounded-lg p-1.5 transition-colors ${
+              className={cn(
+                "h-8 w-8 rounded-lg",
                 editor.isActive('link')
-                  ? 'bg-blue-100 text-blue-900 dark:bg-blue-900/50 dark:text-blue-200 font-bold'
-                  : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-              }`}
+                  ? "bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-200 font-bold"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
               title={editor.isActive('link') ? (lang === 'ar' ? 'تعديل الرابط' : 'Edit Link') : (lang === 'ar' ? 'إدراج رابط' : 'Insert Link')}
             >
               <LinkIcon className="h-4 w-4" />
-            </button>
+            </Button>
 
             {showLinkPopover && (
               <div className="absolute top-full start-0 z-50 mt-1.5 w-64 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl backdrop-blur-md">
@@ -209,33 +233,38 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                     }
                   }}
                   placeholder="https://example.com"
-                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-olive-600 focus:ring-1 focus:ring-olive-600 mb-2 text-foreground"
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-[#2E4034] focus:ring-1 focus:ring-[#2E4034] mb-2 text-foreground"
                 />
                 <div className="flex items-center justify-between gap-1.5">
                   {editor.isActive('link') ? (
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => {
                         editor.chain().focus().unsetLink().run();
                         setShowLinkPopover(false);
                       }}
-                      className="flex items-center gap-1 text-[11px] text-red-600 hover:text-red-700"
+                      className="h-7 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
                     >
-                      <Unlink className="h-3 w-3" />
+                      <Unlink className="h-3 w-3 me-1" />
                       <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
-                    </button>
+                    </Button>
                   ) : <div />}
 
                   <div className="flex items-center gap-1">
-                    <button
+                    <Button
                       type="button"
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setShowLinkPopover(false)}
-                      className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted"
+                      className="h-7 px-2 text-[11px] text-muted-foreground rounded-md"
                     >
                       {lang === 'ar' ? 'إلغاء' : 'Cancel'}
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
+                      size="sm"
                       onClick={() => {
                         let cleanUrl = linkUrlInput.trim();
                         if (!cleanUrl) {
@@ -248,10 +277,10 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                         }
                         setShowLinkPopover(false);
                       }}
-                      className="rounded bg-olive-700 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-olive-800"
+                      className="h-7 px-2.5 text-[11px] font-semibold bg-[#2E4034] hover:bg-[#24382F] text-white rounded-md shadow-2xs"
                     >
                       {lang === 'ar' ? 'تطبيق' : 'Apply'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -259,22 +288,26 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           </div>
         </div>
 
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
         {/* Colors & Highlight Palette */}
-        <div className="relative flex items-center gap-1 border-e border-border pe-1.5 me-1">
+        <div className="relative flex items-center gap-0.5">
           {/* Text Color Button */}
           <div className="relative">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setShowColorPicker(!showColorPicker);
                 setShowHighlightPicker(false);
               }}
-              className="flex items-center gap-0.5 rounded-lg p-1.5 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
               title={t('textColor')}
             >
               <Baseline className="h-4 w-4" />
               <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-            </button>
+            </Button>
 
             {showColorPicker && (
               <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
@@ -290,7 +323,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                         (editor.chain().focus() as any).setTextColor(c.hex).run();
                         setShowColorPicker(false);
                       }}
-                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform"
+                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
                       style={{ backgroundColor: c.hex }}
                       title={lang === 'ar' ? c.labelAr : c.labelEn}
                     />
@@ -302,7 +335,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                     (editor.chain().focus() as any).unsetTextColor().run();
                     setShowColorPicker(false);
                   }}
-                  className="mt-1 rounded border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center"
+                  className="mt-1 rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
                 >
                   {t('removeColor')}
                 </button>
@@ -312,18 +345,20 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
 
           {/* Text Highlight Button */}
           <div className="relative">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => {
                 setShowHighlightPicker(!showHighlightPicker);
                 setShowColorPicker(false);
               }}
-              className="flex items-center gap-0.5 rounded-lg p-1.5 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
               title={t('highlightColor')}
             >
               <Highlighter className="h-4 w-4" />
               <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-            </button>
+            </Button>
 
             {showHighlightPicker && (
               <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
@@ -339,7 +374,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                         (editor.chain().focus() as any).setTextHighlight(c.hex).run();
                         setShowHighlightPicker(false);
                       }}
-                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform"
+                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
                       style={{ backgroundColor: c.hex }}
                       title={lang === 'ar' ? c.labelAr : c.labelEn}
                     />
@@ -351,7 +386,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                     (editor.chain().focus() as any).unsetTextHighlight().run();
                     setShowHighlightPicker(false);
                   }}
-                  className="mt-1 rounded border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center"
+                  className="mt-1 rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
                 >
                   {t('removeColor')}
                 </button>
@@ -360,212 +395,250 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           </div>
         </div>
 
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
         {/* Lists & Quote */}
-        <div className="flex items-center gap-0.5 border-e border-border pe-1.5 me-1">
-          <button
+        <div className="flex items-center gap-0.5">
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleBulletList().run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('bulletList')
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('bulletList')}
           >
             <List className="h-4 w-4" />
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleOrderedList().run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('orderedList')
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('orderedList')}
           >
             <ListOrdered className="h-4 w-4" />
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => editor.chain().focus().toggleBlockquote().run()}
-            className={`rounded-lg p-1.5 transition-colors ${
+            className={cn(
+              "h-8 w-8 rounded-lg",
               editor.isActive('blockquote')
-                ? 'bg-olive-100 text-olive-900 dark:bg-olive-900/40 dark:text-olive-200'
-                : 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            }`}
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
             title={t('blockquote')}
           >
             <Quote className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
         {/* Table Insert Button */}
-        <div className="flex items-center gap-1 border-e border-border pe-1.5 me-1">
-          <button
+        <div>
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={() =>
               editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
             }
-            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
-              isTableActive
-                ? 'bg-olive-600 text-white dark:bg-olive-600'
-                : 'text-foreground hover:bg-muted border border-border/80'
-            }`}
+            className={cn(
+              "h-8 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs",
+              isTableActive && "border-olive-600 bg-olive-50 dark:bg-olive-950/40 text-olive-800 dark:text-olive-300"
+            )}
             title={t('insertTable')}
           >
             <TableIcon className="h-3.5 w-3.5" />
             <span>{t('insertTable')}</span>
-          </button>
+          </Button>
         </div>
 
         {/* Upload Image Button */}
         <div>
-          <button
+          <Button
             type="button"
+            variant="outline"
+            size="sm"
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadingImage}
-            className="flex items-center gap-1.5 rounded-lg bg-olive-50 dark:bg-olive-900/20 border border-olive-200 dark:border-olive-800/50 px-2.5 py-1 text-xs font-semibold text-olive-800 dark:text-olive-300 hover:bg-olive-100 dark:hover:bg-olive-900/40 disabled:opacity-50 transition-colors"
+            className="h-8 gap-1.5 rounded-lg bg-olive-50 dark:bg-olive-950/40 border-olive-200 dark:border-olive-800/60 text-olive-800 dark:text-olive-300 hover:bg-olive-100 dark:hover:bg-olive-900/40 text-xs font-semibold shadow-2xs disabled:opacity-50"
             title={t('uploadImageBtn')}
           >
-            <ImageIcon className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
+            <ImageIcon className="h-3.5 w-3.5 text-olive-700 dark:text-olive-400" />
             <span>{uploadingImage ? t('uploadingImage') : t('uploadImageBtn')}</span>
-          </button>
+          </Button>
         </div>
       </div>
 
       {/* Contextual Table Management Sub-Toolbar (active when cursor is in table) */}
       {isTableActive && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 bg-olive-50/60 dark:bg-olive-950/30 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 bg-muted/40 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto">
           {/* Table Tools Label Badge */}
           <div className="flex items-center gap-1 text-[11px] font-bold text-olive-800 dark:text-olive-300 me-1">
-            <TableIcon className="h-3 w-3" />
+            <TableIcon className="h-3.5 w-3.5" />
             <span>{t('tableControls')}:</span>
           </div>
 
           {/* Row Controls */}
-          <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card p-0.5">
-            <button
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().addRowBefore().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowBefore')}
             >
               <Rows className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <ArrowUp className="h-2.5 w-2.5" />
               <span className="hidden sm:inline">{t('addRowBefore')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().addRowAfter().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowAfter')}
             >
               <Rows className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <ArrowDown className="h-2.5 w-2.5" />
               <span className="hidden sm:inline">{t('addRowAfter')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().deleteRow().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteRow')}
             >
               <Trash2 className="h-3 w-3" />
               <span className="hidden md:inline">{t('deleteRow')}</span>
-            </button>
+            </Button>
           </div>
 
           {/* Column Controls */}
-          <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card p-0.5">
-            <button
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().addColumnBefore().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnBefore')}
             >
               <Columns className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               {isRtl ? <ArrowRight className="h-2.5 w-2.5" /> : <ArrowLeft className="h-2.5 w-2.5" />}
               <span className="hidden sm:inline">{t('addColumnBefore')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().addColumnAfter().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnAfter')}
             >
               <Columns className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               {isRtl ? <ArrowLeft className="h-2.5 w-2.5" /> : <ArrowRight className="h-2.5 w-2.5" />}
               <span className="hidden sm:inline">{t('addColumnAfter')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().deleteColumn().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteColumn')}
             >
               <Trash2 className="h-3 w-3" />
               <span className="hidden md:inline">{t('deleteColumn')}</span>
-            </button>
+            </Button>
           </div>
 
           {/* Merge & Split Cells */}
-          <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card p-0.5">
-            <button
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().mergeCells().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('mergeCells')}
             >
               <Merge className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <span className="hidden lg:inline">{t('mergeCells')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().splitCell().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('splitCell')}
             >
               <Split className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <span className="hidden lg:inline">{t('splitCell')}</span>
-            </button>
+            </Button>
           </div>
 
           {/* Toggle Header Row / Column */}
-          <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card p-0.5">
-            <button
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().toggleHeaderRow().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('toggleHeaderRow')}
             >
               <Heading className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <span className="hidden xl:inline">{t('toggleHeaderRow')}</span>
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().toggleHeaderColumn().run()}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('toggleHeaderColumn')}
             >
               <Columns className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <span className="hidden xl:inline">{t('toggleHeaderColumn')}</span>
-            </button>
+            </Button>
           </div>
 
           {/* Delete Whole Table */}
           <div className="ms-auto">
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="sm"
               onClick={() => editor.chain().focus().deleteTable().run()}
-              className="flex items-center gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 px-2 py-0.5 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors"
+              className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
               title={t('deleteTable')}
             >
               <Trash2 className="h-3 w-3" />
               <span>{t('deleteTable')}</span>
-            </button>
+            </Button>
           </div>
         </div>
       )}
