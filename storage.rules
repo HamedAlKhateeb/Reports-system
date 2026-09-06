@@ -1,0 +1,14 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Only allow authenticated users to upload or read report images
+    match /reports/{reportId}/images/{fileName} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
