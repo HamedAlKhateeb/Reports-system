@@ -509,6 +509,116 @@ export const DICTIONARY = {
     ar: 'تم حفظ الإعدادات بنجاح.',
     en: 'Settings saved successfully.',
   },
+
+  // AI Assistant
+  aiAssistant: {
+    ar: 'مساعد الذكاء الاصطناعي للمراجعة',
+    en: 'AI Review Assistant',
+  },
+  aiAssistantDesc: {
+    ar: 'مساعد متخصص في معالجة المستندات وتدقيق الجودة واستخراج الأخطاء',
+    en: 'Specialized assistant for document processing, quality audit, and defect extraction',
+  },
+  aiChatPlaceholder: {
+    ar: 'اكتب استفسارك أو اطلب تحليل مستند...',
+    en: 'Ask a question or request document analysis...',
+  },
+  attachDocument: {
+    ar: 'إرفاق مستند (PDF, DOCX, MD, TXT)',
+    en: 'Attach Document (PDF, DOCX, MD, TXT)',
+  },
+  processingDocument: {
+    ar: 'جاري قراءة وتحليل المستند...',
+    en: 'Processing and analyzing document...',
+  },
+  createReportFromAi: {
+    ar: 'إنشاء تقرير في النظام بهذا المحتوى',
+    en: 'Create Report in System from this',
+  },
+  createIssuesFromAi: {
+    ar: 'إضافة المشاكل للوحة المتابعة',
+    en: 'Add Issues to Kanban Board',
+  },
+  aiReportCreatedSuccess: {
+    ar: 'تم إنشاء التقرير بنجاح!',
+    en: 'Report created successfully!',
+  },
+  aiIssuesCreatedSuccess: {
+    ar: 'تمت إضافة المشاكل إلى لوحة المتابعة!',
+    en: 'Issues added to Kanban board!',
+  },
+  aiWelcomeMessage: {
+    ar: 'مرحباً بك! أنا مساعد المراجعة وتدقيق الجودة. يمكنك إرفاق أي ملف (PDF أو Word أو Markdown) أو إرسال نص لأقوم بفحصه، واستخراج أخطاء البرنامج، أو تدقيق جودة الترجمة بمعايير MQM، وإنشاء تقارير ومشاكل مباشرة في النظام.',
+    en: 'Welcome! I am your QA & Translation Review Assistant. You can attach any document (PDF, Word, Markdown) or send text for me to audit defects, evaluate MQM translation quality, and automatically create reports or issues in your system.',
+  },
+  clearChat: {
+    ar: 'مسح المحادثة',
+    en: 'Clear Chat',
+  },
+  aiRoleBadge: {
+    ar: 'خبير تدقيق ومراجعة',
+    en: 'Audit & Review Expert',
+  },
+
+  // Theme Modes
+  themeSettingTitle: {
+    ar: 'مظهر التطبيق (السمة)',
+    en: 'Appearance & Theme',
+  },
+  themeSettingDesc: {
+    ar: 'اختر المظهر الفاتح الهادئ، الداكن، أو المزامنة التلقائية مع إعدادات نظامك.',
+    en: 'Choose warm light, dark, or sync automatically with your system appearance.',
+  },
+  themeLight: {
+    ar: 'فاتح (Warm Light)',
+    en: 'Light Mode',
+  },
+  themeDark: {
+    ar: 'داكن (Dark)',
+    en: 'Dark Mode',
+  },
+  themeSystem: {
+    ar: 'تلقائي (حسب النظام)',
+    en: 'System Default',
+  },
+
+  // User AI API Key Settings
+  aiApiKeyTitle: {
+    ar: 'مفتاح API للذكاء الاصطناعي (Google Gemini)',
+    en: 'AI API Key (Google Gemini)',
+  },
+  aiApiKeyDesc: {
+    ar: 'أضف مفتاح API الخاص بك لتمكين التحليل المباشر للمستندات الضخمة وتدقيق MQM بلا حدود. يُحفظ المفتاح محلياً على جهازك بأمان.',
+    en: 'Provide your personal Google Gemini API key for unrestricted document auditing and MQM analysis. Stored securely on your device.',
+  },
+  aiApiKeyPlaceholder: {
+    ar: 'أدخل مفتاح Gemini API هنا (AIzaSy...)',
+    en: 'Enter your Gemini API key (AIzaSy...)',
+  },
+  saveApiKey: {
+    ar: 'حفظ المفتاح',
+    en: 'Save API Key',
+  },
+  apiKeySavedSuccess: {
+    ar: 'تم حفظ مفتاح API بنجاح',
+    en: 'API key saved successfully',
+  },
+  apiKeyRemoved: {
+    ar: 'تم إزالة المفتاح، سيعمل المساعد بالمحرك الافتراضي',
+    en: 'API Key removed; using default engine',
+  },
+  apiKeyStatusActive: {
+    ar: 'مفتاح مخصص مفعّل',
+    en: 'Custom Key Active',
+  },
+  apiKeyStatusDefault: {
+    ar: 'المحرك الافتراضي يعمل (بدون مفتاح)',
+    en: 'Using default engine (No key)',
+  },
+  removeApiKey: {
+    ar: 'حذف المفتاح',
+    en: 'Remove Key',
+  },
 } as const;
 
 export type DictionaryKey = keyof typeof DICTIONARY;
