@@ -19,6 +19,10 @@ import {
   Clock,
   Images,
   ExternalLink,
+  Briefcase,
+  Building2,
+  PenTool,
+  Palette,
 } from 'lucide-react';
 import { getReportById, updateReport, getReportImages, getIssuesByReportId } from '@/lib/db';
 import { ReportItem, ReportImageItem, IssueItem } from '@/lib/types';
@@ -43,6 +47,11 @@ export default function ReportDetailPage() {
   // Metadata form states
   const [title, setTitle] = useState('');
   const [author, setAuthor] = useState('');
+  const [authorTitle, setAuthorTitle] = useState('');
+  const [organization, setOrganization] = useState('');
+  const [signatureData, setSignatureData] = useState('');
+  const [themeColor, setThemeColor] = useState('olive');
+  const [backgroundColor, setBackgroundColor] = useState('white');
   const [systemUnderReview, setSystemUnderReview] = useState('');
   const [reportLanguage, setReportLanguage] = useState<AppLanguage>('ar');
 
@@ -57,6 +66,11 @@ export default function ReportDetailPage() {
       setReport(rep);
       setTitle(rep.title || '');
       setAuthor(rep.author || '');
+      setAuthorTitle(rep.authorTitle || '');
+      setOrganization(rep.organization || '');
+      setSignatureData(rep.signatureData || '');
+      setThemeColor(rep.themeColor || 'olive');
+      setBackgroundColor(rep.backgroundColor || 'white');
       setSystemUnderReview(rep.systemUnderReview || '');
       setReportLanguage(rep.language || 'ar');
 
@@ -90,9 +104,24 @@ export default function ReportDetailPage() {
     await updateReport(reportId, {
       title,
       author,
+      authorTitle,
+      organization,
+      signatureData,
+      themeColor,
+      backgroundColor,
       systemUnderReview,
       language: reportLanguage,
     });
+  };
+
+  const handleThemeChange = async (newTheme: string) => {
+    setThemeColor(newTheme);
+    await updateReport(reportId, { themeColor: newTheme });
+  };
+
+  const handleBackgroundChange = async (newBg: string) => {
+    setBackgroundColor(newBg);
+    await updateReport(reportId, { backgroundColor: newBg });
   };
 
   const handleLanguageToggle = async (newLang: AppLanguage) => {
@@ -120,6 +149,11 @@ export default function ReportDetailPage() {
             ...report,
             title,
             author,
+            authorTitle,
+            organization,
+            signatureData,
+            themeColor,
+            backgroundColor,
             systemUnderReview,
             language: reportLanguage,
           },
@@ -317,39 +351,137 @@ export default function ReportDetailPage() {
           </div>
         </div>
 
-        {/* Author & System Under Review Inputs */}
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-4 text-xs">
+        {/* Reviewer & System Metadata Inputs */}
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 border-t border-slate-100 dark:border-border/60 pt-4 text-xs">
           <div className="flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-slate-400" />
-            <span className="font-medium text-slate-500">{t('systemUnderReview')}:</span>
+            <Cpu className="h-4 w-4 text-slate-400 flex-shrink-0" />
+            <span className="font-medium text-slate-500 min-w-max">{t('systemUnderReview')}:</span>
             <input
               type="text"
               value={systemUnderReview}
               onChange={(e) => setSystemUnderReview(e.target.value)}
               onBlur={handleMetaBlur}
-              placeholder="e.g. Payment Gateway v2.4"
-              className="flex-1 rounded border border-slate-200 px-2 py-1 text-slate-800 focus:border-teal-500 focus:outline-none"
+              placeholder={lang === 'ar' ? 'مثال: بوابة الدفع v2.4' : 'e.g. Payment Gateway v2.4'}
+              className="flex-1 rounded border border-slate-200 dark:border-border bg-transparent px-2 py-1 text-slate-800 dark:text-foreground focus:border-olive-500 focus:outline-none"
             />
           </div>
 
           <div className="flex items-center gap-2">
-            <UserIcon className="h-4 w-4 text-slate-400" />
-            <span className="font-medium text-slate-500">{t('author')}:</span>
+            <UserIcon className="h-4 w-4 text-slate-400 flex-shrink-0" />
+            <span className="font-medium text-slate-500 min-w-max">{t('author')}:</span>
             <input
               type="text"
               value={author}
               onChange={(e) => setAuthor(e.target.value)}
               onBlur={handleMetaBlur}
-              placeholder="e.g. QA Reviewer"
-              className="flex-1 rounded border border-slate-200 px-2 py-1 text-slate-800 focus:border-teal-500 focus:outline-none"
+              placeholder={lang === 'ar' ? 'اسم المدقق / المراجع' : 'Auditor / Reviewer Name'}
+              className="flex-1 rounded border border-slate-200 dark:border-border bg-transparent px-2 py-1 text-slate-800 dark:text-foreground focus:border-olive-500 focus:outline-none"
             />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Briefcase className="h-4 w-4 text-slate-400 flex-shrink-0" />
+            <span className="font-medium text-slate-500 min-w-max">{t('jobTitle')}:</span>
+            <input
+              type="text"
+              value={authorTitle}
+              onChange={(e) => setAuthorTitle(e.target.value)}
+              onBlur={handleMetaBlur}
+              placeholder={t('jobTitlePlaceholder')}
+              className="flex-1 rounded border border-slate-200 dark:border-border bg-transparent px-2 py-1 text-slate-800 dark:text-foreground focus:border-olive-500 focus:outline-none"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Building2 className="h-4 w-4 text-slate-400 flex-shrink-0" />
+            <span className="font-medium text-slate-500 min-w-max">{t('organization')}:</span>
+            <input
+              type="text"
+              value={organization}
+              onChange={(e) => setOrganization(e.target.value)}
+              onBlur={handleMetaBlur}
+              placeholder={t('organizationPlaceholder')}
+              className="flex-1 rounded border border-slate-200 dark:border-border bg-transparent px-2 py-1 text-slate-800 dark:text-foreground focus:border-olive-500 focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Signature & Theme Bar */}
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-12 gap-3 border-t border-slate-100 dark:border-border/60 pt-4 text-xs">
+          {/* Signature Endorsement */}
+          <div className="md:col-span-6 flex flex-col sm:flex-row items-start sm:items-center gap-2">
+            <div className="flex items-center gap-1.5 font-medium text-slate-500 min-w-max">
+              <PenTool className="h-4 w-4 text-olive-600 dark:text-olive-400" />
+              <span>{t('signature')}:</span>
+            </div>
+            <input
+              type="text"
+              value={signatureData}
+              onChange={(e) => setSignatureData(e.target.value)}
+              onBlur={handleMetaBlur}
+              placeholder={t('signaturePlaceholder')}
+              className="w-full rounded border border-slate-200 dark:border-border bg-transparent px-2.5 py-1 text-slate-800 dark:text-foreground italic font-serif focus:border-olive-500 focus:outline-none"
+            />
+          </div>
+
+          {/* Theme & Background Controls */}
+          <div className="md:col-span-6 flex flex-wrap items-center md:justify-end gap-3">
+            {/* Color Palette Selector */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-500">{t('reportTheme')}:</span>
+              <div className="flex items-center gap-1">
+                {[
+                  { id: 'olive', bg: 'bg-olive-600', label: t('themeOlive') },
+                  { id: 'blue', bg: 'bg-blue-600', label: t('themeBlue') },
+                  { id: 'slate', bg: 'bg-slate-700', label: t('themeSlate') },
+                  { id: 'emerald', bg: 'bg-emerald-600', label: t('themeEmerald') },
+                ].map((th) => (
+                  <button
+                    key={th.id}
+                    type="button"
+                    onClick={() => handleThemeChange(th.id)}
+                    className={`h-5 w-5 rounded-full ${th.bg} transition-all ${
+                      themeColor === th.id
+                        ? 'ring-2 ring-offset-1 ring-olive-500 scale-110'
+                        : 'opacity-70 hover:opacity-100'
+                    }`}
+                    title={th.label}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Background Style Selector */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-500">{t('reportBackground')}:</span>
+              <div className="flex rounded-lg border border-slate-200 dark:border-border bg-slate-50 dark:bg-muted/30 p-0.5">
+                {[
+                  { id: 'white', label: t('bgWhite') },
+                  { id: 'cream', label: t('bgCream') },
+                  { id: 'cool', label: t('bgCool') },
+                ].map((bg) => (
+                  <button
+                    key={bg.id}
+                    type="button"
+                    onClick={() => handleBackgroundChange(bg.id)}
+                    className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                      backgroundColor === bg.id
+                        ? 'bg-white dark:bg-card text-foreground shadow-sm font-bold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {bg.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         </div>
 
         {/* Linked Issues Indicator */}
         {linkedIssues.length > 0 && (
-          <div className="mt-4 border-t border-slate-100 pt-3 flex items-center gap-2 text-xs text-slate-600">
-            <Layers className="h-3.5 w-3.5 text-teal-600" />
+          <div className="mt-4 border-t border-slate-100 dark:border-border/60 pt-3 flex items-center gap-2 text-xs text-slate-600 dark:text-muted-foreground">
+            <Layers className="h-3.5 w-3.5 text-olive-600" />
             <span>
               {lang === 'ar'
                 ? `مرتبط بـ ${linkedIssues.length} مشكلة في لوحة المتابعة:`
@@ -360,7 +492,7 @@ export default function ReportDetailPage() {
                 <Link
                   key={iss.id}
                   href="/dashboard"
-                  className="rounded bg-teal-50 px-2 py-0.5 text-[11px] font-semibold text-teal-800 hover:bg-teal-100"
+                  className="rounded bg-olive-50 dark:bg-olive-900/30 px-2 py-0.5 text-[11px] font-semibold text-olive-800 dark:text-olive-300 hover:bg-olive-100"
                 >
                   {iss.title}
                 </Link>
@@ -376,6 +508,8 @@ export default function ReportDetailPage() {
         initialContent={report.contentJson}
         reportLanguage={reportLanguage}
         onSave={handleEditorSave}
+        themeColor={themeColor}
+        backgroundColor={backgroundColor}
       />
     </div>
   );

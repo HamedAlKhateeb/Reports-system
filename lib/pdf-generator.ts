@@ -54,7 +54,7 @@ export async function convertDocxToPdf(docxBuffer: Buffer): Promise<Buffer> {
     try {
       if (fs.existsSync(inputDocxPath)) fs.unlinkSync(inputDocxPath);
       if (fs.existsSync(expectedPdfPath)) fs.unlinkSync(expectedPdfPath);
-      if (fs.existsSync(tempDir)) fs.rmdirSync(tempDir);
+      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
     } catch (cleanupErr) {
       console.warn('Temporary file cleanup failed:', cleanupErr);
     }

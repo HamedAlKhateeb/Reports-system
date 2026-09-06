@@ -12,6 +12,10 @@ import {
   BorderStyle,
   ImageRun,
   ShadingType,
+  Header,
+  Footer,
+  PageNumber,
+  PageBreak,
 } from 'docx';
 import { ReportItem, ReportImageItem } from './types';
 import { t, DICTIONARY } from './i18n/dictionary';
@@ -122,7 +126,20 @@ export async function buildDocxDocument(
             })
           );
         }
-      } else if (node.type === 'bulletList' || node.type === 'orderedList') {
+      } else if (node.type === 'orderedList') {
+        const items = node.content || [];
+        items.forEach((item: any, idx: number) => {
+          const text = extractNodeText(item);
+          children.push(
+            new Paragraph({
+              children: [new TextRun({ text: `${idx + 1}.  ${text}`, size: 22 })],
+              alignment,
+              bidirectional: isAr,
+              spacing: { after: 60 },
+            })
+          );
+        });
+      } else if (node.type === 'bulletList') {
         for (const item of node.content || []) {
           const text = extractNodeText(item);
           children.push(
@@ -203,6 +220,7 @@ export async function buildDocxDocument(
               new TableRow({
                 children: docxCells,
                 tableHeader: isHeader,
+                cantSplit: true,
               })
             );
           });
@@ -258,15 +276,98 @@ export async function buildDocxDocument(
     }
   }
 
-  // Screenshots Appendix Section at the end if images exist
+  // Endorsement & Signature Section
+  children.push(new Paragraph({ text: '', spacing: { before: 200, after: 100 } }));
+  children.push(
+    new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({
+          cantSplit: true,
+          children: [
+            new TableCell({
+              shading: { fill: 'f8fafc', type: ShadingType.CLEAR, color: 'auto' },
+              margins: { top: 160, bottom: 160, left: 200, right: 200 },
+              children: [
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: isAr ? 'المصادقة والتوقيع الرسمي' : 'Official Sign-off & Endorsement',
+                      bold: true,
+                      size: 24,
+                      color: '1e293b',
+                    }),
+                  ],
+                  alignment,
+                  bidirectional: isAr,
+                  spacing: { after: 120 },
+                }),
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: `${t('author', lang)}: `, bold: true, size: 20 }),
+                    new TextRun({ text: report.author || '-', size: 20 }),
+                  ],
+                  alignment,
+                  bidirectional: isAr,
+                  spacing: { after: 50 },
+                }),
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: `${isAr ? 'المنصب الوظيفي' : 'Job Title'}: `, bold: true, size: 20 }),
+                    new TextRun({ text: report.authorTitle || '-', size: 20 }),
+                  ],
+                  alignment,
+                  bidirectional: isAr,
+                  spacing: { after: 50 },
+                }),
+                new Paragraph({
+                  children: [
+                    new TextRun({ text: `${isAr ? 'الجهة / القسم' : 'Organization'}: `, bold: true, size: 20 }),
+                    new TextRun({ text: report.organization || '-', size: 20 }),
+                  ],
+                  alignment,
+                  bidirectional: isAr,
+                  spacing: { after: 100 },
+                }),
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: report.signatureData
+                        ? `✍️  ${report.signatureData}`
+                        : (isAr ? 'التوقيع: _______________________________' : 'Signature: _______________________________'),
+                      italics: true,
+                      bold: true,
+                      size: 22,
+                      color: '0f766e',
+                    }),
+                  ],
+                  alignment,
+                  bidirectional: isAr,
+                  spacing: { before: 60, after: 60 },
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    })
+  );
+
+  // Screenshots Appendix Section at the end if images exist (with PageBreak)
   if (images.length > 0) {
+    children.push(
+      new Paragraph({
+        children: [new PageBreak()],
+      })
+    );
+
     children.push(
       new Paragraph({
         text: t('screenshotsAppendixHeading', lang),
         heading: HeadingLevel.HEADING_1,
         alignment,
         bidirectional: isAr,
-        spacing: { before: 400, after: 200 },
+        spacing: { before: 200, after: 200 },
       })
     );
 
@@ -341,6 +442,64 @@ export async function buildDocxDocument(
   const doc = new Document({
     sections: [
       {
+        properties: {
+          page: {
+            margin: {
+              top: 1440,
+              right: 1440,
+              bottom: 1440,
+              left: 1440,
+            },
+          },
+        },
+        headers: {
+          default: new Header({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: `${report.title || t('reportTitle', lang)} | #${report.reportNumber}`,
+                    size: 18,
+                    color: '64748b',
+                  }),
+                ],
+                alignment: isAr ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                bidirectional: isAr,
+              }),
+            ],
+          }),
+        },
+        footers: {
+          default: new Footer({
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({
+                    text: isAr ? 'نظام إدارة تقارير المراجعة  |  صفحة ' : 'Review Reports System  |  Page ',
+                    size: 18,
+                    color: '94a3b8',
+                  }),
+                  new TextRun({
+                    children: [PageNumber.CURRENT],
+                    size: 18,
+                    color: '94a3b8',
+                  }),
+                  new TextRun({
+                    text: isAr ? ' من ' : ' of ',
+                    size: 18,
+                    color: '94a3b8',
+                  }),
+                  new TextRun({
+                    children: [PageNumber.TOTAL_PAGES],
+                    size: 18,
+                    color: '94a3b8',
+                  }),
+                ],
+                alignment: AlignmentType.CENTER,
+              }),
+            ],
+          }),
+        },
         children,
       },
     ],

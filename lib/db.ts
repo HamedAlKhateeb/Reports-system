@@ -89,7 +89,7 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
 
   // Fallback to local / default whitelist
   const localList = getLocal<string[]>(LOCAL_WHITELIST_KEY, DEFAULT_WHITELIST);
-  return localList.some((e) => e.toLowerCase() === normalized) || normalized.includes('hamed');
+  return localList.some((e) => e.toLowerCase() === normalized);
 }
 
 /**
@@ -124,7 +124,7 @@ export async function getNextReportNumber(): Promise<number> {
           transaction.set(counterRef, { currentNumber: 101 });
           return 101;
         }
-        const current = counterDoc.data()?.currentNumber || 100;
+        const current = counterDoc.data()?.currentNumber ?? 100;
         const updated = current + 1;
         transaction.update(counterRef, { currentNumber: updated });
         return updated;

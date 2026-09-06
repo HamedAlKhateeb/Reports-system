@@ -99,17 +99,22 @@ export default function ReportsPage() {
       return;
     }
 
-    const res = await deleteReport(id);
-    if (!res.success) {
-      if (res.error === 'reportCannotBeDeletedHasIssues') {
-        setDeleteError(t('reportCannotBeDeletedHasIssues'));
-      } else {
-        setDeleteError(res.error || 'Failed to delete report');
+    try {
+      const res = await deleteReport(id);
+      if (!res.success) {
+        if (res.error === 'reportCannotBeDeletedHasIssues') {
+          setDeleteError(t('reportCannotBeDeletedHasIssues'));
+        } else {
+          setDeleteError(res.error || 'Failed to delete report');
+        }
+        return;
       }
-      return;
-    }
 
-    setReports((prev) => prev.filter((r) => r.id !== id));
+      setReports((prev) => prev.filter((r) => r.id !== id));
+    } catch (err: any) {
+      console.error('Delete error:', err);
+      setDeleteError(err?.message || 'Failed to delete report');
+    }
   };
 
   const filteredReports = reports.filter((r) => {

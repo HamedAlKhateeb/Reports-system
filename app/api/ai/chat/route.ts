@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
               contents,
               generationConfig: {
                 temperature: 0.2,
-                maxOutputTokens: 2048,
+                maxOutputTokens: 8192,
               },
             }),
           }
@@ -145,12 +145,24 @@ export async function POST(req: NextRequest) {
 
         if (geminiRes.ok) {
           const data = await geminiRes.json();
+          const candidate = data.candidates?.[0];
+          if (candidate?.finishReason === 'SAFETY') {
+            return NextResponse.json({
+              reply: 'تعذر إكمال الرد بسبب إعدادات الأمان (Safety filters). يرجى مراجعة محتوى المستند أو صياغة الطلب.',
+            });
+          }
           const replyText =
-            data.candidates?.[0]?.content?.parts?.[0]?.text ||
+            candidate?.content?.parts?.[0]?.text ||
             'تمت معالجة الطلب ولكن لم يتم تلقي نص من النموذج.';
           return NextResponse.json({ reply: replyText });
         } else {
-          console.warn('Gemini API returned error, falling back to built-in auditor engine');
+          const errBody = await geminiRes.json().catch(() => ({}));
+          console.warn('Gemini API returned error:', geminiRes.status, errBody);
+          if (userApiKey && (geminiRes.status === 400 || geminiRes.status === 403)) {
+            return NextResponse.json({
+              reply: `⚠️ تنبيه: تعذر استخدام مفتاح Gemini API المدخل (كود الخطأ: ${geminiRes.status}). يرجى التحقق من صحة المفتاح في صفحة الإعدادات. تم تفعيل المحرك المدمج كبديل مؤقت.`,
+            });
+          }
         }
       } catch (geminiError) {
         console.warn('Gemini API call failed, falling back:', geminiError);

@@ -187,9 +187,10 @@ body {
   margin-bottom: 0.75rem;
 }
 
-/* Print Styles */
+/* Print Styles for Professional Multi-page Reports */
 @media print {
   header,
+  nav,
   .no-print {
     display: none !important;
   }
@@ -206,6 +207,44 @@ body {
 
   @page {
     margin: 1.5cm;
-    size: auto;
+    size: A4 portrait;
+  }
+
+  /* Prevent awkward page splits */
+  .ProseMirror table,
+  table {
+    page-break-inside: auto;
+  }
+
+  .ProseMirror tr,
+  tr {
+    page-break-inside: avoid;
+    page-break-after: auto;
+  }
+
+  .ProseMirror thead,
+  thead {
+    display: table-header-group;
+  }
+
+  .ProseMirror h1,
+  .ProseMirror h2,
+  h1, h2 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  .ProseMirror img,
+  .report-image-node,
+  img {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    max-width: 100% !important;
+  }
+
+  .report-card,
+  .signature-box {
+    page-break-inside: avoid;
+    break-inside: avoid;
   }
 }

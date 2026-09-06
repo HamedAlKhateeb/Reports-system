@@ -626,6 +626,79 @@ export const DICTIONARY = {
     ar: 'حذف المفتاح',
     en: 'Remove Key',
   },
+  // Customization & Colors
+  textColor: {
+    ar: 'لون النص',
+    en: 'Text Color',
+  },
+  highlightColor: {
+    ar: 'لون التمييز / الخلفية',
+    en: 'Highlight Color',
+  },
+  removeColor: {
+    ar: 'إزالة اللون',
+    en: 'Reset Color',
+  },
+  jobTitle: {
+    ar: 'المنصب الوظيفي',
+    en: 'Job Title',
+  },
+  jobTitlePlaceholder: {
+    ar: 'مثال: مدقق جودة أول / خبير توطين',
+    en: 'e.g. Senior QA Reviewer / Localization Expert',
+  },
+  organization: {
+    ar: 'الجهة / القسم',
+    en: 'Organization / Dept',
+  },
+  organizationPlaceholder: {
+    ar: 'مثال: قسم ضمان الجودة والترجمة',
+    en: 'e.g. QA & Localization Dept',
+  },
+  signature: {
+    ar: 'التوقيع والمصادقة',
+    en: 'Signature & Endorsement',
+  },
+  signaturePlaceholder: {
+    ar: 'اكتب اسمك أو توقيعك هنا للمصادقة على التقرير',
+    en: 'Type your name or signature here to endorse report',
+  },
+  reportTheme: {
+    ar: 'طابع ومظهر التقرير',
+    en: 'Report Theme',
+  },
+  reportBackground: {
+    ar: 'خلفية صفحة التقرير',
+    en: 'Report Background',
+  },
+  bgWhite: {
+    ar: 'أبيض كلاسيكي',
+    en: 'Classic White',
+  },
+  bgCream: {
+    ar: 'ورق كريمي دافئ',
+    en: 'Warm Cream Paper',
+  },
+  bgCool: {
+    ar: 'رمادي هادئ',
+    en: 'Soft Cool Slate',
+  },
+  themeOlive: {
+    ar: 'زيتوني احترافي',
+    en: 'Corporate Olive',
+  },
+  themeBlue: {
+    ar: 'أزرق كلاسيكي',
+    en: 'Classic Blue',
+  },
+  themeSlate: {
+    ar: 'رمادي رسمي',
+    en: 'Formal Slate',
+  },
+  themeEmerald: {
+    ar: 'زمردي أنيق',
+    en: 'Elegant Emerald',
+  },
 } as const;
 
 export type DictionaryKey = keyof typeof DICTIONARY;

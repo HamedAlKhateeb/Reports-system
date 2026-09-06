@@ -9,6 +9,6 @@
     "binding": "ASSETS"
   },
   "build": {
-    "command": "npx @opennextjs/cloudflare -s"
+    "command": "npx @opennextjs/cloudflare build"
   }
 }

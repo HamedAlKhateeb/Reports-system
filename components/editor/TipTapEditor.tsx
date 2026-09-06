@@ -9,6 +9,7 @@ import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import Placeholder from '@tiptap/extension-placeholder';
 import { ReportImage } from './ReportImageNode';
+import { TextColor, TextHighlight } from './CustomColorMarks';
 import { EditorToolbar } from './EditorToolbar';
 import { uploadReportImage } from '@/lib/db';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -20,6 +21,8 @@ interface TipTapEditorProps {
   initialContent: any;
   reportLanguage: AppLanguage;
   onSave: (contentJson: any) => Promise<void>;
+  themeColor?: string;
+  backgroundColor?: string;
 }
 
 export function TipTapEditor({
@@ -27,6 +30,8 @@ export function TipTapEditor({
   initialContent,
   reportLanguage,
   onSave,
+  themeColor = 'olive',
+  backgroundColor = 'white',
 }: TipTapEditorProps) {
   const { t } = useLanguage();
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
@@ -105,6 +110,8 @@ export function TipTapEditor({
         placeholder: reportLanguage === 'ar' ? 'ابدأ كتابة محتوى التقرير هنا...' : 'Start writing report content here...',
       }),
       ReportImage,
+      TextColor,
+      TextHighlight,
     ],
     content: initialContent || '',
     editorProps: {
@@ -195,8 +202,17 @@ export function TipTapEditor({
         />
       </div>
 
-      {/* Editor Content Area respecting Report Language and Direction */}
-      <div dir={dir} className="bg-card text-foreground">
+      {/* Editor Content Area respecting Report Language, Direction, and Background */}
+      <div
+        dir={dir}
+        className={`transition-colors text-foreground ${
+          backgroundColor === 'cream'
+            ? 'bg-[#fdfcf7] dark:bg-[#1a1917]'
+            : backgroundColor === 'cool'
+            ? 'bg-[#f8fafc] dark:bg-[#0f172a]'
+            : 'bg-card'
+        }`}
+      >
         <EditorContent editor={editor} />
       </div>
     </div>

@@ -12,11 +12,22 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
   // Top Metadata Block
   lines.push(`# ${report.title || t('reportTitle', lang)}`);
   lines.push('');
+  lines.push(`| ${lang === 'ar' ? 'البيان' : 'Field'} | ${lang === 'ar' ? 'القيمة' : 'Value'} |`);
+  lines.push('| --- | --- |');
   lines.push(`| **${t('reportNumber', lang)}** | #${report.reportNumber} |`);
   lines.push(`| **${t('author', lang)}** | ${report.author || '-'} |`);
+  if (report.authorTitle) {
+    lines.push(`| **${lang === 'ar' ? 'المنصب الوظيفي' : 'Job Title'}** | ${report.authorTitle} |`);
+  }
+  if (report.organization) {
+    lines.push(`| **${lang === 'ar' ? 'الجهة / القسم' : 'Organization'}** | ${report.organization} |`);
+  }
   lines.push(`| **${t('systemUnderReview', lang)}** | ${report.systemUnderReview || '-'} |`);
   lines.push(`| **${t('reportLanguage', lang)}** | ${lang === 'ar' ? 'العربية' : 'English'} |`);
   lines.push(`| **${t('createdAt', lang)}** | ${new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')} |`);
+  if (report.signatureData) {
+    lines.push(`| **${lang === 'ar' ? 'المصادقة والتوقيع' : 'Endorsement & Signature'}** | ${report.signatureData} |`);
+  }
   lines.push('');
   lines.push('---');
   lines.push('');

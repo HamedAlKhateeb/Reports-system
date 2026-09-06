@@ -6,6 +6,13 @@ export interface ReportItem {
   title: string;
   language: AppLanguage; // Content language of this specific report
   author: string;
+  authorTitle?: string;       // Job title / المنصب الوظيفي (e.g. مدقق جودة أول)
+  organization?: string;      // Organization / Dept / الجهة أو القسم
+  reviewerEmail?: string;     // Reviewer email / البريد
+  signatureType?: 'text' | 'draw' | 'image'; // Type of signature
+  signatureData?: string;     // Text representation, canvas data URL, or image URL
+  themeColor?: string;        // 'olive' | 'blue' | 'slate' | 'emerald' | 'amber'
+  backgroundColor?: string;   // 'white' | 'cream' | 'cool'
   systemUnderReview: string;
   contentJson: any; // TipTap JSON
   ownerUid: string;

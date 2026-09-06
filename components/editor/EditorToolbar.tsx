@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { Editor } from '@tiptap/react';
 import {
   Bold,
@@ -24,8 +24,29 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
+  Highlighter,
+  Baseline,
+  ChevronDown,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+
+const TEXT_COLORS = [
+  { name: 'Red', hex: '#dc2626', labelAr: 'أحمر داكن', labelEn: 'Dark Red' },
+  { name: 'Orange', hex: '#ea580c', labelAr: 'برتقالي', labelEn: 'Orange' },
+  { name: 'Green', hex: '#16a34a', labelAr: 'أخضر', labelEn: 'Green' },
+  { name: 'Blue', hex: '#2563eb', labelAr: 'أزرق', labelEn: 'Blue' },
+  { name: 'Purple', hex: '#9333ea', labelAr: 'بنفسجي', labelEn: 'Purple' },
+  { name: 'Slate', hex: '#475569', labelAr: 'رمادي', labelEn: 'Slate Gray' },
+];
+
+const HIGHLIGHT_COLORS = [
+  { name: 'Yellow', hex: '#fef08a', labelAr: 'أصفر', labelEn: 'Yellow' },
+  { name: 'Soft Red', hex: '#fee2e2', labelAr: 'أحمر فاتح', labelEn: 'Soft Red' },
+  { name: 'Soft Orange', hex: '#ffedd5', labelAr: 'برتقالي فاتح', labelEn: 'Soft Orange' },
+  { name: 'Soft Green', hex: '#dcfce7', labelAr: 'أخضر فاتح', labelEn: 'Soft Green' },
+  { name: 'Soft Blue', hex: '#dbeafe', labelAr: 'أزرق فاتح', labelEn: 'Soft Blue' },
+  { name: 'Soft Purple', hex: '#f3e8ff', labelAr: 'بنفسجي فاتح', labelEn: 'Soft Purple' },
+];
 
 interface EditorToolbarProps {
   editor: Editor | null;
@@ -34,8 +55,10 @@ interface EditorToolbarProps {
 }
 
 export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorToolbarProps) {
-  const { t, isRtl } = useLanguage();
+  const { t, isRtl, lang } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [showHighlightPicker, setShowHighlightPicker] = useState(false);
 
   if (!editor) return null;
 
@@ -134,6 +157,107 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           >
             <Italic className="h-4 w-4" />
           </button>
+        </div>
+
+        {/* Colors & Highlight Palette */}
+        <div className="relative flex items-center gap-1 border-e border-border pe-1.5 me-1">
+          {/* Text Color Button */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowColorPicker(!showColorPicker);
+                setShowHighlightPicker(false);
+              }}
+              className="flex items-center gap-0.5 rounded-lg p-1.5 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title={t('textColor')}
+            >
+              <Baseline className="h-4 w-4" />
+              <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+            </button>
+
+            {showColorPicker && (
+              <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
+                <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1">
+                  {t('textColor')}
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 w-32">
+                  {TEXT_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      onClick={() => {
+                        (editor.chain().focus() as any).setTextColor(c.hex).run();
+                        setShowColorPicker(false);
+                      }}
+                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform"
+                      style={{ backgroundColor: c.hex }}
+                      title={lang === 'ar' ? c.labelAr : c.labelEn}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    (editor.chain().focus() as any).unsetTextColor().run();
+                    setShowColorPicker(false);
+                  }}
+                  className="mt-1 rounded border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center"
+                >
+                  {t('removeColor')}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Text Highlight Button */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setShowHighlightPicker(!showHighlightPicker);
+                setShowColorPicker(false);
+              }}
+              className="flex items-center gap-0.5 rounded-lg p-1.5 hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title={t('highlightColor')}
+            >
+              <Highlighter className="h-4 w-4" />
+              <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+            </button>
+
+            {showHighlightPicker && (
+              <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
+                <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1">
+                  {t('highlightColor')}
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 w-32">
+                  {HIGHLIGHT_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      type="button"
+                      onClick={() => {
+                        (editor.chain().focus() as any).setTextHighlight(c.hex).run();
+                        setShowHighlightPicker(false);
+                      }}
+                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform"
+                      style={{ backgroundColor: c.hex }}
+                      title={lang === 'ar' ? c.labelAr : c.labelEn}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    (editor.chain().focus() as any).unsetTextHighlight().run();
+                    setShowHighlightPicker(false);
+                  }}
+                  className="mt-1 rounded border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center"
+                >
+                  {t('removeColor')}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Lists & Quote */}

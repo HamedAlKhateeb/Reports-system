@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import JSZip from 'jszip';
 import {
   Bot,
   Send,
@@ -56,8 +57,9 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
     text?: string;
   } | null>(null);
 
-  const [createdReportId, setCreatedReportId] = useState<string | null>(null);
-  const [createdIssuesCount, setCreatedIssuesCount] = useState<number | null>(null);
+  const [createdReports, setCreatedReports] = useState<Record<string, string>>({});
+  const [createdIssues, setCreatedIssues] = useState<Record<string, number>>({});
+  const [actionLoadingMsgId, setActionLoadingMsgId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -83,6 +85,44 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
         });
       };
       reader.readAsDataURL(file);
+    } else if (file.name.endsWith('.docx')) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const docXml = await zip.file('word/document.xml')?.async('text');
+        if (docXml) {
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(docXml, 'text/xml');
+          const pNodes = xmlDoc.getElementsByTagName('w:p');
+          const lines: string[] = [];
+          for (let i = 0; i < pNodes.length; i++) {
+            const tNodes = pNodes[i].getElementsByTagName('w:t');
+            let pText = '';
+            for (let j = 0; j < tNodes.length; j++) {
+              pText += tNodes[j].textContent || '';
+            }
+            if (pText.trim()) {
+              lines.push(pText.trim());
+            }
+          }
+          const text = lines.join('\n');
+          setAttachedFile({
+            name: file.name,
+            type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            text: text || 'مستند Word تم استخراجه بنجاح.',
+          });
+        } else {
+          throw new Error('document.xml not found');
+        }
+      } catch (docxErr) {
+        console.warn('DOCX extraction fallback:', docxErr);
+        const text = await file.text().catch(() => '');
+        setAttachedFile({
+          name: file.name,
+          type: 'text/plain',
+          text,
+        });
+      }
     } else {
       const text = await file.text();
       setAttachedFile({
@@ -180,9 +220,9 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
     }
   };
 
-  // Action: Create Report from AI Action Data
-  const handleExecuteCreateReport = async (reportData: any) => {
-    if (!user) return;
+  // Action: Construct and Create Report from AI Action Data
+  const handleCreateReport = async (reportData: any): Promise<string> => {
+    if (!user) throw new Error('User not logged in');
     try {
       const title = reportData.title || (lang === 'ar' ? 'تقرير منشأ بالذكاء الاصطناعي' : 'AI Generated Review Report');
       const repLang = reportData.language || lang;
@@ -287,15 +327,29 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
         ownerUid: user.uid,
       });
 
-      setCreatedReportId(created.id);
+      return created.id;
     } catch (err) {
       console.error('Failed to create report from AI action', err);
+      throw err;
+    }
+  };
+
+  const handleExecuteCreateReport = async (msgId: string, reportData: any) => {
+    try {
+      setActionLoadingMsgId(msgId);
+      const repId = await handleCreateReport(reportData);
+      setCreatedReports((prev) => ({ ...prev, [msgId]: repId }));
+    } catch (err) {
+      console.error('Execution error:', err);
+    } finally {
+      setActionLoadingMsgId(null);
     }
   };
 
   // Action: Create Issues from AI Action Data
-  const handleExecuteCreateIssues = async (issuesList: any[]) => {
+  const handleExecuteCreateIssues = async (msgId: string, issuesList: any[]) => {
     try {
+      setActionLoadingMsgId(msgId);
       let count = 0;
       for (const item of issuesList) {
         await createIssue({
@@ -307,45 +361,49 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
         });
         count++;
       }
-      setCreatedIssuesCount(count);
+      setCreatedIssues((prev) => ({ ...prev, [msgId]: count }));
     } catch (err) {
       console.error('Failed to create issues from AI action', err);
+    } finally {
+      setActionLoadingMsgId(null);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="flex h-[88vh] w-full max-w-4xl flex-col rounded-2xl bg-white shadow-2xl overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="flex h-[88vh] w-full max-w-4xl flex-col rounded-2xl bg-card dark:bg-slate-900 text-card-foreground shadow-2xl overflow-hidden border border-border dark:border-slate-800">
         {/* Modal Top Header */}
-        <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50/80 px-6 py-3.5">
+        <div className="flex items-center justify-between border-b border-border bg-muted/40 dark:bg-slate-900/90 px-6 py-3.5">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-teal-600 to-emerald-500 text-white shadow-sm">
               <Sparkles className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">{t('aiAssistant')}</h2>
-                <span className="rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-bold text-teal-800">
+                <h2 className="text-base font-bold text-foreground">{t('aiAssistant')}</h2>
+                <span className="rounded-full bg-teal-100 dark:bg-teal-950/60 px-2 py-0.5 text-[10px] font-bold text-teal-800 dark:text-teal-300">
                   {t('aiRoleBadge')}
                 </span>
               </div>
-              <p className="text-xs text-slate-500">{t('aiAssistantDesc')}</p>
+              <p className="text-xs text-muted-foreground">{t('aiAssistantDesc')}</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() =>
+              onClick={() => {
                 setMessages([
                   {
                     id: 'welcome',
                     role: 'assistant',
                     content: t('aiWelcomeMessage'),
                   },
-                ])
-              }
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+                ]);
+                setCreatedReports({});
+                setCreatedIssues({});
+              }}
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
               title={t('clearChat')}
             >
               <Trash2 className="h-4 w-4" />
@@ -353,7 +411,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600 transition-colors"
+              className="rounded-lg p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
             >
               <X className="h-5 w-5" />
             </button>
@@ -361,9 +419,13 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
         </div>
 
         {/* Chat History Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/30">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-muted/10 dark:bg-slate-950/40">
           {messages.map((msg) => {
             const isAi = msg.role === 'assistant';
+            const repId = createdReports[msg.id];
+            const issCount = createdIssues[msg.id];
+            const isActionLoading = actionLoadingMsgId === msg.id;
+
             return (
               <div
                 key={msg.id}
@@ -378,7 +440,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                 <div
                   className={`max-w-2xl rounded-2xl p-4 text-sm leading-relaxed shadow-sm ${
                     isAi
-                      ? 'border border-slate-200 bg-white text-slate-800'
+                      ? 'border border-border bg-card dark:bg-slate-800 text-foreground'
                       : 'bg-teal-600 text-white'
                   }`}
                 >
@@ -386,7 +448,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                   {msg.attachmentName && (
                     <div
                       className={`mb-2 inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold ${
-                        isAi ? 'bg-slate-100 text-slate-700' : 'bg-teal-700 text-teal-50'
+                        isAi ? 'bg-muted text-muted-foreground' : 'bg-teal-700 text-teal-50'
                       }`}
                     >
                       <Paperclip className="h-3 w-3" />
@@ -399,22 +461,22 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
 
                   {/* Action Buttons generated by AI */}
                   {msg.actionData && (
-                    <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+                    <div className="mt-4 space-y-2 border-t border-border/60 pt-3">
                       {msg.actionData.action === 'create_report' && (
                         <div>
-                          {createdReportId ? (
-                            <div className="flex items-center justify-between rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800">
+                          {repId ? (
+                            <div className="flex items-center justify-between rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 p-2.5 text-xs text-emerald-800 dark:text-emerald-300">
                               <div className="flex items-center gap-1.5 font-bold">
-                                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                 <span>{t('aiReportCreatedSuccess')}</span>
                               </div>
                               <button
                                 type="button"
                                 onClick={() => {
                                   onClose();
-                                  router.push(`/reports/${createdReportId}`);
+                                  router.push(`/reports/${repId}`);
                                 }}
-                                className="flex items-center gap-1 font-semibold text-emerald-700 hover:underline"
+                                className="flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
                               >
                                 <span>{lang === 'ar' ? 'عرض التقرير' : 'View Report'}</span>
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -423,10 +485,15 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handleExecuteCreateReport(msg.actionData.report)}
-                              className="flex items-center gap-2 rounded-lg bg-teal-600 px-3.5 py-2 text-xs font-bold text-white shadow hover:bg-teal-700 transition-colors"
+                              disabled={isActionLoading}
+                              onClick={() => handleExecuteCreateReport(msg.id, msg.actionData.report)}
+                              className="flex items-center gap-2 rounded-lg bg-teal-600 px-3.5 py-2 text-xs font-bold text-white shadow hover:bg-teal-700 disabled:opacity-50 transition-colors"
                             >
-                              <PlusCircle className="h-4 w-4" />
+                              {isActionLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <PlusCircle className="h-4 w-4" />
+                              )}
                               <span>{t('createReportFromAi')}</span>
                             </button>
                           )}
@@ -435,12 +502,12 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
 
                       {msg.actionData.action === 'create_issues' && (
                         <div>
-                          {createdIssuesCount ? (
-                            <div className="flex items-center justify-between rounded-lg bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800">
+                          {issCount !== undefined ? (
+                            <div className="flex items-center justify-between rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 p-2.5 text-xs text-emerald-800 dark:text-emerald-300">
                               <div className="flex items-center gap-1.5 font-bold">
-                                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
                                 <span>
-                                  {t('aiIssuesCreatedSuccess')} ({createdIssuesCount})
+                                  {t('aiIssuesCreatedSuccess')} ({issCount})
                                 </span>
                               </div>
                               <button
@@ -449,7 +516,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                                   onClose();
                                   router.push('/dashboard');
                                 }}
-                                className="flex items-center gap-1 font-semibold text-emerald-700 hover:underline"
+                                className="flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
                               >
                                 <span>{lang === 'ar' ? 'فتح لوحة المشاكل' : 'Open Kanban'}</span>
                                 <ExternalLink className="h-3.5 w-3.5" />
@@ -458,10 +525,15 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                           ) : (
                             <button
                               type="button"
-                              onClick={() => handleExecuteCreateIssues(msg.actionData.issues)}
-                              className="flex items-center gap-2 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-bold text-white shadow hover:bg-amber-700 transition-colors"
+                              disabled={isActionLoading}
+                              onClick={() => handleExecuteCreateIssues(msg.id, msg.actionData.issues)}
+                              className="flex items-center gap-2 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-bold text-white shadow hover:bg-amber-700 disabled:opacity-50 transition-colors"
                             >
-                              <PlusCircle className="h-4 w-4" />
+                              {isActionLoading ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <PlusCircle className="h-4 w-4" />
+                              )}
                               <span>{t('createIssuesFromAi')}</span>
                             </button>
                           )}
@@ -502,7 +574,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
         )}
 
         {/* Input Bar */}
-        <div className="border-t border-slate-200 bg-white p-4">
+        <div className="border-t border-border bg-card p-4">
           {/* Quick Prompts */}
           <div className="mb-2 flex flex-wrap gap-1.5">
             <button
@@ -514,7 +586,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                     : 'Audit the attached document and extract software defects and MQM translation metrics'
                 )
               }
-              className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-teal-300 hover:bg-teal-50/50 hover:text-teal-800 transition-colors"
+              className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-teal-300 hover:bg-teal-50/50 hover:text-teal-800 dark:hover:text-teal-300 transition-colors"
             >
               {lang === 'ar' ? '🔍 تحليل المستند المرفق' : '🔍 Audit Document'}
             </button>
@@ -528,7 +600,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
                     : 'Extract defects and format them as Kanban issues'
                 )
               }
-              className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:border-teal-300 hover:bg-teal-50/50 hover:text-teal-800 transition-colors"
+              className="rounded-md border border-border bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-muted-foreground hover:border-teal-300 hover:bg-teal-50/50 hover:text-teal-800 dark:hover:text-teal-300 transition-colors"
             >
               {lang === 'ar' ? '⚡ استخراج مشاكل لوحة كانبان' : '⚡ Extract Kanban Issues'}
             </button>
@@ -553,7 +625,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="rounded-lg border border-slate-300 p-2.5 text-slate-600 hover:bg-slate-100 hover:text-teal-700 transition-colors"
+              className="rounded-lg border border-border p-2.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
               title={t('attachDocument')}
             >
               <Paperclip className="h-5 w-5" />
@@ -564,7 +636,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
               value={inputValue}
               onChange={(e) => setInputValue(e.target.value)}
               placeholder={t('aiChatPlaceholder')}
-              className="flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-900 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+              className="flex-1 rounded-lg border border-border bg-background px-4 py-2.5 text-sm text-foreground focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
             />
 
             <button
