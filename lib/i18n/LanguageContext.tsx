@@ -6,6 +6,7 @@ import { AppLanguage, AppDirection, DictionaryKey, t as translateFn, getDirectio
 interface LanguageContextType {
   lang: AppLanguage;
   dir: AppDirection;
+  isRtl: boolean;
   setLang: (newLang: AppLanguage) => void;
   defaultReportLang: AppLanguage;
   setDefaultReportLang: (newLang: AppLanguage) => void;
@@ -68,12 +69,14 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   };
 
   const dir = getDirection(lang);
+  const isRtl = dir === 'rtl';
 
   return (
     <LanguageContext.Provider
       value={{
         lang,
         dir,
+        isRtl,
         setLang,
         defaultReportLang,
         setDefaultReportLang,

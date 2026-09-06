@@ -153,33 +153,33 @@ export function TipTapEditor({
   const dir = reportLanguage === 'ar' ? 'rtl' : 'ltr';
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+    <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       {/* Editor Top Bar with Status and Toolbar */}
-      <div className="flex flex-col border-b border-slate-200">
+      <div className="flex flex-col border-b border-border">
         {/* Autosave Status Indicator */}
-        <div className="flex items-center justify-between bg-slate-50/50 px-4 py-1.5 text-xs text-slate-500 border-b border-slate-100">
+        <div className="flex items-center justify-between bg-muted/30 px-4 py-1.5 text-xs text-muted-foreground border-b border-border/50">
           <div className="flex items-center gap-1.5 font-medium">
             <span>{t('reportLanguage')}:</span>
-            <span className="rounded bg-slate-200 px-1.5 py-0.5 font-bold uppercase text-slate-700">
+            <span className="rounded bg-muted px-1.5 py-0.5 font-bold uppercase text-foreground">
               {reportLanguage}
             </span>
           </div>
 
           <div className="flex items-center gap-2">
             {saveStatus === 'saving' && (
-              <div className="flex items-center gap-1 text-amber-600">
+              <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 <span>{t('autosaving')}</span>
               </div>
             )}
             {saveStatus === 'saved' && (
-              <div className="flex items-center gap-1 text-emerald-600">
+              <div className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
                 <Check className="h-3.5 w-3.5" />
                 <span>{t('autosaved')}</span>
               </div>
             )}
             {saveStatus === 'error' && (
-              <div className="flex items-center gap-1 text-red-600">
+              <div className="flex items-center gap-1 text-red-600 dark:text-red-400">
                 <AlertCircle className="h-3.5 w-3.5" />
                 <span>{t('saveFailed')}</span>
               </div>
@@ -196,7 +196,7 @@ export function TipTapEditor({
       </div>
 
       {/* Editor Content Area respecting Report Language and Direction */}
-      <div dir={dir} className="bg-white">
+      <div dir={dir} className="bg-card text-foreground">
         <EditorContent editor={editor} />
       </div>
     </div>
