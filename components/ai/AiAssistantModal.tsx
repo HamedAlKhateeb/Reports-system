@@ -2,7 +2,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import JSZip from 'jszip';
 import {
   Bot,
   Send,
@@ -88,6 +87,7 @@ export function AiAssistantModal({ isOpen, onClose }: AiAssistantModalProps) {
     } else if (file.name.endsWith('.docx')) {
       try {
         const arrayBuffer = await file.arrayBuffer();
+        const JSZip = (await import('jszip')).default;
         const zip = await JSZip.loadAsync(arrayBuffer);
         const docXml = await zip.file('word/document.xml')?.async('text');
         if (docXml) {

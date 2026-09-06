@@ -24,11 +24,23 @@ import {
   PenTool,
   Palette,
 } from 'lucide-react';
+import dynamic from 'next/dynamic';
 import { getReportById, updateReport, getReportImages, getIssuesByReportId } from '@/lib/db';
 import { ReportItem, ReportImageItem, IssueItem } from '@/lib/types';
-import { TipTapEditor } from '@/components/editor/TipTapEditor';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
+
+const TipTapEditor = dynamic(
+  () => import('@/components/editor/TipTapEditor').then((m) => m.TipTapEditor),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-96 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#2E4034] border-t-transparent" />
+      </div>
+    ),
+  }
+);
 
 export default function ReportDetailPage() {
   const params = useParams();
