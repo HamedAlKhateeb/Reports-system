@@ -1,4 +1,11 @@
 import { AppLanguage, IssueSeverity, IssueStatus } from './i18n/dictionary';
+import { ContactLinkItem } from './contact-links';
+
+export interface CustomFieldItem {
+  id: string;
+  label: string;
+  value: string;
+}
 
 export interface ReportItem {
   id: string;
@@ -13,6 +20,9 @@ export interface ReportItem {
   signatureData?: string;     // Text representation, canvas data URL, or image URL
   themeColor?: string;        // 'olive' | 'blue' | 'slate' | 'emerald' | 'amber'
   backgroundColor?: string;   // 'white' | 'cream' | 'cool'
+  contactLinks?: ContactLinkItem[]; // Optional contact & social media links
+  customFields?: CustomFieldItem[]; // Dynamic custom metadata cards (top section)
+  customFooterFields?: CustomFieldItem[]; // Dynamic custom sections (bottom / signature section)
   systemUnderReview: string;
   contentJson: any; // TipTap JSON
   ownerUid: string;

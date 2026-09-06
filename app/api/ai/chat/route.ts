@@ -95,8 +95,35 @@ ACTION FORMATS:
 }
 \`\`\`
 
+3. Modifying an existing issue (with explicit user permission):
+\`\`\`json_action
+{
+  "action": "update_issue",
+  "issueId": "exact_issue_id",
+  "title": "Optional new title",
+  "status": "open" | "in_progress" | "resolved",
+  "severity": "critical" | "major" | "minor",
+  "description": "Optional updated description",
+  "reason": "Brief explanation of why this modification is recommended"
+}
+\`\`\`
+
+4. Modifying an existing report (with explicit user permission):
+\`\`\`json_action
+{
+  "action": "update_report",
+  "reportId": "exact_report_id",
+  "title": "Optional new title",
+  "summary": "Optional updated executive summary",
+  "systemUnderReview": "Optional system name",
+  "reason": "Brief explanation of why this modification is recommended"
+}
+\`\`\`
+
 GUIDELINES:
 - Always respond in the language of the user's inquiry (Arabic or English).
+- When asked to edit, update, or resolve any issue or report, formulate the modification into an \`update_issue\` or \`update_report\` json_action block. The system will display a confirmation card asking the user for explicit permission before applying the change.
+- When documents (PDF, DOCX, MD, TXT) are attached, analyze them and provide \`create_report\` or \`create_issues\` action blocks so the user can easily convert them into system records with one click.
 - Be analytical, structured, and direct.
 - Format Markdown neatly with bullet points and clear sections.
 `;
@@ -434,6 +461,39 @@ export async function POST(req: NextRequest) {
 - **Total Reports Logged:** ${context.allReportsSummary.length} reports.
 - **Report Diversity:** Spans across problem analysis, freelancer performance, market research, and strategic decision reports.
 - **Recent Activity:** Consistent auditing cadence recorded across teams.`;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('تعديل') || lastUserMsg.includes('حدث') || lastUserMsg.includes('حل') || lastUserMsg.toLowerCase().includes('update') || lastUserMsg.toLowerCase().includes('resolve')) &&
+      (lastUserMsg.includes('مشكلة') || lastUserMsg.toLowerCase().includes('issue')) &&
+      context?.issuesSummary &&
+      context.issuesSummary.length > 0
+    ) {
+      const targetIssue = context.issuesSummary[0];
+      const newStatus = lastUserMsg.includes('حل') || lastUserMsg.toLowerCase().includes('resolve') ? 'resolved' : 'in_progress';
+      if (isAr) {
+        reply = `بناءً على طلبك، اقترحت تعديل حالة المشكلة **"${targetIssue.title}"** إلى **(${newStatus})**.\n\n⚠️ **يرجى مراجعة التعديل أدناه والنقر على زر "موافقة وتطبيق التعديل" لاعتماده وحفظه في النظام:**\n\n\`\`\`json_action\n{\n  "action": "update_issue",\n  "issueId": "${targetIssue.id}",\n  "title": "${targetIssue.title}",\n  "status": "${newStatus}",\n  "reason": "تحديث حالة المشكلة بناءً على مراجعة الذكاء الاصطناعي وطلب المستخدم"\n}\n\`\`\``;
+      } else {
+        reply = `Based on your request, I propose updating the status of issue **"${targetIssue.title}"** to **(${newStatus})**.\n\n⚠️ **Please review the proposed update below and click "Approve & Apply" to confirm:**\n\n\`\`\`json_action\n{\n  "action": "update_issue",\n  "issueId": "${targetIssue.id}",\n  "title": "${targetIssue.title}",\n  "status": "${newStatus}",\n  "reason": "Update issue status requested by user"\n}\n\`\`\``;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('تعديل') || lastUserMsg.includes('تحديث') || lastUserMsg.toLowerCase().includes('update') || lastUserMsg.toLowerCase().includes('edit')) &&
+      (lastUserMsg.includes('تقرير') || lastUserMsg.toLowerCase().includes('report')) &&
+      (context?.currentReport || (context?.allReportsSummary && context.allReportsSummary.length > 0))
+    ) {
+      const targetRep = context.currentReport || context.allReportsSummary![0];
+      if (isAr) {
+        reply = `بناءً على طلبك، أعددت مسودة تحديث لبيانات التقرير **"${targetRep.title}"**.\n\n⚠️ **يرجى مراجعة التعديل المقترح والنقر على زر الاعتماد لتطبيقه على قاعدة البيانات:**\n\n\`\`\`json_action\n{\n  "action": "update_report",\n  "reportId": "${targetRep.id}",\n  "title": "${targetRep.title}",\n  "summary": "ملخص تنفيذي محدّث يتضمن أهم التوصيات والنتائج التقييمية المعتمدة.",\n  "reason": "تحديث الملخص التنفيذي بناءً على طلب المستخدم"\n}\n\`\`\``;
+      } else {
+        reply = `Based on your request, I have prepared an update for report **"${targetRep.title}"**.\n\n⚠️ **Please review the proposed change below and click "Approve & Apply" to commit it:**\n\n\`\`\`json_action\n{\n  "action": "update_report",\n  "reportId": "${targetRep.id}",\n  "title": "${targetRep.title}",\n  "summary": "Updated executive summary highlighting verified benchmarks and recommendations.",\n  "reason": "Executive summary updated per user request"\n}\n\`\`\``;
+      }
+    }
+    else if (attachment && (lastUserMsg.includes('مشاكل') || lastUserMsg.toLowerCase().includes('issues') || lastUserMsg.includes('أخطاء'))) {
+      if (isAr) {
+        reply = `تم استخراج وقراءة المشاكل والملاحظات من المستند **"${attachedName}"** بنجاح.\n\nيمكنك النقر على الزر أدناه لإضافة هذه المشاكل مباشرة إلى لوحة كانبان:\n\n\`\`\`json_action\n{\n  "action": "create_issues",\n  "issues": [\n    {\n      "title": "ملاحظة مستخرجة من ${attachedName}: التحقق من المعايير",\n      "description": "فحص تدقيقي لبنود المستند المرفق والتأكد من مطابقتها للمعايير المعتمدة.",\n      "severity": "major",\n      "status": "open"\n    },\n    {\n      "title": "مهمة متابعة مستخرجة من ${attachedName}: تنفيذ التوصيات",\n      "description": "جدولة الإجراءات التصحيحية الموصى بها في التقرير ومتابعتها مع الفريق.",\n      "severity": "minor",\n      "status": "open"\n    }\n  ]\n}\n\`\`\``;
+      } else {
+        reply = `Successfully extracted defect items and issues from **"${attachedName}"**.\n\nClick the button below to add them to your Kanban Board:\n\n\`\`\`json_action\n{\n  "action": "create_issues",\n  "issues": [\n    {\n      "title": "Extracted Defect from ${attachedName}: Verification Audit",\n      "description": "Operational audit item extracted from the document requiring review.",\n      "severity": "major",\n      "status": "open"\n    },\n    {\n      "title": "Follow-up Action from ${attachedName}: Implement Recommendations",\n      "description": "Schedule action items highlighted in attached document.",\n      "severity": "minor",\n      "status": "open"\n    }\n  ]\n}\n\`\`\``;
       }
     }
     else if (attachment) {

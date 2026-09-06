@@ -54,10 +54,14 @@ function LoginFormContent() {
       setSubmitting(true);
       if (mode === 'signup') {
         await signUpWithEmail(email, password, displayName);
-        setSuccessMessage(t('signUpSuccess'));
+        setSuccessMessage(
+          lang === 'ar'
+            ? 'تم إنشاء الحساب بنجاح! أرسلنا رابط التفعيل لبريدك (تحقق من صندوق الوارد ومجلد Junk / Spam).'
+            : 'Account created successfully! Verification link sent to your email (check your Inbox & Junk / Spam folder).'
+        );
         setTimeout(() => {
           router.push(redirectPath);
-        }, 600);
+        }, 1000);
       } else {
         await signInWithEmail(email, password);
         router.push(redirectPath);
@@ -105,8 +109,14 @@ function LoginFormContent() {
       } else if (err.code === 'auth/unauthorized-domain') {
         setLocalError(
           lang === 'ar'
-            ? 'النطاق الحالي قيد الإعداد في Firebase Auth. يمكنك إنشاء حساب بالبريد الإلكتروني الآن أو الدخول كضيف لمتابعة العمل فوراً وبشكل معزول.'
-            : 'Domain pending in Firebase. You can create an email account or use Guest mode immediately.'
+            ? 'النطاق الحالي غير مُعتمد في إعدادات Firebase Auth. يمكنك إنشاء حساب بالبريد الإلكتروني أو الدخول كضيف.'
+            : 'Current domain is not authorized in Firebase Auth. You can create an email account or use Guest mode.'
+        );
+      } else if (err.code === 'auth/timeout') {
+        setLocalError(
+          lang === 'ar'
+            ? 'انتهت مهلة تسجيل الدخول بحساب Google. قد يكون النطاق غير مُعتمد أو تم حظر النافذة المنبثقة. جرّب الدخول بالبريد الإلكتروني أو كضيف.'
+            : 'Google sign-in timed out. The domain may not be authorized or the popup was blocked. Try email login or Guest mode.'
         );
       } else {
         setLocalError(

@@ -13,6 +13,7 @@ import {
   Quote,
   Table as TableIcon,
   Plus,
+  Minus,
   Trash2,
   Image as ImageIcon,
   Columns,
@@ -29,6 +30,12 @@ import {
   ChevronDown,
   Link as LinkIcon,
   Unlink,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  PilcrowLeft,
+  PilcrowRight,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -71,9 +78,11 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
   if (!editor) return null;
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onImageUpload(file);
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      for (let i = 0; i < files.length; i++) {
+        onImageUpload(files[i]);
+      }
     }
     // reset
     if (fileInputRef.current) {
@@ -82,9 +91,36 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
   };
 
   const isTableActive = editor.isActive('table');
+  const isRtlActive = editor.isActive({ dir: 'rtl' }) || (!editor.isActive({ dir: 'ltr' }) && isRtl);
+  const isLtrActive = editor.isActive({ dir: 'ltr' }) || (!editor.isActive({ dir: 'rtl' }) && !isRtl);
+
+  // Active font size in px
+  const getActiveFontSize = (): number => {
+    const sizeAttr = editor.getAttributes('fontSize').size;
+    if (sizeAttr) {
+      const parsed = parseInt(sizeAttr, 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    if (editor.isActive('heading', { level: 1 })) return 30;
+    if (editor.isActive('heading', { level: 2 })) return 24;
+    if (editor.isActive('heading', { level: 3 })) return 20;
+    return 16;
+  };
+
+  const currentFontSize = getActiveFontSize();
+
+  const handleDecreaseFontSize = () => {
+    const newSize = Math.max(10, currentFontSize - 2);
+    editor.chain().focus().setFontSize(`${newSize}px`).run();
+  };
+
+  const handleIncreaseFontSize = () => {
+    const newSize = Math.min(72, currentFontSize + 2);
+    editor.chain().focus().setFontSize(`${newSize}px`).run();
+  };
 
   return (
-    <div className="flex flex-col border-b border-border bg-card/60 backdrop-blur-sm w-full max-w-full">
+    <div className="flex flex-col bg-card/60 backdrop-blur-sm w-full max-w-full">
       {/* Primary Toolbar */}
       <div className="flex flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto">
         {/* Hidden file input */}
@@ -93,6 +129,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           ref={fileInputRef}
           onChange={handleFileChange}
           accept="image/*"
+          multiple
           className="hidden"
         />
 
@@ -109,7 +146,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('heading1')}
+            title={`${t('heading1')} (Ctrl+Alt+1)`}
           >
             <Heading1 className="h-4 w-4" />
           </Button>
@@ -125,7 +162,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('heading2')}
+            title={`${t('heading2')} (Ctrl+Alt+2)`}
           >
             <Heading2 className="h-4 w-4" />
           </Button>
@@ -141,9 +178,46 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('heading3')}
+            title={`${t('heading3')} (Ctrl+Alt+3)`}
           >
             <Heading3 className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
+        {/* Font Size Control: Minus, Current Px Value, Plus */}
+        <div
+          className="flex items-center rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs"
+          title={lang === 'ar' ? 'حجم الخط' : 'Font size'}
+        >
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={handleDecreaseFontSize}
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+            title={`${lang === 'ar' ? 'تصغير حجم الخط (-2px)' : 'Decrease font size (-2px)'} (Ctrl+Shift+<)`}
+          >
+            <Minus className="h-3.5 w-3.5" />
+          </Button>
+
+          <span
+            className="px-2 text-xs font-semibold text-foreground min-w-[42px] text-center select-none font-mono"
+            title={lang === 'ar' ? 'حجم الخط الحالي' : 'Current font size'}
+          >
+            {currentFontSize}px
+          </span>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={handleIncreaseFontSize}
+            className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+            title={`${lang === 'ar' ? 'تكبير حجم الخط (+2px)' : 'Increase font size (+2px)'} (Ctrl+Shift+>)`}
+          >
+            <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
 
@@ -162,7 +236,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('bold')}
+            title={`${t('bold')} (Ctrl+B)`}
           >
             <Bold className="h-4 w-4" />
           </Button>
@@ -178,7 +252,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('italic')}
+            title={`${t('italic')} (Ctrl+I)`}
           >
             <Italic className="h-4 w-4" />
           </Button>
@@ -410,7 +484,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('bulletList')}
+            title={`${t('bulletList')} (Ctrl+Shift+8)`}
           >
             <List className="h-4 w-4" />
           </Button>
@@ -426,7 +500,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('orderedList')}
+            title={`${t('orderedList')} (Ctrl+Shift+7)`}
           >
             <ListOrdered className="h-4 w-4" />
           </Button>
@@ -442,9 +516,115 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                 ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
-            title={t('blockquote')}
+            title={`${t('blockquote')} (Ctrl+Shift+Q)`}
           >
             <Quote className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
+        {/* Text Alignment: Right, Center, Left, Justify */}
+        <div className="flex items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextAlign('right').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive({ textAlign: 'right' })
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'محاذاة لليمين' : 'Align Right'}
+          >
+            <AlignRight className="h-4 w-4" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextAlign('center').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive({ textAlign: 'center' })
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'محاذاة للوسط' : 'Align Center'}
+          >
+            <AlignCenter className="h-4 w-4" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextAlign('left').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive({ textAlign: 'left' })
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'محاذاة لليسار' : 'Align Left'}
+          >
+            <AlignLeft className="h-4 w-4" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextAlign('justify').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive({ textAlign: 'justify' })
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'ضبط كلي (Justify)' : 'Justify'}
+          >
+            <AlignJustify className="h-4 w-4" />
+          </Button>
+        </div>
+
+        <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
+
+        {/* Text Direction: RTL, LTR */}
+        <div className="flex items-center gap-0.5">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextDirection('rtl').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              isRtlActive
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'اتجاه النص: من اليمين لليسار (RTL)' : 'Text Direction: Right to Left (RTL)'}
+          >
+            <PilcrowLeft className="h-4 w-4" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().setTextDirection('ltr').run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              isLtrActive
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'اتجاه النص: من اليسار لليمين (LTR)' : 'Text Direction: Left to Right (LTR)'}
+          >
+            <PilcrowRight className="h-4 w-4" />
           </Button>
         </div>
 

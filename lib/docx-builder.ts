@@ -94,13 +94,30 @@ export async function buildDocxDocument(
   );
 
   // Metadata Table
-  const metaRows = [
+  const metaRows: [string, string][] = [
     [t('reportNumber', lang), `#${report.reportNumber}`],
     [t('author', lang), report.author || '-'],
+    ...(report.authorTitle ? [[isAr ? 'المنصب الوظيفي' : 'Job Title', report.authorTitle] as [string, string]] : []),
+    ...(report.organization ? [[isAr ? 'الجهة / القسم' : 'Organization', report.organization] as [string, string]] : []),
     [t('systemUnderReview', lang), report.systemUnderReview || '-'],
     [t('reportLanguage', lang), isAr ? 'العربية' : 'English'],
     [t('createdAt', lang), new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')],
   ];
+
+  if (report.customFields && report.customFields.length > 0) {
+    for (const cf of report.customFields) {
+      if (cf.label || cf.value) {
+        metaRows.push([cf.label || '-', cf.value || '-']);
+      }
+    }
+  }
+
+  if (report.contactLinks && report.contactLinks.length > 0) {
+    metaRows.push([
+      isAr ? 'بيانات التواصل' : 'Contact Links',
+      report.contactLinks.map((l) => `${l.label ? `${l.label}: ` : ''}${l.value}`).join(' | '),
+    ]);
+  }
 
   const metaTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
@@ -147,9 +164,25 @@ export async function buildDocxDocument(
     return '';
   }
 
+  function getNodeAlignmentAndDir(node: any) {
+    const nodeIsRtl = node?.attrs?.dir ? node.attrs.dir === 'rtl' : isAr;
+    let nodeAlignment: (typeof AlignmentType)[keyof typeof AlignmentType] = alignment;
+    if (node?.attrs?.textAlign) {
+      if (node.attrs.textAlign === 'center') nodeAlignment = AlignmentType.CENTER;
+      else if (node.attrs.textAlign === 'right') nodeAlignment = AlignmentType.RIGHT;
+      else if (node.attrs.textAlign === 'left') nodeAlignment = AlignmentType.LEFT;
+      else if (node.attrs.textAlign === 'justify') nodeAlignment = AlignmentType.JUSTIFIED;
+    } else {
+      nodeAlignment = nodeIsRtl ? AlignmentType.RIGHT : AlignmentType.LEFT;
+    }
+    return { nodeIsRtl, nodeAlignment };
+  }
+
   // Parse TipTap Content
   if (report.contentJson && report.contentJson.content) {
     for (const node of report.contentJson.content) {
+      const { nodeIsRtl, nodeAlignment } = getNodeAlignmentAndDir(node);
+
       if (node.type === 'heading') {
         const level = node.attrs?.level || 1;
         const text = extractNodeText(node);
@@ -163,11 +196,12 @@ export async function buildDocxDocument(
                 bold: true,
                 size: level === 1 ? 30 : level === 2 ? 24 : 20,
                 color: level === 1 ? '0f766e' : level === 2 ? '1e293b' : '334155',
+                rightToLeft: nodeIsRtl,
               }),
             ],
             heading: headingLevel,
-            alignment,
-            bidirectional: isAr,
+            alignment: nodeAlignment,
+            bidirectional: nodeIsRtl,
             spacing: { before: 240, after: 120 },
           })
         );
@@ -179,10 +213,11 @@ export async function buildDocxDocument(
               children: [
                 makeRun(text, {
                   size: 22,
+                  rightToLeft: nodeIsRtl,
                 }),
               ],
-              alignment,
-              bidirectional: isAr,
+              alignment: nodeAlignment,
+              bidirectional: nodeIsRtl,
               spacing: { after: 120 },
             })
           );
@@ -472,6 +507,79 @@ export async function buildDocxDocument(
       ],
     })
   );
+
+  // Official Sign-off & Endorsement Section
+  if (report.signatureData || (report.customFooterFields && report.customFooterFields.length > 0)) {
+    children.push(
+      new Paragraph({
+        children: [
+          makeRun(isAr ? 'المصادقة والتوقيع الرسمي' : 'Official Sign-off & Endorsement', {
+            bold: true,
+            size: 24,
+            color: theme.primary,
+          }),
+        ],
+        heading: HeadingLevel.HEADING_2,
+        alignment,
+        bidirectional: isAr,
+        spacing: { before: 300, after: 120 },
+      })
+    );
+
+    const signRows: [string, string][] = [
+      [t('author', lang), report.author || '-'],
+      [isAr ? 'التاريخ' : 'Date', new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')],
+    ];
+
+    if (report.customFooterFields && report.customFooterFields.length > 0) {
+      for (const cff of report.customFooterFields) {
+        if (cff.label || cff.value) {
+          signRows.push([cff.label || '-', cff.value || '-']);
+        }
+      }
+    }
+
+    if (report.signatureData) {
+      signRows.push([isAr ? 'التوقيع' : 'Signature', report.signatureData]);
+    }
+
+    const signTable = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      alignment,
+      visuallyRightToLeft: isAr,
+      rows: signRows.map(
+        ([k, v]) =>
+          new TableRow({
+            children: [
+              new TableCell({
+                width: { size: 30, type: WidthType.PERCENTAGE },
+                shading: { fill: 'f8fafc', type: ShadingType.CLEAR, color: 'auto' },
+                children: [
+                  new Paragraph({
+                    children: [makeRun(k, { bold: true, size: 20 })],
+                    alignment,
+                    bidirectional: isAr,
+                  }),
+                ],
+              }),
+              new TableCell({
+                width: { size: 70, type: WidthType.PERCENTAGE },
+                children: [
+                  new Paragraph({
+                    children: [makeRun(v, { size: 20, italics: k === (isAr ? 'التوقيع' : 'Signature') })],
+                    alignment,
+                    bidirectional: isAr,
+                  }),
+                ],
+              }),
+            ],
+          })
+      ),
+    });
+
+    children.push(signTable);
+    children.push(new Paragraph({ text: '', spacing: { after: 240 }, alignment, bidirectional: isAr }));
+  }
 
   // Screenshots Appendix Section at the end if images exist (with PageBreak)
   if (images.length > 0) {

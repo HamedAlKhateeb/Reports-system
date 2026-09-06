@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
-import { createReport, createIssue, getReports, getReportById, getIssues } from '@/lib/db';
+import { createReport, createIssue, updateReport, updateIssue, getReports, getReportById, getIssues } from '@/lib/db';
 import { ReportItem, IssueItem } from '@/lib/types';
 import { getTemplateContent, TemplateType } from '@/components/editor/templates';
 
@@ -88,6 +88,8 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
 
   const [createdReports, setCreatedReports] = useState<Record<string, string>>({});
   const [createdIssues, setCreatedIssues] = useState<Record<string, number>>({});
+  const [appliedModifications, setAppliedModifications] = useState<Record<string, { type: 'issue' | 'report'; id: string; success: boolean }>>({});
+  const [dismissedModifications, setDismissedModifications] = useState<Record<string, boolean>>({});
   const [actionLoadingMsgId, setActionLoadingMsgId] = useState<string | null>(null);
 
   // Context State
@@ -277,41 +279,29 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
         };
       }
 
-      // Fetch summaries if relevant
-      let issuesSummary: any = undefined;
-      let allReportsSummary: any = undefined;
+      // Always fetch user's live issues and reports for complete context
+      const [issues, allReps] = await Promise.all([
+        getIssues(user?.uid).catch(() => []),
+        getReports(user?.uid).catch(() => []),
+      ]);
 
-      if (
-        query.includes('مشاكل') ||
-        query.includes('لوحة') ||
-        query.toLowerCase().includes('issues') ||
-        query.toLowerCase().includes('kanban')
-      ) {
-        const issues = await getIssues().catch(() => []);
-        issuesSummary = issues.map((iss) => ({
-          id: iss.id,
-          title: iss.title,
-          status: iss.status,
-          severity: iss.severity,
-          linkedReportId: iss.linkedReportId,
-        }));
-      }
+      const issuesSummary = issues.map((iss) => ({
+        id: iss.id,
+        title: iss.title,
+        status: iss.status,
+        severity: iss.severity,
+        description: iss.description,
+        linkedReportId: iss.linkedReportId,
+      }));
 
-      if (
-        query.includes('جميع التقارير') ||
-        query.includes('كافة التقارير') ||
-        query.includes('مقارنة') ||
-        query.toLowerCase().includes('all reports')
-      ) {
-        const allReps = await getReports().catch(() => []);
-        allReportsSummary = allReps.map((r) => ({
-          id: r.id,
-          reportNumber: r.reportNumber,
-          title: r.title,
-          author: r.author,
-          createdAt: r.createdAt,
-        }));
-      }
+      const allReportsSummary = allReps.map((r) => ({
+        id: r.id,
+        reportNumber: r.reportNumber,
+        title: r.title,
+        author: r.author,
+        systemUnderReview: r.systemUnderReview,
+        createdAt: r.createdAt,
+      }));
 
       // Read freshest config from storage in case it was updated in settings
       let activeConfig = { ...providerConfig };
@@ -571,12 +561,58 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
           severity: item.severity || 'major',
           status: item.status || 'open',
           linkedReportId: currentReport?.id || null,
+          ownerUid: user?.uid,
         });
         count++;
       }
       setCreatedIssues((prev) => ({ ...prev, [msgId]: count }));
     } catch (err) {
       console.error('Failed to create issues from AI action', err);
+    } finally {
+      setActionLoadingMsgId(null);
+    }
+  };
+
+  // Action: Update Issue with Explicit Permission
+  const handleExecuteUpdateIssue = async (msgId: string, actionData: any) => {
+    try {
+      setActionLoadingMsgId(msgId);
+      const { issueId, title, status, severity, description } = actionData;
+      const updates: any = {};
+      if (title !== undefined) updates.title = title;
+      if (status !== undefined) updates.status = status;
+      if (severity !== undefined) updates.severity = severity;
+      if (description !== undefined) updates.description = description;
+
+      await updateIssue(issueId, updates);
+      setAppliedModifications((prev) => ({
+        ...prev,
+        [msgId]: { type: 'issue', id: issueId, success: true },
+      }));
+    } catch (err) {
+      console.error('Failed to update issue from AI action', err);
+    } finally {
+      setActionLoadingMsgId(null);
+    }
+  };
+
+  // Action: Update Report with Explicit Permission
+  const handleExecuteUpdateReport = async (msgId: string, actionData: any) => {
+    try {
+      setActionLoadingMsgId(msgId);
+      const { reportId, title, summary, systemUnderReview } = actionData;
+      const updates: any = {};
+      if (title !== undefined) updates.title = title;
+      if (systemUnderReview !== undefined) updates.systemUnderReview = systemUnderReview;
+      if (summary !== undefined) updates.summary = summary;
+
+      await updateReport(reportId, updates);
+      setAppliedModifications((prev) => ({
+        ...prev,
+        [msgId]: { type: 'report', id: reportId, success: true },
+      }));
+    } catch (err) {
+      console.error('Failed to update report from AI action', err);
     } finally {
       setActionLoadingMsgId(null);
     }
@@ -596,10 +632,16 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
   };
 
   return (
-    <aside
-      dir={isAr ? 'rtl' : 'ltr'}
-      className="fixed top-16 end-0 h-[calc(100vh-4rem)] w-[450px] max-w-[95vw] sm:max-w-[460px] z-40 bg-[#FAFAF8] dark:bg-[#1A1A19] text-[#202020] dark:text-[#F2F2EE] border-s border-[#E7E6E2] dark:border-[#2B2B29] shadow-2xl flex flex-col transition-all duration-300 ease-in-out no-print animate-slide-in"
-    >
+    <>
+      {/* Backdrop overlay for quick exit */}
+      <div
+        onClick={onClose}
+        className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px] transition-opacity duration-200"
+      />
+      <aside
+        dir={isAr ? 'rtl' : 'ltr'}
+        className="fixed top-16 right-0 h-[calc(100vh-4rem)] w-[460px] max-w-[95vw] sm:max-w-[480px] z-50 bg-[#FAFAF8] dark:bg-[#1A1A19] text-[#202020] dark:text-[#F2F2EE] border-l border-[#E7E6E2] dark:border-[#2B2B29] shadow-2xl flex flex-col transition-all duration-300 ease-in-out no-print animate-slide-in"
+      >
         {/* Top Header */}
         <div className="flex items-center justify-between border-b border-[#E7E6E2] dark:border-[#2B2B29] bg-white/80 dark:bg-[#20201F]/90 backdrop-blur px-4 py-3">
           <div className="flex items-center gap-2.5">
@@ -649,6 +691,8 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
                 ]);
                 setCreatedReports({});
                 setCreatedIssues({});
+                setAppliedModifications({});
+                setDismissedModifications({});
               }}
               className="rounded-lg p-1.5 text-[#6B6964] dark:text-[#9E9C96] hover:bg-black/5 dark:hover:bg-white/5 hover:text-[#202020] transition-colors"
               title={t('clearChat')}
@@ -950,6 +994,182 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
                           )}
                         </div>
                       )}
+
+                      {/* Action: Update Issue with Explicit Permission */}
+                      {msg.actionData.action === 'update_issue' && (
+                        <div className="rounded-xl border border-sky-200 dark:border-sky-800/60 bg-sky-50/50 dark:bg-sky-950/30 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="rounded-md bg-sky-200/70 dark:bg-sky-900/70 px-1.5 py-0.5 text-[10px] font-bold text-sky-900 dark:text-sky-200">
+                              {isAr ? 'طلب إذن لتعديل مشكلة' : 'Permission Request: Update Issue'}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground font-mono">
+                              ID: {msg.actionData.issueId}
+                            </span>
+                          </div>
+
+                          {msg.actionData.reason && (
+                            <p className="text-[11px] text-muted-foreground italic">
+                              {msg.actionData.reason}
+                            </p>
+                          )}
+
+                          {/* Change Details */}
+                          <div className="rounded-lg bg-white dark:bg-[#1A1A19] border border-border/70 p-2 text-[11px] space-y-1">
+                            {msg.actionData.title && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'العنوان الجديد: ' : 'New Title: '}</span>
+                                <span className="font-bold text-foreground">{msg.actionData.title}</span>
+                              </div>
+                            )}
+                            {msg.actionData.status && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'الحالة المقترحة: ' : 'Target Status: '}</span>
+                                <span className="font-bold text-sky-700 dark:text-sky-400 uppercase">{msg.actionData.status}</span>
+                              </div>
+                            )}
+                            {msg.actionData.severity && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'درجة الخطورة: ' : 'Severity: '}</span>
+                                <span className="font-bold text-amber-700 dark:text-amber-400 uppercase">{msg.actionData.severity}</span>
+                              </div>
+                            )}
+                            {msg.actionData.description && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'الوصف: ' : 'Description: '}</span>
+                                <span className="text-foreground">{msg.actionData.description}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {appliedModifications[msg.id] ? (
+                            <div className="flex items-center justify-between rounded-lg bg-emerald-100/70 dark:bg-emerald-950/60 p-2 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                              <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                <span>{isAr ? 'تم اعتماد وتطبيق التعديل بنجاح' : 'Modification approved and applied'}</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  router.push('/dashboard');
+                                }}
+                                className="flex items-center gap-1 text-emerald-800 dark:text-emerald-300 underline font-bold"
+                              >
+                                <span>{isAr ? 'عرض في اللوحة' : 'View in Board'}</span>
+                                <ExternalLink className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : dismissedModifications[msg.id] ? (
+                            <div className="p-1.5 text-center text-[11px] text-muted-foreground italic">
+                              {isAr ? 'تم تجاهل هذا التعديل ولم يتم حفظ أي تغيير.' : 'Modification dismissed. No changes were made.'}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setDismissedModifications((prev) => ({ ...prev, [msg.id]: true }))}
+                                className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted"
+                              >
+                                {isAr ? 'تجاهل' : 'Dismiss'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isActionLoading}
+                                onClick={() => handleExecuteUpdateIssue(msg.id, msg.actionData)}
+                                className="flex items-center gap-1 rounded-lg bg-sky-700 hover:bg-sky-800 px-3 py-1 text-xs font-bold text-white shadow-xs disabled:opacity-50"
+                              >
+                                {isActionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                                <span>{isAr ? 'موافقة وتطبيق التعديل' : 'Approve & Apply'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Action: Update Report with Explicit Permission */}
+                      {msg.actionData.action === 'update_report' && (
+                        <div className="rounded-xl border border-olive-200 dark:border-olive-800/60 bg-olive-50/50 dark:bg-olive-950/30 p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="rounded-md bg-olive-200/70 dark:bg-olive-900/70 px-1.5 py-0.5 text-[10px] font-bold text-olive-900 dark:text-olive-200">
+                              {isAr ? 'طلب إذن لتعديل تقرير' : 'Permission Request: Update Report'}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground font-mono">
+                              ID: {msg.actionData.reportId}
+                            </span>
+                          </div>
+
+                          {msg.actionData.reason && (
+                            <p className="text-[11px] text-muted-foreground italic">
+                              {msg.actionData.reason}
+                            </p>
+                          )}
+
+                          {/* Change Details */}
+                          <div className="rounded-lg bg-white dark:bg-[#1A1A19] border border-border/70 p-2 text-[11px] space-y-1">
+                            {msg.actionData.title && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'العنوان الجديد: ' : 'New Title: '}</span>
+                                <span className="font-bold text-foreground">{msg.actionData.title}</span>
+                              </div>
+                            )}
+                            {msg.actionData.summary && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'الملخص التنفيذي الجديد: ' : 'Updated Summary: '}</span>
+                                <span className="text-foreground">{msg.actionData.summary}</span>
+                              </div>
+                            )}
+                            {msg.actionData.systemUnderReview && (
+                              <div>
+                                <span className="font-semibold text-muted-foreground">{isAr ? 'النظام / المشروع: ' : 'System: '}</span>
+                                <span className="text-foreground">{msg.actionData.systemUnderReview}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {appliedModifications[msg.id] ? (
+                            <div className="flex items-center justify-between rounded-lg bg-emerald-100/70 dark:bg-emerald-950/60 p-2 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                              <span className="flex items-center gap-1">
+                                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                                <span>{isAr ? 'تم تطبيق التعديل على التقرير بنجاح' : 'Report updated successfully'}</span>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onClose();
+                                  router.push(`/reports/${msg.actionData.reportId}`);
+                                }}
+                                className="flex items-center gap-1 text-emerald-800 dark:text-emerald-300 underline font-bold"
+                              >
+                                <span>{isAr ? 'عرض التقرير' : 'View Report'}</span>
+                                <ExternalLink className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ) : dismissedModifications[msg.id] ? (
+                            <div className="p-1.5 text-center text-[11px] text-muted-foreground italic">
+                              {isAr ? 'تم تجاهل هذا التعديل ولم يتم حفظ أي تغيير.' : 'Modification dismissed. No changes were made.'}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => setDismissedModifications((prev) => ({ ...prev, [msg.id]: true }))}
+                                className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted"
+                              >
+                                {isAr ? 'تجاهل' : 'Dismiss'}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isActionLoading}
+                                onClick={() => handleExecuteUpdateReport(msg.id, msg.actionData)}
+                                className="flex items-center gap-1 rounded-lg bg-[#2E4034] hover:bg-[#24382F] px-3 py-1 text-xs font-bold text-white shadow-xs disabled:opacity-50"
+                              >
+                                {isActionLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                                <span>{isAr ? 'موافقة وتطبيق التعديل' : 'Approve & Apply'}</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1090,6 +1310,7 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
           </form>
         </div>
       </aside>
+    </>
   );
 }
 

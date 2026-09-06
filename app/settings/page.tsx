@@ -13,12 +13,25 @@ import {
   ShieldCheck,
   Trash2,
   Sparkles,
+  Share2,
+  Plus,
+  Phone,
+  Mail,
+  ExternalLink,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useTheme, AppTheme } from '@/lib/theme-context';
+import { useAuth } from '@/lib/auth-context';
 import { AppLanguage } from '@/lib/i18n/dictionary';
+import {
+  ContactLinkItem,
+  getReportContactLinks,
+  saveReportContactLinks,
+  CONTACT_LINK_TYPES,
+} from '@/lib/contact-links';
 
 import { AI_CONFIG_KEY, AiProviderConfig } from '@/components/ai/AiAssistantModal';
+import { KeyboardShortcutsSettings } from '@/components/settings/KeyboardShortcutsSettings';
 
 const API_KEY_STORAGE_KEY = 'gemini_custom_api_key';
 
@@ -26,7 +39,9 @@ export default function SettingsPage() {
   const { lang, setLang, defaultReportLang, setDefaultReportLang, t } = useLanguage();
   const { theme, setTheme } = useTheme();
 
+  const { user } = useAuth();
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [contactLinks, setContactLinks] = useState<ContactLinkItem[]>([]);
   const [providerConfig, setProviderConfig] = useState<AiProviderConfig>({
     provider: 'gemini',
     modelName: 'gemini-1.5-flash',
@@ -34,6 +49,42 @@ export default function SettingsPage() {
     baseUrl: '',
   });
   const [hasCustomKey, setHasCustomKey] = useState(false);
+
+  useEffect(() => {
+    const loadedLinks = getReportContactLinks(user?.uid);
+    setContactLinks(loadedLinks);
+  }, [user?.uid]);
+
+  const handleAddContactLink = () => {
+    const newLink: ContactLinkItem = {
+      id: 'lnk_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+      type: 'phone',
+      value: '',
+      label: '',
+    };
+    const updated = [...contactLinks, newLink];
+    setContactLinks(updated);
+    saveReportContactLinks(updated, user?.uid);
+    showNotice(lang === 'ar' ? 'تمت إضافة وسيلة تواصل جديدة' : 'New contact link added');
+  };
+
+  const handleUpdateContactLink = (id: string, field: keyof ContactLinkItem, val: string) => {
+    const updated = contactLinks.map((item) => {
+      if (item.id === id) {
+        return { ...item, [field]: val };
+      }
+      return item;
+    });
+    setContactLinks(updated);
+    saveReportContactLinks(updated, user?.uid);
+  };
+
+  const handleRemoveContactLink = (id: string) => {
+    const updated = contactLinks.filter((item) => item.id !== id);
+    setContactLinks(updated);
+    saveReportContactLinks(updated, user?.uid);
+    showNotice(lang === 'ar' ? 'تم حذف الرابط بنجاح' : 'Link removed successfully');
+  };
 
   useEffect(() => {
     try {
@@ -192,6 +243,102 @@ export default function SettingsPage() {
                   {theme === 'system' && <Check className="h-4 w-4 text-olive-700" />}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Report Contact & Social Media Links Card */}
+        <div className="rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#20201F] p-6 shadow-none">
+          <div className="flex items-start gap-4">
+            <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-olive-50 dark:bg-[#26342B] text-olive-700 dark:text-olive-300">
+              <Share2 className="h-5 w-5" />
+            </div>
+            <div className="flex-1">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold text-[#202020] dark:text-[#F2F2EE]">
+                    {lang === 'ar' ? 'بيانات التواصل وروابط التواصل الاجتماعي للتقارير (اختياري)' : 'Report Social & Contact Links (Optional)'}
+                  </h2>
+                  <p className="mt-1 text-sm text-[#6B6964] dark:text-[#9E9C96] leading-relaxed">
+                    {lang === 'ar'
+                      ? 'أضف أرقام الهواتف، البريد الإلكتروني، وروابط حساباتك ليتم إدراجها تلقائياً في بيانات ترويسة التقارير وتذييل التصدير.'
+                      : 'Add phone numbers, email, and social accounts to automatically include them in report headers and export footers.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddContactLink}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#2E4034] hover:bg-[#24382F] text-white px-3 py-1.5 text-xs font-semibold shadow-xs self-start transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>{lang === 'ar' ? 'إضافة وسيلة تواصل' : 'Add Contact Link'}</span>
+                </button>
+              </div>
+
+              {contactLinks.length === 0 ? (
+                <div className="mt-4 rounded-xl border border-dashed border-[#E7E6E2] dark:border-[#2B2B29] p-6 text-center text-xs text-muted-foreground">
+                  <p>{lang === 'ar' ? 'لم تقم بإضافة أي روابط تواصل بعد. انقر على زر "إضافة وسيلة تواصل" لإضافة رقم هاتف، بريد، أو رابط حسابك.' : 'No contact links added yet. Click "Add Contact Link" to configure.'}</p>
+                </div>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {contactLinks.map((link) => (
+                    <div
+                      key={link.id}
+                      className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 rounded-xl border border-[#E7E6E2] dark:border-[#2B2B29] bg-[#FAFAF8] dark:bg-[#161615] p-3 transition-all"
+                    >
+                      {/* Type select */}
+                      <select
+                        value={link.type}
+                        onChange={(e) => handleUpdateContactLink(link.id, 'type', e.target.value as any)}
+                        className="rounded-lg border border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#20201F] px-2.5 py-1.5 text-xs font-medium text-foreground outline-none focus:border-olive-600 sm:w-44"
+                      >
+                        {CONTACT_LINK_TYPES.map((t) => (
+                          <option key={t.type} value={t.type}>
+                            {lang === 'ar' ? t.labelAr : t.labelEn}
+                          </option>
+                        ))}
+                      </select>
+
+                      {/* Label input (optional) */}
+                      <input
+                        type="text"
+                        value={link.label || ''}
+                        onChange={(e) => handleUpdateContactLink(link.id, 'label', e.target.value)}
+                        placeholder={lang === 'ar' ? 'التسمية (مثال: الدعم، المراجع)' : 'Label (e.g. Support)'}
+                        className="rounded-lg border border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#20201F] px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-olive-600 sm:w-40"
+                      />
+
+                      {/* Value input */}
+                      <input
+                        type="text"
+                        value={link.value}
+                        onChange={(e) => handleUpdateContactLink(link.id, 'value', e.target.value)}
+                        placeholder={
+                          CONTACT_LINK_TYPES.find((t) => t.type === link.type)?.placeholder ||
+                          (lang === 'ar' ? 'القيمة أو الرابط' : 'Value or URL')
+                        }
+                        dir={link.type === 'phone' || link.type === 'whatsapp' ? 'ltr' : undefined}
+                        style={
+                          link.type === 'phone' || link.type === 'whatsapp'
+                            ? { unicodeBidi: 'isolate', textAlign: lang === 'ar' ? 'right' : 'left' }
+                            : undefined
+                        }
+                        className="flex-1 rounded-lg border border-[#E7E6E2] dark:border-[#2B2B29] bg-white dark:bg-[#20201F] px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-olive-600"
+                      />
+
+                      {/* Delete button */}
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveContactLink(link.id)}
+                        className="rounded-lg p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-colors self-end sm:self-center"
+                        title={lang === 'ar' ? 'حذف هذا الرابط' : 'Remove link'}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -437,6 +584,9 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
+
+        {/* Keyboard Shortcuts Customization & Guide Card */}
+        <KeyboardShortcutsSettings />
       </div>
     </div>
   );

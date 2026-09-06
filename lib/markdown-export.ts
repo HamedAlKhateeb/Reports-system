@@ -30,14 +30,32 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
   lines.push(`| **${t('systemUnderReview', lang)}** | ${report.systemUnderReview || '-'} |`);
   lines.push(`| **${t('reportLanguage', lang)}** | ${lang === 'ar' ? 'العربية' : 'English'} |`);
   lines.push(`| **${t('createdAt', lang)}** | ${new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')} |`);
+  if (report.customFields && report.customFields.length > 0) {
+    for (const cf of report.customFields) {
+      if (cf.label || cf.value) {
+        lines.push(`| **${cf.label || '-'}** | ${cf.value || '-'} |`);
+      }
+    }
+  }
   if (report.signatureData) {
     lines.push(`| **${lang === 'ar' ? 'المصادقة والتوقيع' : 'Endorsement & Signature'}** | ${report.signatureData} |`);
+  }
+  if (report.customFooterFields && report.customFooterFields.length > 0) {
+    for (const cff of report.customFooterFields) {
+      if (cff.label || cff.value) {
+        lines.push(`| **${cff.label || '-'}** | ${cff.value || '-'} |`);
+      }
+    }
   }
   if (report.themeColor) {
     lines.push(`| **${isAr ? 'نمط الألوان' : 'Theme'}** | ${report.themeColor} |`);
   }
   if (report.backgroundColor) {
     lines.push(`| **${isAr ? 'لون الخلفية' : 'Background'}** | ${report.backgroundColor} |`);
+  }
+  if (report.contactLinks && report.contactLinks.length > 0) {
+    const contactStr = report.contactLinks.map((l) => `${l.label ? `${l.label}: ` : ''}${l.value}`).join(', ');
+    lines.push(`| **${isAr ? 'بيانات التواصل' : 'Contact Links'}** | ${contactStr} |`);
   }
   lines.push('');
   lines.push('---');

@@ -8,6 +8,7 @@ import {
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
+  sendEmailVerification,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -20,6 +21,7 @@ export interface AuthUser {
   email: string;
   displayName?: string | null;
   photoURL?: string | null;
+  emailVerified?: boolean;
 }
 
 interface AuthContextType {
@@ -31,6 +33,8 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signInAsGuest: () => Promise<void>;
   signOut: () => Promise<void>;
+  sendVerificationEmail: () => Promise<void>;
+  reloadUser: () => Promise<void>;
   error: string | null;
   clearError: () => void;
 }
@@ -68,6 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               email: result.user.email,
               displayName: result.user.displayName || result.user.email.split('@')[0],
               photoURL: result.user.photoURL,
+              emailVerified: result.user.emailVerified,
             };
             setUser(currentAuthUser);
             syncSessionCookie(currentAuthUser);
@@ -87,12 +92,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             email: fbUser.email,
             displayName: fbUser.displayName || fbUser.email.split('@')[0],
             photoURL: fbUser.photoURL,
+            emailVerified: fbUser.emailVerified,
           };
           setUser(currentAuthUser);
           syncSessionCookie(currentAuthUser);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
+          }
         } else {
-          setUser(null);
-          syncSessionCookie(null);
+          // Firebase has no session — check if there's a local/guest session in localStorage
+          try {
+            const saved = typeof window !== 'undefined' ? localStorage.getItem(LOCAL_AUTH_USER_KEY) : null;
+            if (saved) {
+              const parsed = JSON.parse(saved) as AuthUser;
+              // Restore local/guest user session instead of wiping it
+              setUser(parsed);
+              syncSessionCookie(parsed);
+            } else {
+              setUser(null);
+              syncSessionCookie(null);
+            }
+          } catch {
+            setUser(null);
+            syncSessionCookie(null);
+          }
         }
         setLoading(false);
       });
@@ -146,11 +169,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (displayName && auth.currentUser) {
             await updateProfile(auth.currentUser, { displayName }).catch(() => {});
           }
+          // Send verification email
+          try {
+            await sendEmailVerification(fbUser);
+          } catch (verifErr) {
+            console.warn('sendEmailVerification notice:', verifErr);
+          }
           const currentAuthUser: AuthUser = {
             uid: fbUser.uid,
             email: fbUser.email || normalizedEmail,
             displayName: displayName || fbUser.displayName || normalizedEmail.split('@')[0],
             photoURL: fbUser.photoURL,
+            emailVerified: fbUser.emailVerified, // false until clicked
           };
           setUser(currentAuthUser);
           syncSessionCookie(currentAuthUser);
@@ -190,6 +220,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: normalizedEmail,
         displayName: displayName?.trim() || normalizedEmail.split('@')[0],
         photoURL: null,
+        emailVerified: false,
       };
 
       saveRegisteredUser({
@@ -225,6 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: fbUser.email || normalizedEmail,
           displayName: fbUser.displayName || normalizedEmail.split('@')[0],
           photoURL: fbUser.photoURL,
+          emailVerified: fbUser.emailVerified,
         };
         setUser(currentAuthUser);
         syncSessionCookie(currentAuthUser);
@@ -310,8 +342,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             popupErr.code === 'auth/cancelled-popup-request'
           ) {
             console.warn('Popup blocked, attempting redirect sign-in...', popupErr);
-            await signInWithRedirect(auth, googleProvider);
+            try {
+              await signInWithRedirect(auth, googleProvider);
+            } catch (redirectErr: any) {
+              console.warn('Redirect also failed:', redirectErr);
+              throw popupErr;
+            }
             return;
+          }
+          if (popupErr.code === 'auth/unauthorized-domain') {
+            console.warn('Unauthorized domain for Google sign-in, attempting redirect...', popupErr);
+            try {
+              await signInWithRedirect(auth, googleProvider);
+              return;
+            } catch {
+              // Redirect also failed — throw the original error so the UI can show it
+              throw popupErr;
+            }
           }
           throw popupErr;
         }
@@ -327,6 +374,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: email || '',
           displayName: fbUser.displayName || email?.split('@')[0] || 'Google Reviewer',
           photoURL: fbUser.photoURL,
+          emailVerified: fbUser.emailVerified ?? true,
         };
         setUser(currentAuthUser);
         syncSessionCookie(currentAuthUser);
@@ -346,6 +394,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: demoEmail,
         displayName: 'Google Reviewer',
         photoURL: null,
+        emailVerified: true,
       };
       setUser(mockUser);
       syncSessionCookie(mockUser);
@@ -364,6 +413,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       email: 'guest@review-app.local',
       displayName: 'Guest Reviewer',
       photoURL: null,
+      emailVerified: true,
     };
     setUser(guestUser);
     syncSessionCookie(guestUser);
@@ -373,15 +423,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   };
 
+  const sendVerificationEmail = async () => {
+    if (isFirebaseConfigured && auth?.currentUser) {
+      await sendEmailVerification(auth.currentUser);
+    } else if (user) {
+      console.log('Verification email simulation for local user:', user.email);
+    }
+  };
+
+  const reloadUser = async () => {
+    if (isFirebaseConfigured && auth?.currentUser) {
+      await auth.currentUser.reload();
+      const fbUser = auth.currentUser;
+      const updatedAuthUser: AuthUser = {
+        uid: fbUser.uid,
+        email: fbUser.email || '',
+        displayName: fbUser.displayName || fbUser.email?.split('@')[0],
+        photoURL: fbUser.photoURL,
+        emailVerified: fbUser.emailVerified,
+      };
+      setUser(updatedAuthUser);
+      syncSessionCookie(updatedAuthUser);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(updatedAuthUser));
+      }
+    } else if (user) {
+      // Local fallback simulation
+      const updatedAuthUser: AuthUser = {
+        ...user,
+        emailVerified: true,
+      };
+      setUser(updatedAuthUser);
+      syncSessionCookie(updatedAuthUser);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(updatedAuthUser));
+      }
+    }
+  };
+
   const signOut = async () => {
     setLoading(true);
-    if (isFirebaseConfigured && auth) {
-      await firebaseSignOut(auth);
+    // Clear localStorage FIRST — before firebaseSignOut triggers onAuthStateChanged
+    // which would otherwise find the saved user and restore it
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(LOCAL_AUTH_USER_KEY);
     }
     setUser(null);
     syncSessionCookie(null);
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(LOCAL_AUTH_USER_KEY);
+    if (isFirebaseConfigured && auth) {
+      await firebaseSignOut(auth);
     }
     setLoading(false);
   };
@@ -401,6 +491,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithGoogle,
         signInAsGuest,
         signOut,
+        sendVerificationEmail,
+        reloadUser,
         error,
         clearError,
       }}

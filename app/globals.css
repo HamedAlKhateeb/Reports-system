@@ -64,7 +64,7 @@ html, body {
   background-color: var(--bg-color);
   min-height: 100vh;
   letter-spacing: -0.01em;
-  overflow-x: hidden;
+  overflow-x: clip;
   max-width: 100vw;
   width: 100%;
 }
@@ -92,26 +92,61 @@ html, body {
   float: left;
 }
 
+.ProseMirror [dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+.ProseMirror [dir="ltr"] {
+  direction: ltr;
+  text-align: left;
+}
+
 /* TipTap Table Styling - Fully Responsive with Horizontal Scrolling Container */
 .ProseMirror .tableWrapper {
   overflow-x: auto !important;
   -webkit-overflow-scrolling: touch;
   max-width: 100%;
+  width: 100%;
   margin: 1.5rem 0;
   border-radius: 12px;
   border: 1px solid #E7E6E2;
-  touch-action: pan-x;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(72, 100, 80, 0.3) transparent;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar {
+  height: 6px;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-thumb {
+  background: rgba(72, 100, 80, 0.25);
+  border-radius: 9999px;
+}
+
+.ProseMirror .tableWrapper::-webkit-scrollbar-thumb:hover {
+  background: rgba(72, 100, 80, 0.45);
 }
 
 .dark .ProseMirror .tableWrapper {
   border-color: #2B2B29;
 }
 
+.dark .ProseMirror .tableWrapper::-webkit-scrollbar-thumb {
+  background: rgba(107, 140, 117, 0.35);
+}
+
 .ProseMirror table {
   border-collapse: collapse;
-  table-layout: auto;
+  table-layout: fixed;
   width: 100%;
-  min-width: 480px;
+  min-width: 100%;
   margin: 0 !important;
   box-sizing: border-box;
 }
@@ -127,14 +162,25 @@ html, body {
     min-height: 350px;
   }
 
+  .ProseMirror .tableWrapper {
+    margin: 1rem 0;
+    border-radius: 8px;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x pan-y;
+  }
+
   .ProseMirror table {
-    min-width: 440px;
     font-size: 0.85rem;
+    width: max-content !important;
+    min-width: 100% !important;
+    table-layout: fixed !important;
   }
 
   .ProseMirror table th,
   .ProseMirror table td {
+    min-width: 110px !important;
     padding: 8px 10px !important;
+    line-height: 1.55;
   }
 }
 
@@ -144,12 +190,26 @@ html, body {
 
 .ProseMirror table th,
 .ProseMirror table td {
-  min-width: 1em;
+  min-width: 100px;
   border: 1px solid #E7E6E2;
   padding: 10px 14px;
   vertical-align: top;
   box-sizing: border-box;
   position: relative;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: auto;
+  white-space: normal;
+  line-height: 1.6;
+}
+
+.ProseMirror table th > p,
+.ProseMirror table td > p {
+  margin: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+  line-height: inherit;
 }
 
 .dark .ProseMirror table th,
@@ -160,12 +220,12 @@ html, body {
 .ProseMirror table th {
   font-weight: 600;
   text-align: inherit;
-  background-color: #26342B;
-  color: #F4F6F4;
+  background-color: var(--editor-th-bg, #26342B);
+  color: var(--editor-th-text, #F4F6F4);
 }
 
 .dark .ProseMirror table th {
-  background-color: #1D2721;
+  background-color: var(--editor-th-bg, #1D2721);
 }
 
 .ProseMirror table .selectedCell:after {
@@ -192,7 +252,7 @@ html, body {
   top: 0;
   bottom: -2px;
   width: 4px;
-  background-color: #486450;
+  background-color: var(--editor-accent, #486450);
   pointer-events: none;
   z-index: 20;
 }
@@ -204,10 +264,13 @@ html, body {
 
 /* Blockquote */
 .ProseMirror blockquote {
-  border-inline-start: 3px solid #486450;
+  border-inline-start: 3px solid var(--editor-quote-border, #486450);
+  background-color: var(--editor-quote-bg, transparent);
   margin-inline-start: 0;
   margin-inline-end: 0;
   padding-inline-start: 1rem;
+  padding-block: 0.25rem;
+  border-radius: 0 6px 6px 0;
   color: #6B6964;
   font-style: italic;
   font-family: 'Amiri', serif;
@@ -216,7 +279,7 @@ html, body {
 
 .dark .ProseMirror blockquote {
   color: #9E9C96;
-  border-inline-start-color: #6B8C75;
+  border-inline-start-color: var(--editor-quote-border, #6B8C75);
 }
 
 /* Typography styles */
@@ -245,11 +308,11 @@ html, body {
   line-height: 1.4;
   margin-top: 1rem;
   margin-bottom: 0.5rem;
-  color: #394E3F;
+  color: var(--editor-h3-color, #394E3F);
 }
 
 .dark .ProseMirror h3 {
-  color: #AFC0B3;
+  color: var(--editor-h3-color, #AFC0B3);
 }
 
 .ProseMirror p {

@@ -18,6 +18,9 @@ declare module '@tiptap/core' {
         reportId: string;
         imageId?: string;
         width?: string;
+        zoom?: string;
+        naturalWidth?: number;
+        naturalHeight?: number;
         alignment?: 'center' | 'left' | 'right';
       }) => ReturnType;
     };
@@ -62,6 +65,15 @@ export const ReportImage = Node.create<ReportImageOptions>({
       width: {
         default: '100%',
       },
+      zoom: {
+        default: '100%',
+      },
+      naturalWidth: {
+        default: null,
+      },
+      naturalHeight: {
+        default: null,
+      },
       alignment: {
         default: 'center',
       },
@@ -83,6 +95,9 @@ export const ReportImage = Node.create<ReportImageOptions>({
             reportId: el.getAttribute('data-report-id') || '',
             imageId: el.getAttribute('data-image-id') || '',
             width: el.getAttribute('data-width') || '100%',
+            zoom: el.getAttribute('data-zoom') || el.getAttribute('data-width') || '100%',
+            naturalWidth: el.getAttribute('data-natural-width') ? Number(el.getAttribute('data-natural-width')) : null,
+            naturalHeight: el.getAttribute('data-natural-height') ? Number(el.getAttribute('data-natural-height')) : null,
             alignment: (el.getAttribute('data-alignment') as any) || 'center',
           };
         },
@@ -103,6 +118,9 @@ export const ReportImage = Node.create<ReportImageOptions>({
         'data-report-id': HTMLAttributes.reportId,
         'data-image-id': HTMLAttributes.imageId,
         'data-width': HTMLAttributes.width || '100%',
+        'data-zoom': HTMLAttributes.zoom || HTMLAttributes.width || '100%',
+        'data-natural-width': HTMLAttributes.naturalWidth || '',
+        'data-natural-height': HTMLAttributes.naturalHeight || '',
         'data-alignment': HTMLAttributes.alignment || 'center',
       }),
       ['img', { src: HTMLAttributes.src, alt: HTMLAttributes.caption || HTMLAttributes.fileName, style: `width: ${HTMLAttributes.width || '100%'};` }],

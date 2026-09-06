@@ -1,5 +1,6 @@
 import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
+import { formatWhatsAppUrl } from './contact-links';
 
 /**
  * Converts TipTap JSON node to clean styled HTML for print/PDF
@@ -34,6 +35,9 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
           }
           if (mark.type === 'textHighlight' && mark.attrs?.color) {
             text = `<mark style="background-color: ${mark.attrs.color}; padding: 0.1em 0.25em; border-radius: 3px;">${text}</mark>`;
+          }
+          if (mark.type === 'fontSize' && mark.attrs?.size) {
+            text = `<span style="font-size: ${mark.attrs.size};">${text}</span>`;
           }
           if (mark.type === 'link') {
             text = `<a href="${mark.attrs?.href || '#'}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; font-weight: 500;">${text}</a>`;
@@ -559,7 +563,31 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
         <span class="meta-label">${isAr ? 'الجهة / القسم' : 'Organization'}:</span>
         <span class="meta-val">${report.organization || '-'}</span>
       </div>
+      ${report.customFields && report.customFields.length > 0 ? report.customFields.map(cf => `
+      <div class="meta-item">
+        <span class="meta-label">${cf.label || '-'}:</span>
+        <span class="meta-val">${cf.value || '-'}</span>
+      </div>
+      `).join('') : ''}
     </div>
+
+    ${report.contactLinks && report.contactLinks.length > 0 ? `
+    <div style="display: flex; flex-wrap: wrap; gap: 10px 16px; margin: -8px 0 18px 0; padding: 9px 14px; background: ${bg.cardBg}; border: 1px solid ${theme.border}; border-radius: 8px; font-size: 11px; align-items: center;">
+      <span style="font-weight: 700; color: ${theme.primary};">${isAr ? 'بيانات التواصل المعتمدة:' : 'Contact & Social Details:'}</span>
+      ${report.contactLinks.map(l => {
+        const isPhone = l.type === 'phone' || l.type === 'whatsapp';
+        const href = isPhone ? formatWhatsAppUrl(l.value) : (l.type === 'email' ? `mailto:${l.value}` : (l.value.startsWith('http') ? l.value : `https://${l.value}`));
+        return `
+        <span style="display: inline-flex; align-items: center; gap: 4px;">
+          ${l.label ? `<span style="font-weight: 600; color: #475569;">${l.label}:</span>` : ''}
+          <a href="${href}" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: none;">
+            <span ${isPhone ? 'dir="ltr" style="unicode-bidi: isolate; font-family: monospace; color: ' + theme.primary + '; font-weight: 600;"' : 'style="font-family: monospace; color: ' + theme.primary + '; font-weight: 600;"'}>${l.value}</span>
+          </a>
+        </span>
+        `;
+      }).join('<span style="color: #cbd5e1;">•</span>')}
+    </div>
+    ` : ''}
 
     <!-- Report Body Content -->
     <main class="report-content">
@@ -578,6 +606,12 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
           <span class="signature-field-label">${isAr ? 'التاريخ' : 'Date'}:</span>
           <span>${formattedDate}</span>
         </div>
+        ${report.customFooterFields && report.customFooterFields.length > 0 ? report.customFooterFields.map(cff => `
+        <div class="signature-field">
+          <span class="signature-field-label">${cff.label || '-'}:</span>
+          <span>${cff.value || '-'}</span>
+        </div>
+        `).join('') : ''}
       </div>
       <div class="signature-box-val">
         ${report.signatureData ? `✍️ ${report.signatureData}` : (isAr ? 'التوقيع: _______________________________' : 'Signature: _______________________________')}

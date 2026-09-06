@@ -288,25 +288,25 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
   // Update in global and user-specific stores
   const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
   const index = reports.findIndex((r) => r.id === id);
+  let ownerUid = partial.ownerUid;
   if (index !== -1) {
+    ownerUid = ownerUid || reports[index].ownerUid;
     reports[index] = { ...reports[index], ...partial, updatedAt: now };
     setLocal(LOCAL_REPORTS_KEY, reports);
   }
 
+  // Directly update user-specific store without scanning entire localStorage on every save
   if (typeof window !== 'undefined') {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(`${LOCAL_REPORTS_KEY}_`)) {
-          const uReports = getLocal<ReportItem[]>(key, []);
-          const uIdx = uReports.findIndex((r) => r.id === id);
-          if (uIdx !== -1) {
-            uReports[uIdx] = { ...uReports[uIdx], ...partial, updatedAt: now };
-            setLocal(key, uReports);
-          }
-        }
+    const targetUid = ownerUid || auth?.currentUser?.uid;
+    if (targetUid) {
+      const userKey = `${LOCAL_REPORTS_KEY}_${targetUid}`;
+      const uReports = getLocal<ReportItem[]>(userKey, []);
+      const uIdx = uReports.findIndex((r) => r.id === id);
+      if (uIdx !== -1) {
+        uReports[uIdx] = { ...uReports[uIdx], ...partial, updatedAt: now };
+        setLocal(userKey, uReports);
       }
-    } catch {}
+    }
   }
 }
 
@@ -361,25 +361,34 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
 // ==========================================
 
 export async function getReportImages(reportId: string): Promise<ReportImageItem[]> {
+  let firestoreImages: ReportImageItem[] = [];
   if (isFirebaseConfigured && db) {
     try {
       const colRef = collection(db, 'reports', reportId, 'images');
-      const q = query(colRef, orderBy('sequenceNumber', 'asc'));
-      const snap = await getDocs(q);
-      return snap.docs.map((d) => ({
+      const snap = await getDocs(colRef);
+      firestoreImages = snap.docs.map((d) => ({
         id: d.id,
         reportId,
         ...d.data(),
       })) as ReportImageItem[];
     } catch (e) {
-      console.warn('Firestore getReportImages failed', e);
+      console.warn('Firestore getReportImages failed, falling back to local storage', e);
     }
   }
 
-  const images = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, []);
-  return images
-    .filter((img) => img.reportId === reportId)
-    .sort((a, b) => a.sequenceNumber - b.sequenceNumber);
+  // Always merge with local storage cache so items are never lost or ignored
+  const localImages = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, [])
+    .filter((img) => img.reportId === reportId);
+
+  const map = new Map<string, ReportImageItem>();
+  for (const img of localImages) {
+    map.set(img.id, img);
+  }
+  for (const img of firestoreImages) {
+    map.set(img.id, img);
+  }
+
+  return Array.from(map.values()).sort((a, b) => (a.sequenceNumber || 1) - (b.sequenceNumber || 1));
 }
 
 /**
@@ -435,11 +444,15 @@ export async function uploadReportImage(
   reportId: string,
   file: File | Blob,
   caption: string = '',
-  reportLanguage: 'ar' | 'en' = 'ar'
+  reportLanguage: 'ar' | 'en' = 'ar',
+  forcedSequenceNumber?: number
 ): Promise<ReportImageItem> {
   // 1. Calculate next sequenceNumber for this report
   const existingImages = await getReportImages(reportId);
-  const nextSeq = existingImages.length > 0 ? Math.max(...existingImages.map((i) => i.sequenceNumber)) + 1 : 1;
+  const maxExistingSeq = existingImages.length > 0 ? Math.max(...existingImages.map((i) => i.sequenceNumber || 0)) : 0;
+  const nextSeq = forcedSequenceNumber && forcedSequenceNumber > 0
+    ? forcedSequenceNumber
+    : (maxExistingSeq > 0 ? maxExistingSeq + 1 : 1);
 
   // File naming: sequenceNumber is fixed/immutable!
   const prefix = reportLanguage === 'ar' ? 'صورة-' : 'image-';
@@ -533,6 +546,50 @@ export async function updateImageCaption(
     images[idx].caption = caption;
     setLocal(LOCAL_IMAGES_KEY, images);
   }
+}
+
+export async function updateImageFileName(
+  reportId: string,
+  imageId: string,
+  fileName: string
+): Promise<void> {
+  const newStoragePath = `reports/${reportId}/images/${fileName}`;
+
+  if (isFirebaseConfigured && db) {
+    try {
+      const imageDoc = doc(db, 'reports', reportId, 'images', imageId);
+      await updateDoc(imageDoc, { fileName, storagePath: newStoragePath });
+      return;
+    } catch (e) {
+      console.warn('Failed to update image fileName in Firestore', e);
+    }
+  }
+
+  const images = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, []);
+  const idx = images.findIndex((img) => img.id === imageId);
+  if (idx !== -1) {
+    images[idx].fileName = fileName;
+    images[idx].storagePath = newStoragePath;
+    setLocal(LOCAL_IMAGES_KEY, images);
+  }
+}
+
+export async function deleteReportImage(
+  reportId: string,
+  imageId: string
+): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      const imageDoc = doc(db, 'reports', reportId, 'images', imageId);
+      await deleteDoc(imageDoc);
+    } catch (e) {
+      console.warn('Failed to delete image in Firestore', e);
+    }
+  }
+
+  const images = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, []);
+  const filtered = images.filter((img) => img.id !== imageId);
+  setLocal(LOCAL_IMAGES_KEY, filtered);
 }
 
 // ==========================================
