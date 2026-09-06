@@ -291,12 +291,27 @@ export async function buildDocxDocument(
                   textColor = '9a3412';
                   isBold = true;
                 } else if (
+                  lower.includes('medium') ||
+                  lower.includes('متوسطة') ||
+                  lower.includes(t('severity_medium', lang).toLowerCase())
+                ) {
+                  cellBg = 'fef3c7';
+                  textColor = '92400e';
+                  isBold = true;
+                } else if (
+                  lower.includes('normal') ||
+                  lower.includes('عادية') ||
+                  lower.includes(t('severity_normal', lang).toLowerCase())
+                ) {
+                  cellBg = 'e0f2fe';
+                  textColor = '0369a1';
+                } else if (
                   lower.includes('minor') ||
                   lower.includes('طفيفة') ||
                   lower.includes(t('severity_minor', lang).toLowerCase())
                 ) {
-                  cellBg = 'fef9c3';
-                  textColor = '854d0e';
+                  cellBg = 'ecfdf5';
+                  textColor = '065f46';
                 }
               }
 

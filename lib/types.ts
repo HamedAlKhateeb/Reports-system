@@ -46,7 +46,7 @@ export interface IssueItem {
   title: string;
   description: string;
   status: IssueStatus;     // 'open' | 'in_progress' | 'done'
-  severity: IssueSeverity; // 'critical' | 'major' | 'minor'
+  severity: IssueSeverity; // 'critical' | 'major' | 'medium' | 'normal' | 'minor'
   linkedReportId: string | null;
   ownerUid?: string;
   createdAt: string;

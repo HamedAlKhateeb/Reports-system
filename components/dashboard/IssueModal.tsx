@@ -120,7 +120,7 @@ export function IssueModal({
   if (!isOpen) return null;
 
   const statuses: IssueStatus[] = ['open', 'in_progress', 'done'];
-  const severities: IssueSeverity[] = ['critical', 'major', 'minor'];
+  const severities: IssueSeverity[] = ['critical', 'major', 'medium', 'normal', 'minor'];
   const linkedReport = reports.find((r) => r.id === linkedReportId);
 
   return (

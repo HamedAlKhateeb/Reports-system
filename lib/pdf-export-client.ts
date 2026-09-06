@@ -118,6 +118,8 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
           if (!isHeader) {
             if (cellText.includes('critical') || cellText.includes('حرجة')) extraClass = 'severity-critical';
             else if (cellText.includes('major') || cellText.includes('كبيرة')) extraClass = 'severity-major';
+            else if (cellText.includes('medium') || cellText.includes('متوسطة')) extraClass = 'severity-medium';
+            else if (cellText.includes('normal') || cellText.includes('عادية')) extraClass = 'severity-normal';
             else if (cellText.includes('minor') || cellText.includes('طفيفة')) extraClass = 'severity-minor';
           }
 
@@ -408,9 +410,21 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
       font-weight: 700;
     }
 
+    .severity-medium {
+      background-color: #fef3c7 !important;
+      color: #92400e !important;
+      font-weight: 700;
+    }
+
+    .severity-normal {
+      background-color: #e0f2fe !important;
+      color: #0369a1 !important;
+      font-weight: 600;
+    }
+
     .severity-minor {
-      background-color: #fef9c3 !important;
-      color: #854d0e !important;
+      background-color: #ecfdf5 !important;
+      color: #065f46 !important;
     }
 
     /* Headings */

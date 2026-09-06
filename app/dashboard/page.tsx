@@ -317,6 +317,8 @@ export default function DashboardPage() {
             <option value="all">{t('allSeverities')}</option>
             <option value="critical">{getSeverityLabel('critical', lang)}</option>
             <option value="major">{getSeverityLabel('major', lang)}</option>
+            <option value="medium">{getSeverityLabel('medium', lang)}</option>
+            <option value="normal">{getSeverityLabel('normal', lang)}</option>
             <option value="minor">{getSeverityLabel('minor', lang)}</option>
           </select>
         </div>

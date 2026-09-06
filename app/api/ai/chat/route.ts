@@ -88,7 +88,7 @@ ACTION FORMATS:
     {
       "title": "Short descriptive title",
       "description": "Details of the issue or defect",
-      "severity": "critical" | "major" | "minor",
+      "severity": "critical" | "major" | "medium" | "normal" | "minor",
       "status": "open"
     }
   ]
@@ -102,7 +102,7 @@ ACTION FORMATS:
   "issueId": "exact_issue_id",
   "title": "Optional new title",
   "status": "open" | "in_progress" | "resolved",
-  "severity": "critical" | "major" | "minor",
+  "severity": "critical" | "major" | "medium" | "normal" | "minor",
   "description": "Optional updated description",
   "reason": "Brief explanation of why this modification is recommended"
 }

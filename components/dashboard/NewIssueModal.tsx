@@ -26,7 +26,7 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<IssueStatus>('open');
-  const [severity, setSeverity] = useState<IssueSeverity>('major');
+  const [severity, setSeverity] = useState<IssueSeverity>('medium');
   const [linkedReportId, setLinkedReportId] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -48,7 +48,7 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
       setTitle('');
       setDescription('');
       setStatus('open');
-      setSeverity('major');
+      setSeverity('medium');
       setLinkedReportId('');
       onClose();
     } catch (err) {
@@ -59,7 +59,7 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
   };
 
   const statuses: IssueStatus[] = ['open', 'in_progress', 'done'];
-  const severities: IssueSeverity[] = ['critical', 'major', 'minor'];
+  const severities: IssueSeverity[] = ['critical', 'major', 'medium', 'normal', 'minor'];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">

@@ -10,7 +10,7 @@
 export type AppLanguage = 'ar' | 'en';
 export type AppDirection = 'rtl' | 'ltr';
 export type IssueStatus = 'open' | 'in_progress' | 'done';
-export type IssueSeverity = 'critical' | 'major' | 'minor';
+export type IssueSeverity = 'critical' | 'major' | 'medium' | 'normal' | 'minor';
 
 export interface DictionaryEntry {
   ar: string;
@@ -196,6 +196,14 @@ export const DICTIONARY = {
   severity_major: {
     ar: 'كبيرة',
     en: 'Major',
+  },
+  severity_medium: {
+    ar: 'متوسطة',
+    en: 'Medium',
+  },
+  severity_normal: {
+    ar: 'عادية',
+    en: 'Normal',
   },
   severity_minor: {
     ar: 'طفيفة',
@@ -905,6 +913,10 @@ export function getSeverityLabel(severity: IssueSeverity, lang: AppLanguage): st
       return t('severity_critical', lang);
     case 'major':
       return t('severity_major', lang);
+    case 'medium':
+      return t('severity_medium', lang);
+    case 'normal':
+      return t('severity_normal', lang);
     case 'minor':
       return t('severity_minor', lang);
     default:
