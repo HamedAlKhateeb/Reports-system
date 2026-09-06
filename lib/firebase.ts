@@ -25,15 +25,13 @@ let db: Firestore | undefined;
 let storage: FirebaseStorage | undefined;
 let googleProvider: GoogleAuthProvider | undefined;
 
-if (typeof window !== 'undefined' || isFirebaseConfigured) {
+if (typeof window !== 'undefined' && isFirebaseConfigured) {
   try {
-    if (isFirebaseConfigured) {
-      app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-      auth = getAuth(app);
-      db = getFirestore(app);
-      storage = getStorage(app);
-      googleProvider = new GoogleAuthProvider();
-    }
+    app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
+    googleProvider = new GoogleAuthProvider();
   } catch (error) {
     console.warn('Firebase initialization warning:', error);
   }
