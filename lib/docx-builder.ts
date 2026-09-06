@@ -371,8 +371,12 @@ export async function buildDocxDocument(
             scale = parsed / 100;
           }
         }
+        const natW = Number(node.attrs?.naturalWidth) || 0;
+        const natH = Number(node.attrs?.naturalHeight) || 0;
+        const aspect = natW > 0 && natH > 0 ? natH / natW : 9 / 16;
+
         const imgWidth = Math.round(520 * scale);
-        const imgHeight = Math.round(300 * scale);
+        const imgHeight = Math.round(imgWidth * aspect);
         const imgAlign =
           alignAttr === 'left'
             ? AlignmentType.LEFT

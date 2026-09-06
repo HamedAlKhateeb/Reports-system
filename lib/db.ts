@@ -405,7 +405,15 @@ export async function createOptimizedDataUrl(file: File | Blob): Promise<string>
       }
       const img = new Image();
       img.onload = () => {
-        const MAX_DIM = 1400;
+        const MAX_DIM = 2560;
+        const isPng = file.type === 'image/png';
+
+        // If file is under 3MB and dimensions fit within 2560, preserve original lossless data
+        if (file.size < 3 * 1024 * 1024 && img.width <= MAX_DIM && img.height <= MAX_DIM) {
+          resolve(rawDataUrl);
+          return;
+        }
+
         let width = img.width;
         let height = img.height;
 
@@ -427,9 +435,13 @@ export async function createOptimizedDataUrl(file: File | Blob): Promise<string>
           resolve(rawDataUrl);
           return;
         }
+
+        // Use high quality image smoothing for crystal-clear screenshots and text
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, width, height);
-        const isPng = file.type === 'image/png';
-        const optimized = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.85);
+
+        const optimized = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.95);
         resolve(optimized);
       };
       img.onerror = () => resolve(rawDataUrl);

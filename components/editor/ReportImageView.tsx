@@ -92,12 +92,11 @@ export function ReportImageView(props: NodeViewProps) {
     }
   }, [src, node.attrs.naturalWidth, node.attrs.naturalHeight, updateAttributes]);
 
-  // Exact rendered dimensions derived directly from single source of truth
-  const renderedWidth = naturalSize ? Math.round(naturalSize.width * zoomScale) : null;
-  const renderedHeight = naturalSize ? Math.round(naturalSize.height * zoomScale) : null;
-
-  // Frame width: sized to match rendered image + 2px borders, while respecting available viewport
-  const frameWidth = renderedWidth !== null ? renderedWidth + 2 : undefined;
+  // Render sizing: when zoom <= 100, frame represents percentage of document width (matches PDF/Word export 1:1)
+  const isZoomedIn = currentZoom > 100;
+  const frameWidthStyle = isZoomedIn
+    ? '100%'
+    : `${currentZoom}%`;
 
   const handleCaptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newCaption = e.target.value;
@@ -310,7 +309,7 @@ export function ReportImageView(props: NodeViewProps) {
     <NodeViewWrapper dir={isAr ? 'rtl' : 'ltr'} className="my-6 block not-prose w-full max-w-full">
       <div
         style={{
-          width: frameWidth ? `${frameWidth}px` : 'fit-content',
+          width: frameWidthStyle,
           maxWidth: '100%',
         }}
         className={cn(
@@ -596,38 +595,36 @@ export function ReportImageView(props: NodeViewProps) {
         {/* Image Display / Viewport Area with Interactive Drag-to-Pan */}
         <div
           ref={scrollContainerRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
+          onMouseDown={isZoomedIn ? handleMouseDown : undefined}
+          onMouseMove={isZoomedIn ? handleMouseMove : undefined}
+          onMouseUp={isZoomedIn ? handleMouseUp : undefined}
+          onMouseLeave={isZoomedIn ? handleMouseUp : undefined}
           style={{
-            maxHeight: '82vh',
+            maxHeight: '85vh',
           }}
           className={cn(
-            'relative w-full overflow-auto bg-black/5 dark:bg-white/5 transition-colors',
-            isPanning ? 'cursor-grabbing select-none' : 'cursor-default'
+            'relative w-full transition-colors flex items-center justify-center p-0',
+            isZoomedIn ? 'overflow-auto cursor-grab' : 'overflow-hidden cursor-default',
+            isPanning && 'cursor-grabbing select-none'
           )}
         >
-          <div className="m-auto w-fit flex items-center justify-center p-0">
+          <div className="w-full flex items-center justify-center p-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               ref={imgRef}
               src={src}
               alt={caption || fileName || 'Report screenshot'}
               onLoad={handleImageLoad}
-              style={
-                renderedWidth !== null && renderedHeight !== null
-                  ? {
-                      width: `${renderedWidth}px`,
-                      minWidth: `${renderedWidth}px`,
-                      height: `${renderedHeight}px`,
-                      minHeight: `${renderedHeight}px`,
-                    }
-                  : undefined
-              }
-              className="block rounded-none transition-none pointer-events-auto select-none"
+              decoding="async"
+              style={{
+                width: isZoomedIn ? `${currentZoom}%` : '100%',
+                maxWidth: isZoomedIn ? 'none' : (naturalSize ? `${naturalSize.width}px` : '100%'),
+                height: 'auto',
+                display: 'block',
+                imageRendering: '-webkit-optimize-contrast',
+              }}
+              className="rounded-none transition-none pointer-events-auto select-none"
               draggable={false}
-              loading="lazy"
             />
           </div>
         </div>
