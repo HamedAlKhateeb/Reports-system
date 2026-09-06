@@ -12,6 +12,10 @@
     "preview": "opennextjs-cloudflare preview"
   },
   "dependencies": {
+    "@radix-ui/react-tabs": "^1.1.21",
+    "@radix-ui/react-toggle": "^1.1.18",
+    "@radix-ui/react-toggle-group": "^1.1.19",
+    "@radix-ui/react-tooltip": "^1.2.16",
     "@tiptap/core": "^2.6.6",
     "@tiptap/extension-link": "^2.27.3",
     "@tiptap/extension-placeholder": "^2.6.6",
