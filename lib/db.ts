@@ -11,6 +11,7 @@ import {
   where,
   orderBy,
   runTransaction,
+  writeBatch,
   serverTimestamp,
 } from 'firebase/firestore';
 import {
@@ -119,31 +120,80 @@ export async function addAuthorizedUser(email: string): Promise<void> {
 // ==========================================
 
 export async function getNextReportNumber(): Promise<number> {
+  const allNumbers: number[] = [];
+
+  // 1. Collect numbers from Firestore
   if (isFirebaseConfigured && db) {
-    const counterRef = doc(db, 'counters', 'reports');
     try {
-      const nextNum = await runTransaction(db, async (transaction) => {
-        const counterDoc = await transaction.get(counterRef);
-        if (!counterDoc.exists()) {
-          transaction.set(counterRef, { currentNumber: 101 });
-          return 101;
+      const snap = await getDocs(collection(db, 'reports'));
+      snap.docs.forEach((d) => {
+        const num = d.data()?.reportNumber;
+        const parsed = typeof num === 'number' ? num : parseInt(String(num), 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          allNumbers.push(parsed);
         }
-        const current = counterDoc.data()?.currentNumber ?? 100;
-        const updated = current + 1;
-        transaction.update(counterRef, { currentNumber: updated });
-        return updated;
       });
-      return nextNum;
     } catch (e) {
-      console.error('Error incrementing report counter in Firestore', e);
+      console.warn('Could not query reports collection to find next report number in Firestore', e);
     }
   }
 
-  // Local fallback
-  const current = getLocal<number>(LOCAL_COUNTER_KEY, 100);
-  const next = current + 1;
-  setLocal(LOCAL_COUNTER_KEY, next);
-  return next;
+  // 2. Collect numbers from LocalStorage
+  const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
+  globalReports.forEach((r) => {
+    const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      allNumbers.push(parsed);
+    }
+  });
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+          const uReports = getLocal<ReportItem[]>(key, []);
+          uReports.forEach((r) => {
+            const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              allNumbers.push(parsed);
+            }
+          });
+        }
+      }
+    } catch {}
+  }
+
+  // Next number is (highest existing report number + 1) or 1 if empty
+  const maxExisting = allNumbers.length > 0 ? Math.max(...allNumbers) : 0;
+  const nextNum = maxExisting > 0 ? maxExisting + 1 : 1;
+
+  // Keep local counter and Firestore counter synchronized
+  setLocal(LOCAL_COUNTER_KEY, nextNum);
+  if (isFirebaseConfigured && db) {
+    try {
+      const counterRef = doc(db, 'counters', 'reports');
+      await setDoc(counterRef, { currentNumber: nextNum }, { merge: true });
+    } catch {}
+  }
+
+  return nextNum;
+}
+
+/**
+ * Sort reports oldest first (Report #1, #2, #3... or earliest createdAt)
+ */
+function sortReportsOldestFirst(list: ReportItem[]): ReportItem[] {
+  return list.sort((a, b) => {
+    const numA = typeof a.reportNumber === 'number' ? a.reportNumber : parseInt(String(a.reportNumber), 10) || 0;
+    const numB = typeof b.reportNumber === 'number' ? b.reportNumber : parseInt(String(b.reportNumber), 10) || 0;
+    if (numA > 0 && numB > 0 && numA !== numB) {
+      return numA - numB;
+    }
+    const timeA = new Date(a.createdAt || a.updatedAt).getTime();
+    const timeB = new Date(b.createdAt || b.updatedAt).getTime();
+    return timeA - timeB;
+  });
 }
 
 export async function getReports(userUid?: string): Promise<ReportItem[]> {
@@ -155,14 +205,14 @@ export async function getReports(userUid?: string): Promise<ReportItem[]> {
         const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
         snap = await getDocs(q);
       } else {
-        const q = query(collection(db, 'reports'), orderBy('updatedAt', 'desc'));
+        const q = query(collection(db, 'reports'));
         snap = await getDocs(q);
       }
       const list = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as ReportItem[];
-      return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      return sortReportsOldestFirst(list);
     } catch (e) {
       console.warn('Firestore getReports failed, using local storage fallback', e);
     }
@@ -182,7 +232,7 @@ export async function getReports(userUid?: string): Promise<ReportItem[]> {
     }
   }
 
-  return reports.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return sortReportsOldestFirst(reports);
 }
 
 export async function getReportById(id: string): Promise<ReportItem | null> {
@@ -608,6 +658,32 @@ export async function deleteReportImage(
 // ISSUES & DEFECTS
 // ==========================================
 
+const SEVERITY_NUMERIC_RANK: Record<string, number> = {
+  critical: 1,
+  major: 2,
+  medium: 3,
+  normal: 4,
+  minor: 5,
+};
+
+function sortIssuesByOrder(list: IssueItem[]): IssueItem[] {
+  return list.sort((a, b) => {
+    // If explicit order index exists on both, sort by it
+    if (typeof a.order === 'number' && typeof b.order === 'number') {
+      return a.order - b.order;
+    }
+    if (typeof a.order === 'number') return -1;
+    if (typeof b.order === 'number') return 1;
+
+    // Otherwise default by severity rank (1 to 5)
+    const rankA = SEVERITY_NUMERIC_RANK[a.severity] ?? 99;
+    const rankB = SEVERITY_NUMERIC_RANK[b.severity] ?? 99;
+    if (rankA !== rankB) return rankA - rankB;
+
+    return new Date(b.createdAt || b.updatedAt).getTime() - new Date(a.createdAt || a.updatedAt).getTime();
+  });
+}
+
 export async function getIssues(userUid?: string): Promise<IssueItem[]> {
   if (isFirebaseConfigured && db) {
     try {
@@ -616,14 +692,14 @@ export async function getIssues(userUid?: string): Promise<IssueItem[]> {
         const q = query(collection(db, 'issues'), where('ownerUid', '==', userUid));
         snap = await getDocs(q);
       } else {
-        const q = query(collection(db, 'issues'), orderBy('updatedAt', 'desc'));
+        const q = query(collection(db, 'issues'));
         snap = await getDocs(q);
       }
       const issues = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as IssueItem[];
-      return issues.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      return sortIssuesByOrder(issues);
     } catch (e) {
       console.warn('Firestore getIssues failed, using local storage fallback', e);
     }
@@ -642,7 +718,78 @@ export async function getIssues(userUid?: string): Promise<IssueItem[]> {
     }
   }
 
-  return issues.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return sortIssuesByOrder(issues);
+}
+
+export async function reorderIssues(
+  updates: Array<{ id: string; order: number; status?: IssueItem['status'] }>
+): Promise<void> {
+  const now = new Date().toISOString();
+
+  if (isFirebaseConfigured && db) {
+    const firestore = db;
+    try {
+      const batch = writeBatch(firestore);
+      updates.forEach((u) => {
+        const docRef = doc(firestore, 'issues', u.id);
+        const patch: any = { order: u.order, updatedAt: now };
+        if (u.status) patch.status = u.status;
+        batch.update(docRef, patch);
+      });
+      await batch.commit();
+    } catch (e) {
+      console.warn('Batch update reorder issues failed in Firestore, using sequential fallback', e);
+      for (const u of updates) {
+        try {
+          const docRef = doc(firestore, 'issues', u.id);
+          const patch: any = { order: u.order, updatedAt: now };
+          if (u.status) patch.status = u.status;
+          await updateDoc(docRef, patch);
+        } catch {}
+      }
+    }
+  }
+
+  // Update in localStorage
+  const updateMap = new Map(updates.map((u) => [u.id, u]));
+  const globalIssues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+  const updatedGlobal = globalIssues.map((iss) => {
+    const up = updateMap.get(iss.id);
+    if (up) {
+      return {
+        ...iss,
+        order: up.order,
+        ...(up.status ? { status: up.status } : {}),
+        updatedAt: now,
+      };
+    }
+    return iss;
+  });
+  setLocal(LOCAL_ISSUES_KEY, updatedGlobal);
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_ISSUES_KEY}_`)) {
+          const uIssues = getLocal<IssueItem[]>(key, []);
+          const updatedUser = uIssues.map((iss) => {
+            const up = updateMap.get(iss.id);
+            if (up) {
+              return {
+                ...iss,
+                order: up.order,
+                ...(up.status ? { status: up.status } : {}),
+                updatedAt: now,
+              };
+            }
+            return iss;
+          });
+          setLocal(key, updatedUser);
+        }
+      }
+    } catch {}
+  }
 }
 
 export async function getIssuesByReportId(reportId: string, userUid?: string): Promise<IssueItem[]> {

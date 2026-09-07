@@ -188,26 +188,40 @@ export const DICTIONARY = {
     en: 'Done',
   },
 
-  // Severities (language-neutral keys in DB, localized only in UI and exports)
+  // Severities (language-neutral keys in DB, localized with numbers 1-5 in UI and exports)
   severity_critical: {
-    ar: 'حرجة',
-    en: 'Critical',
+    ar: '1 - حرجة',
+    en: '1 - Critical',
   },
   severity_major: {
-    ar: 'كبيرة',
-    en: 'Major',
+    ar: '2 - كبيرة',
+    en: '2 - Major',
   },
   severity_medium: {
-    ar: 'متوسطة',
-    en: 'Medium',
+    ar: '3 - متوسطة',
+    en: '3 - Medium',
   },
   severity_normal: {
-    ar: 'عادية',
-    en: 'Normal',
+    ar: '4 - عادية',
+    en: '4 - Normal',
   },
   severity_minor: {
-    ar: 'طفيفة',
-    en: 'Minor',
+    ar: '5 - طفيفة',
+    en: '5 - Minor',
+  },
+
+  // Drag & Drop Reordering
+  moveIssueUp: {
+    ar: 'تحريك لأعلى',
+    en: 'Move Up',
+  },
+  moveIssueDown: {
+    ar: 'تحريك لأسفل',
+    en: 'Move Down',
+  },
+  sortBySeverity: {
+    ar: 'ترتيب حسب الخطورة',
+    en: 'Sort by Severity',
   },
 
   // Reports Management

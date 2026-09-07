@@ -49,6 +49,7 @@ export interface IssueItem {
   severity: IssueSeverity; // 'critical' | 'major' | 'medium' | 'normal' | 'minor'
   linkedReportId: string | null;
   ownerUid?: string;
+  order?: number; // Position index for vertical drag & drop reordering
   createdAt: string;
   updatedAt: string;
   commentsCount?: number;

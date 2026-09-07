@@ -11,8 +11,9 @@ import {
   CheckCircle2,
   Circle,
   Printer,
+  ArrowUpDown,
 } from 'lucide-react';
-import { getIssues, getReports, updateIssue, createIssue } from '@/lib/db';
+import { getIssues, getReports, updateIssue, createIssue, reorderIssues } from '@/lib/db';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { IssueCard } from '@/components/dashboard/IssueCard';
 import { IssueModal } from '@/components/dashboard/IssueModal';
@@ -48,6 +49,8 @@ export default function DashboardPage() {
   // Drag & drop state
   const [draggedIssueId, setDraggedIssueId] = useState<string | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<IssueStatus | null>(null);
+  const [dragOverIssueId, setDragOverIssueId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<'before' | 'after' | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -86,22 +89,187 @@ export default function DashboardPage() {
     setDragOverColumn(null);
   };
 
-  const handleDrop = async (e: React.DragEvent, targetStatus: IssueStatus) => {
+  const handleCardDragOver = (e: React.DragEvent, targetIssueId: string) => {
     e.preventDefault();
-    setDragOverColumn(null);
-    const issueId = e.dataTransfer.getData('text/plain') || draggedIssueId;
-    if (!issueId) return;
+    e.stopPropagation();
+    if (draggedIssueId === targetIssueId) return;
 
-    // Optimistic UI update
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const pos: 'before' | 'after' = e.clientY < midY ? 'before' : 'after';
+
+    if (dragOverIssueId !== targetIssueId || dropPosition !== pos) {
+      setDragOverIssueId(targetIssueId);
+      setDropPosition(pos);
+    }
+  };
+
+  const handleCardDragLeave = () => {
+    setDragOverIssueId(null);
+    setDropPosition(null);
+  };
+
+  const handleDropOnCard = async (
+    e: React.DragEvent,
+    targetIssueId: string,
+    position: 'before' | 'after'
+  ) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const sourceId = e.dataTransfer.getData('text/plain') || draggedIssueId;
+    setDraggedIssueId(null);
+    setDragOverIssueId(null);
+    setDropPosition(null);
+    setDragOverColumn(null);
+
+    if (!sourceId || sourceId === targetIssueId) return;
+
+    const sourceIssue = issues.find((i) => i.id === sourceId);
+    const targetIssue = issues.find((i) => i.id === targetIssueId);
+    if (!sourceIssue || !targetIssue) return;
+
+    const targetStatus = targetIssue.status;
+
+    // Filter target column issues without the dragged issue
+    const colList = issues
+      .filter((i) => i.status === targetStatus && i.id !== sourceId);
+
+    const targetIndex = colList.findIndex((i) => i.id === targetIssueId);
+    if (targetIndex === -1) return;
+
+    const insertIndex = position === 'before' ? targetIndex : targetIndex + 1;
+    const reorderedList = [
+      ...colList.slice(0, insertIndex),
+      { ...sourceIssue, status: targetStatus },
+      ...colList.slice(insertIndex),
+    ];
+
+    const updates: { id: string; order: number; status: IssueStatus }[] = [];
+    const newMap = new Map<string, IssueItem>();
+
+    reorderedList.forEach((iss, idx) => {
+      const updated = { ...iss, order: idx, status: targetStatus };
+      newMap.set(iss.id, updated);
+      updates.push({ id: iss.id, order: idx, status: targetStatus });
+    });
+
     setIssues((prev) =>
-      prev.map((iss) => (iss.id === issueId ? { ...iss, status: targetStatus } : iss))
+      prev.map((iss) => (newMap.has(iss.id) ? newMap.get(iss.id)! : iss))
     );
 
     try {
-      await updateIssue(issueId, { status: targetStatus });
+      await reorderIssues(updates);
+    } catch (err) {
+      console.error('Failed to save reordered issues', err);
+      loadData();
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetStatus: IssueStatus) => {
+    e.preventDefault();
+    setDragOverColumn(null);
+    setDragOverIssueId(null);
+    setDropPosition(null);
+    const issueId = e.dataTransfer.getData('text/plain') || draggedIssueId;
+    if (!issueId) return;
+
+    const colIssues = issues.filter((i) => i.status === targetStatus && i.id !== issueId);
+    const maxOrder = colIssues.length > 0 ? Math.max(...colIssues.map((i) => i.order ?? 0)) : -1;
+    const newOrder = maxOrder + 1;
+
+    setIssues((prev) =>
+      prev.map((iss) =>
+        iss.id === issueId ? { ...iss, status: targetStatus, order: newOrder } : iss
+      )
+    );
+
+    try {
+      await updateIssue(issueId, { status: targetStatus, order: newOrder });
     } catch (err) {
       console.error('Failed to update issue status on drop', err);
-      // Revert if error
+      loadData();
+    }
+  };
+
+  // Move issue 1 step up or down
+  const handleMoveIssue = async (issueId: string, direction: 'up' | 'down') => {
+    const issue = issues.find((i) => i.id === issueId);
+    if (!issue) return;
+
+    const colList = issues
+      .filter((i) => i.status === issue.status);
+
+    const currentIndex = colList.findIndex((i) => i.id === issueId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= colList.length) return;
+
+    const otherIssue = colList[targetIndex];
+
+    const currentOrder = issue.order ?? currentIndex;
+    const otherOrder = otherIssue.order ?? targetIndex;
+
+    const updates = [
+      { id: issue.id, order: otherOrder, status: issue.status },
+      { id: otherIssue.id, order: currentOrder, status: otherIssue.status },
+    ];
+
+    setIssues((prev) =>
+      prev.map((iss) => {
+        if (iss.id === issue.id) return { ...iss, order: otherOrder };
+        if (iss.id === otherIssue.id) return { ...iss, order: currentOrder };
+        return iss;
+      })
+    );
+
+    try {
+      await reorderIssues(updates);
+    } catch (err) {
+      console.error('Failed to move issue', err);
+      loadData();
+    }
+  };
+
+  // Sort entire board by severity number (1 to 5)
+  const handleSortAllBySeverity = async () => {
+    const SEVERITY_RANK: Record<string, number> = {
+      critical: 1,
+      major: 2,
+      medium: 3,
+      normal: 4,
+      minor: 5,
+    };
+
+    const updates: { id: string; order: number; status: IssueStatus }[] = [];
+    const newMap = new Map<string, IssueItem>();
+
+    (['open', 'in_progress', 'done'] as IssueStatus[]).forEach((status) => {
+      const colList = issues
+        .filter((i) => i.status === status)
+        .sort((a, b) => {
+          const rankA = SEVERITY_RANK[a.severity] ?? 99;
+          const rankB = SEVERITY_RANK[b.severity] ?? 99;
+          if (rankA !== rankB) return rankA - rankB;
+          return new Date(b.createdAt || b.updatedAt).getTime() - new Date(a.createdAt || a.updatedAt).getTime();
+        });
+
+      colList.forEach((iss, idx) => {
+        const updated = { ...iss, order: idx };
+        newMap.set(iss.id, updated);
+        updates.push({ id: iss.id, order: idx, status: iss.status });
+      });
+    });
+
+    setIssues((prev) =>
+      prev.map((iss) => (newMap.has(iss.id) ? newMap.get(iss.id)! : iss))
+    );
+
+    try {
+      await reorderIssues(updates);
+    } catch (err) {
+      console.error('Failed to sort by severity', err);
       loadData();
     }
   };
@@ -178,6 +346,18 @@ export default function DashboardPage() {
         </div>
 
         <div className="no-print flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleSortAllBySeverity}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
+            title={t('sortBySeverity')}
+          >
+            <ArrowUpDown className="h-4 w-4 text-muted-foreground" />
+            <span>{t('sortBySeverity')}</span>
+          </Button>
+
           <Button
             type="button"
             variant="outline"
@@ -333,7 +513,30 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden">
           {columns.map((col) => {
             const Icon = col.icon;
-            const columnIssues = filteredIssues.filter((i) => i.status === col.status);
+            const SEVERITY_RANK: Record<string, number> = {
+              critical: 1,
+              major: 2,
+              medium: 3,
+              normal: 4,
+              minor: 5,
+            };
+
+            const columnIssues = filteredIssues
+              .filter((i) => i.status === col.status)
+              .sort((a, b) => {
+                if (typeof a.order === 'number' && typeof b.order === 'number') {
+                  return a.order - b.order;
+                }
+                if (typeof a.order === 'number') return -1;
+                if (typeof b.order === 'number') return 1;
+
+                const rankA = SEVERITY_RANK[a.severity] ?? 99;
+                const rankB = SEVERITY_RANK[b.severity] ?? 99;
+                if (rankA !== rankB) return rankA - rankB;
+
+                return new Date(b.createdAt || b.updatedAt).getTime() - new Date(a.createdAt || a.updatedAt).getTime();
+              });
+
             const isDragOver = dragOverColumn === col.status;
 
             return (
@@ -359,7 +562,7 @@ export default function DashboardPage() {
 
                 {/* Cards Container */}
                 <div className="flex-1 space-y-3 min-h-[400px]">
-                  {columnIssues.map((issue) => {
+                  {columnIssues.map((issue, idx) => {
                     const linked = reports.find((r) => r.id === issue.linkedReportId);
                     return (
                       <IssueCard
@@ -368,6 +571,21 @@ export default function DashboardPage() {
                         linkedReport={linked}
                         onClick={() => setSelectedIssue(issue)}
                         onDragStart={handleDragStart}
+                        onDragOverCard={handleCardDragOver}
+                        onDragLeaveCard={handleCardDragLeave}
+                        onDropOnCard={handleDropOnCard}
+                        isDragOverTarget={dragOverIssueId === issue.id}
+                        dropPosition={dragOverIssueId === issue.id ? dropPosition : null}
+                        canMoveUp={idx > 0}
+                        canMoveDown={idx < columnIssues.length - 1}
+                        onMoveUp={(e) => {
+                          e.stopPropagation();
+                          handleMoveIssue(issue.id, 'up');
+                        }}
+                        onMoveDown={(e) => {
+                          e.stopPropagation();
+                          handleMoveIssue(issue.id, 'down');
+                        }}
                       />
                     );
                   })}
