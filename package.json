@@ -9,9 +9,19 @@
     "start": "next start",
     "lint": "next lint",
     "deploy": "npm run build && wrangler deploy",
-    "preview": "opennextjs-cloudflare preview"
+    "preview": "opennextjs-cloudflare preview",
+    "test": "node scripts/test-runner.mjs",
+    "test:grid": "tsx scripts/tests/test-phase4-grid.ts",
+    "test:hybrid-table": "tsx scripts/tests/test-hybrid-table.ts",
+    "test:regression": "node scripts/test-regression.mjs"
   },
   "dependencies": {
+    "@radix-ui/react-avatar": "^1.2.6",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-dropdown-menu": "^2.1.24",
+    "@radix-ui/react-label": "^2.1.15",
+    "@radix-ui/react-popover": "^1.1.23",
+    "@radix-ui/react-select": "^2.3.7",
     "@radix-ui/react-tabs": "^1.1.21",
     "@radix-ui/react-toggle": "^1.1.18",
     "@radix-ui/react-toggle-group": "^1.1.19",
@@ -45,8 +55,11 @@
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "autoprefixer": "^10.4.20",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.15",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.11",
+    "tsx": "^4.23.13",
     "typescript": "^5.6.2",
     "wrangler": "^3.114.17"
   }

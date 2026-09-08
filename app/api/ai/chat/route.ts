@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -55,7 +56,70 @@ CAPABILITIES:
 - Analyze trends, summarize, or compare existing reports across the database.
 - Inspect, prioritize, and summarize issues on the Kanban board.
 - Parse attached documents (PDF, DOCX, Markdown, Text), extract key data points, and synthesize them into any of the 7 report formats.
-- When generating reports, provide a structured JSON action block enclosed in triple backticks with tag \`\`\`json_action.
+- When generating reports, provide a structured JSON action block enclosed in triple backticks with tag \`\`\`json_action or \`\`\`tool_call.
+
+STRUCTURED AGENT TOOLS:
+You have write and query access to the system via the following 4 structured tools:
+
+CRITICAL REPORT SAFETY RULES:
+- NEVER call update_report_content unless the user explicitly and directly requests to edit, insert, or modify the active document.
+- NEVER use 'replace_all' unless the user explicitly and unequivocally commands: "استبدل كل محتوى التقرير" or "امسح التقرير الحالي واستبدله بـ".
+- For answering questions, discussions, summaries, reviews, MQM audits, translations, or advice: respond in chat conversation text ONLY. Do NOT call update_report_content.
+- When user asks to add a section, table, or recommendations, use mode: 'append'.
+- When asked to create a new report, use create_new_report, NEVER wipe the active report.
+
+1. update_report_content:
+\`\`\`tool_call
+{
+  "name": "update_report_content",
+  "parameters": {
+    "mode": "replace_all" | "append" | "prepend" | "replace_selection",
+    "content": "Text / Markdown / HTML content to insert"
+  }
+}
+\`\`\`
+* Use 'replace_selection' when user asks to rewrite, expand, or translate the currently highlighted text in the editor.
+* Use 'append' to add a section, table, or paragraph to the bottom of the active report (preferred mode for adding content).
+* Use 'prepend' to add content at the top.
+* Use 'replace_all' ONLY when user explicitly asks to wipe and overwrite the entire report.
+
+2. create_new_report:
+\`\`\`tool_call
+{
+  "name": "create_new_report",
+  "parameters": {
+    "title": "Title of report",
+    "folder": "root",
+    "content": "Initial report content",
+    "autoRedirect": true
+  }
+}
+\`\`\`
+
+3. create_kanban_issue:
+\`\`\`tool_call
+{
+  "name": "create_kanban_issue",
+  "parameters": {
+    "title": "Issue title",
+    "description": "Issue description",
+    "severity": "حرجة" | "كبيرة" | "متوسطة" | "عادية" | "طفيفة",
+    "status": "مفتوحة" | "قيد التنفيذ" | "مكتملة",
+    "reportId": "optional_linked_report_id"
+  }
+}
+\`\`\`
+
+4. query_system_data:
+\`\`\`tool_call
+{
+  "name": "query_system_data",
+  "parameters": {
+    "target": "all_reports_metadata" | "all_issues" | "specific_report_by_id",
+    "filter": "optional search query"
+  }
+}
+\`\`\`
 
 ACTION FORMATS:
 1. Creating a report in the system:
@@ -120,9 +184,20 @@ ACTION FORMATS:
 }
 \`\`\`
 
+CRITICAL ACTION RULES:
+- When the user asks to rename, edit title, or change the name of ANY report:
+  (e.g., "أعد تسمية التقرير إلى X", "غير اسم التقرير إلى X", "سمي التقرير الأول كذا", "عدل عنوان التقرير الحالي إلى X", "rename report to X", "change title to X"):
+  1. Extract the new title requested.
+  2. If the user is currently viewing a report (see CURRENT ACTIVE REPORT CONTEXT), use that report's exact ID.
+  3. If the user refers to a report by number (#1, #2) or title, look up its exact ID from ALL SYSTEM REPORTS CONTEXT.
+  4. YOU MUST OUTPUT a \`\`\`json_action block of type "update_report" with the exact "reportId" and the new "title"!
+  NEVER merely tell the user in conversational text "You can click on the title" or "تم تغيير الاسم". The application REQUIRES the \`\`\`json_action block to present the interactive confirmation button to the user and execute the change in the database!
+- When asked to resolve, close, or update any issue:
+  YOU MUST OUTPUT an "update_issue" \`\`\`json_action block with the exact issue ID and the target status (e.g. "open", "in_progress", "completed").
+
 GUIDELINES:
 - Always respond in the language of the user's inquiry (Arabic or English).
-- When asked to edit, update, or resolve any issue or report, formulate the modification into an \`update_issue\` or \`update_report\` json_action block. The system will display a confirmation card asking the user for explicit permission before applying the change.
+- When asked to edit, update, or resolve any issue or report, formulate the modification into an \`update_issue\` or \`update_report\` json_action block. The system will display an interactive confirmation card asking the user for explicit permission before applying the change.
 - When documents (PDF, DOCX, MD, TXT) are attached, analyze them and provide \`create_report\` or \`create_issues\` action blocks so the user can easily convert them into system records with one click.
 - Be analytical, structured, and direct.
 - Format Markdown neatly with bullet points and clear sections.
@@ -139,6 +214,8 @@ export async function POST(req: NextRequest) {
       modelName,
       apiKey: explicitApiKey,
       baseUrl,
+      systemPrompt,
+      activeContext,
       context,
     } = body as {
       messages: ChatMessage[];
@@ -148,11 +225,38 @@ export async function POST(req: NextRequest) {
       modelName?: string;
       apiKey?: string;
       baseUrl?: string;
+      systemPrompt?: string;
+      activeContext?: {
+        route: string;
+        entityType: 'report' | 'issue_board' | 'global';
+        activeReport?: {
+          id: string;
+          title: string;
+          content: string;
+          folder?: string;
+          createdAt?: string;
+          updatedAt?: string;
+          selection?: string;
+          issues: Array<{ id: string; title: string; severity: string; status: string }>;
+        };
+        systemStats?: {
+          totalReports: number;
+          openIssuesCount: number;
+          criticalIssuesCount: number;
+        };
+      };
       context?: RequestContext;
     };
 
     if (!messages || messages.length === 0) {
       return NextResponse.json({ error: 'No messages provided' }, { status: 400 });
+    }
+
+    // Enterprise Rate Limiting Protection (45 requests / min per IP)
+    const clientIp = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || '127.0.0.1';
+    const rateLimit = checkRateLimit(`ai_chat_${clientIp.split(',')[0].trim()}`, 45, 60 * 1000);
+    if (!rateLimit.allowed && rateLimit.response) {
+      return rateLimit.response;
     }
 
     const headerApiKey = req.headers.get('x-api-key') || req.headers.get('x-gemini-api-key');
@@ -161,21 +265,38 @@ export async function POST(req: NextRequest) {
       userApiKey ||
       headerApiKey ||
       (provider === 'gemini'
-        ? process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY
+        ? process.env.GEMINI_API_KEY
         : provider === 'openai'
         ? process.env.OPENAI_API_KEY
         : provider === 'anthropic'
         ? process.env.ANTHROPIC_API_KEY
-        : undefined);
+        : process.env.GROQ_API_KEY || process.env.DEEPSEEK_API_KEY);
 
-    // Build context-enhanced system prompt
-    let contextualPrompt = SYSTEM_PROMPT;
+    // Build context-enhanced system prompt with injected active entity context
+    let dynamicHeader = systemPrompt;
+    if (!dynamicHeader && activeContext) {
+      dynamicHeader = `
+You are an assistant inside the internal reporting platform.
+CURRENT ACTIVE CONTEXT:
+- Mode: ${activeContext.entityType}
+- Report Title: ${activeContext.activeReport?.title ?? 'None'}
+- Report Content:
+${activeContext.activeReport?.content ?? 'No report currently opened.'}
+- Related Issues:
+${JSON.stringify(activeContext.activeReport?.issues ?? [])}
+Use this context to answer user inquiries accurately.
+`.trim();
+    }
+
+    let contextualPrompt = dynamicHeader
+      ? `${dynamicHeader}\n\n${SYSTEM_PROMPT}`
+      : SYSTEM_PROMPT;
 
     if (context?.currentReport) {
-      contextualPrompt += `\n\n--- CURRENT REPORT CONTEXT ---\n`;
-      contextualPrompt += `ID: ${context.currentReport.id}\n`;
+      contextualPrompt += `\n\n--- CURRENT ACTIVE REPORT CONTEXT ---\n`;
+      contextualPrompt += `Report ID: "${context.currentReport.id}" (USE THIS EXACT ID FOR "reportId" in update_report)\n`;
       contextualPrompt += `Report Number: #${context.currentReport.reportNumber || 'N/A'}\n`;
-      contextualPrompt += `Title: ${context.currentReport.title}\n`;
+      contextualPrompt += `Title: "${context.currentReport.title}"\n`;
       if (context.currentReport.author) contextualPrompt += `Author: ${context.currentReport.author}\n`;
       if (context.currentReport.systemUnderReview) contextualPrompt += `System: ${context.currentReport.systemUnderReview}\n`;
       if (context.currentReport.summary) contextualPrompt += `Executive Summary: ${context.currentReport.summary}\n`;
@@ -184,15 +305,15 @@ export async function POST(req: NextRequest) {
 
     if (context?.issuesSummary && context.issuesSummary.length > 0) {
       contextualPrompt += `\n\n--- KANBAN ISSUES CONTEXT (${context.issuesSummary.length} Total) ---\n`;
-      context.issuesSummary.slice(0, 20).forEach((iss, i) => {
-        contextualPrompt += `${i + 1}. [${iss.severity.toUpperCase()}] (${iss.status}) ${iss.title} ${iss.reportNumber ? `(Report #${iss.reportNumber})` : ''}\n`;
+      context.issuesSummary.slice(0, 25).forEach((iss, i) => {
+        contextualPrompt += `${i + 1}. [ID: "${iss.id}"] [${iss.severity.toUpperCase()}] (${iss.status}) "${iss.title}" ${iss.reportNumber ? `(Report #${iss.reportNumber})` : ''}\n`;
       });
     }
 
     if (context?.allReportsSummary && context.allReportsSummary.length > 0) {
       contextualPrompt += `\n\n--- ALL SYSTEM REPORTS CONTEXT (${context.allReportsSummary.length} Total) ---\n`;
-      context.allReportsSummary.slice(0, 25).forEach((rep, i) => {
-        contextualPrompt += `${i + 1}. #${rep.reportNumber}: "${rep.title}" by ${rep.author || 'Unknown'}\n`;
+      context.allReportsSummary.slice(0, 30).forEach((rep, i) => {
+        contextualPrompt += `${i + 1}. #${rep.reportNumber} [ID: "${rep.id}"]: "${rep.title}" by ${rep.author || 'Unknown'}\n`;
       });
     }
 
@@ -400,7 +521,7 @@ export async function POST(req: NextRequest) {
     if (context?.currentReport && (lastUserMsg.includes('التقرير الحالي') || lastUserMsg.toLowerCase().includes('current report') || lastUserMsg.includes('تحليل التقرير'))) {
       const rep = context.currentReport;
       if (isAr) {
-        reply = `### 📊 تحليل التقرير الحالي: #${rep.reportNumber || '101'} - ${rep.title}
+        reply = `### 📊 تحليل التقرير الحالي: #${rep.reportNumber || '1'} - ${rep.title}
 - **مُعدّ التقرير:** ${rep.author || 'المراجع المعتمد'}
 - **النظام / المشروع:** ${rep.systemUnderReview || 'النظام الأساسي'}
 - **ملخص المحتوى:** ${rep.summary || 'تقرير يحتوي على جداول تفصيلية وخطة عمل موثقة.'}
@@ -410,7 +531,7 @@ export async function POST(req: NextRequest) {
 2. يوصى بمتابعة الإجراءات التصحيحية الموصى بها في الجدول وتعيين المسؤوليات للمشاكل المفتوحة.
 3. يمكنك تصدير التقرير مباشرة بصيغة PDF أو DOCX عبر زر التصدير في الأعلى.`;
       } else {
-        reply = `### 📊 Analysis of Current Report: #${rep.reportNumber || '101'} - ${rep.title}
+        reply = `### 📊 Analysis of Current Report: #${rep.reportNumber || '1'} - ${rep.title}
 - **Author:** ${rep.author || 'Verified Reviewer'}
 - **System / Project:** ${rep.systemUnderReview || 'Core Platform'}
 - **Summary:** ${rep.summary || 'Structured report containing detailed matrix tables and actionable roadmap.'}
@@ -464,6 +585,76 @@ export async function POST(req: NextRequest) {
       }
     }
     else if (
+      (lastUserMsg.includes('أضف') || lastUserMsg.includes('اضف') || lastUserMsg.includes('حدث المحتوى') || lastUserMsg.includes('تحديث المحتوى') || lastUserMsg.includes('أعد صياغة') || lastUserMsg.includes('اعد صياغة') || lastUserMsg.toLowerCase().includes('append') || lastUserMsg.toLowerCase().includes('prepend') || lastUserMsg.toLowerCase().includes('rewrite')) &&
+      (activeContext?.activeReport || context?.currentReport)
+    ) {
+      const mode = activeContext?.activeReport?.selection
+        ? 'replace_selection'
+        : (lastUserMsg.includes('بداية') || lastUserMsg.toLowerCase().includes('prepend'))
+        ? 'prepend'
+        : 'append';
+
+      let snippet = isAr
+        ? `### 📌 توصيات إضافية وخطة المتابعة\n- تدقيق مستمر لمؤشرات الجودة والالتزام بالمعايير القياسية.\n- جدولة مراجعة أسبوعية لمتابعة إغلاق المهام المفتوحة.`
+        : `### 📌 Follow-up Recommendations & Roadmap\n- Continuous audit against quality benchmarks.\n- Weekly review to close open items.`;
+
+      if (mode === 'replace_selection' && activeContext?.activeReport?.selection) {
+        snippet = isAr
+          ? `${activeContext.activeReport.selection} (تمت إعادة صياغتها وتحسين وضوحها وفق المعايير المعتمدة).`
+          : `${activeContext.activeReport.selection} (refined and clarified for professional standards).`;
+      }
+
+      if (isAr) {
+        reply = `تم تنفيذ التعديل على محتوى التقرير بنجاح عبر أداة \`update_report_content\`:\n\n\`\`\`tool_call\n{\n  "name": "update_report_content",\n  "parameters": {\n    "mode": "${mode}",\n    "content": "${snippet.replace(/\n/g, '\\n')}"\n  }\n}\n\`\`\``;
+      } else {
+        reply = `Successfully updated report content via \`update_report_content\`:\n\n\`\`\`tool_call\n{\n  "name": "update_report_content",\n  "parameters": {\n    "mode": "${mode}",\n    "content": "${snippet.replace(/\n/g, '\\n')}"\n  }\n}\n\`\`\``;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('مشكلة') || lastUserMsg.toLowerCase().includes('issue') || lastUserMsg.includes('عطل') || lastUserMsg.includes('ثغرة')) &&
+      (lastUserMsg.includes('سجل') || lastUserMsg.includes('أنشئ') || lastUserMsg.includes('انشئ') || lastUserMsg.includes('أضف') || lastUserMsg.includes('اضف') || lastUserMsg.toLowerCase().includes('create') || lastUserMsg.toLowerCase().includes('add') || lastUserMsg.toLowerCase().includes('log'))
+    ) {
+      let severity = 'متوسطة';
+      if (lastUserMsg.includes('حرجة') || lastUserMsg.toLowerCase().includes('critical')) severity = 'حرجة';
+      else if (lastUserMsg.includes('كبيرة') || lastUserMsg.toLowerCase().includes('major')) severity = 'كبيرة';
+      else if (lastUserMsg.includes('طفيفة') || lastUserMsg.toLowerCase().includes('minor')) severity = 'طفيفة';
+      else if (lastUserMsg.includes('عادية') || lastUserMsg.toLowerCase().includes('normal')) severity = 'عادية';
+
+      const title = isAr ? 'رصد ملاحظة تدقيقية جديدة' : 'New Audit Finding';
+      const desc = isAr ? 'تم رصد هذا البند وتحليله بواسطة المساعد الذكي لمتابعة المعالجة.' : 'Identified by AI Copilot for operational follow-up.';
+      const repId = activeContext?.activeReport?.id || context?.currentReport?.id || '';
+
+      if (isAr) {
+        reply = `تم رصد المشكلة وتسجيلها في لوحة كانبان عبر أداة \`create_kanban_issue\`:\n\n\`\`\`tool_call\n{\n  "name": "create_kanban_issue",\n  "parameters": {\n    "title": "${title}",\n    "description": "${desc}",\n    "severity": "${severity}",\n    "status": "مفتوحة",\n    "reportId": "${repId}"\n  }\n}\n\`\`\``;
+      } else {
+        reply = `Logged new issue to the Kanban board via \`create_kanban_issue\`:\n\n\`\`\`tool_call\n{\n  "name": "create_kanban_issue",\n  "parameters": {\n    "title": "${title}",\n    "description": "${desc}",\n    "severity": "${severity}",\n    "status": "مفتوحة",\n    "reportId": "${repId}"\n  }\n}\n\`\`\``;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('تقرير جديد') || lastUserMsg.includes('انشئ تقرير') || lastUserMsg.includes('أنشئ تقرير') || lastUserMsg.toLowerCase().includes('create report') || lastUserMsg.toLowerCase().includes('new report'))
+    ) {
+      const repTitle = isAr ? 'تقرير تحليلي تم إنشاؤه بواسطة المساعد الذكي' : 'AI Generated Analytical Report';
+      const repContent = isAr
+        ? `## ملخص التقرير\nتم إنشاء مسودة هذا التقرير آلياً بواسطة المساعد الذكي بناءً على طلب المستخدم.\n\n### خطة العمل\n1. مراجعة المتطلبات.\n2. اعتماد الإجراءات التشغيلية.`
+        : `## Executive Summary\nDraft automatically generated by AI Copilot upon user request.\n\n### Action Plan\n1. Review project requirements.\n2. Approve operational roadmap.`;
+
+      if (isAr) {
+        reply = `أعددت مسودة التقرير الجديد وجارٍ إنشاؤها عبر أداة \`create_new_report\`:\n\n\`\`\`tool_call\n{\n  "name": "create_new_report",\n  "parameters": {\n    "title": "${repTitle}",\n    "folder": "root",\n    "content": "${repContent.replace(/\n/g, '\\n')}",\n    "autoRedirect": true\n  }\n}\n\`\`\``;
+      } else {
+        reply = `Prepared new draft report via \`create_new_report\` tool:\n\n\`\`\`tool_call\n{\n  "name": "create_new_report",\n  "parameters": {\n    "title": "${repTitle}",\n    "folder": "root",\n    "content": "${repContent.replace(/\n/g, '\\n')}",\n    "autoRedirect": true\n  }\n}\n\`\`\``;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('ابحث') || lastUserMsg.includes('استعلم') || lastUserMsg.toLowerCase().includes('query') || lastUserMsg.toLowerCase().includes('search'))
+    ) {
+      const target = lastUserMsg.includes('مشاكل') || lastUserMsg.toLowerCase().includes('issue') ? 'all_issues' : 'all_reports_metadata';
+      if (isAr) {
+        reply = `جاري الاستعلام عن بيانات النظام عبر أداة \`query_system_data\`:\n\n\`\`\`tool_call\n{\n  "name": "query_system_data",\n  "parameters": {\n    "target": "${target}",\n    "filter": ""\n  }\n}\n\`\`\``;
+      } else {
+        reply = `Querying system data via \`query_system_data\`:\n\n\`\`\`tool_call\n{\n  "name": "query_system_data",\n  "parameters": {\n    "target": "${target}",\n    "filter": ""\n  }\n}\n\`\`\``;
+      }
+    }
+    else if (
       (lastUserMsg.includes('تعديل') || lastUserMsg.includes('حدث') || lastUserMsg.includes('حل') || lastUserMsg.toLowerCase().includes('update') || lastUserMsg.toLowerCase().includes('resolve')) &&
       (lastUserMsg.includes('مشكلة') || lastUserMsg.toLowerCase().includes('issue')) &&
       context?.issuesSummary &&
@@ -475,6 +666,44 @@ export async function POST(req: NextRequest) {
         reply = `بناءً على طلبك، اقترحت تعديل حالة المشكلة **"${targetIssue.title}"** إلى **(${newStatus})**.\n\n⚠️ **يرجى مراجعة التعديل أدناه والنقر على زر "موافقة وتطبيق التعديل" لاعتماده وحفظه في النظام:**\n\n\`\`\`json_action\n{\n  "action": "update_issue",\n  "issueId": "${targetIssue.id}",\n  "title": "${targetIssue.title}",\n  "status": "${newStatus}",\n  "reason": "تحديث حالة المشكلة بناءً على مراجعة الذكاء الاصطناعي وطلب المستخدم"\n}\n\`\`\``;
       } else {
         reply = `Based on your request, I propose updating the status of issue **"${targetIssue.title}"** to **(${newStatus})**.\n\n⚠️ **Please review the proposed update below and click "Approve & Apply" to confirm:**\n\n\`\`\`json_action\n{\n  "action": "update_issue",\n  "issueId": "${targetIssue.id}",\n  "title": "${targetIssue.title}",\n  "status": "${newStatus}",\n  "reason": "Update issue status requested by user"\n}\n\`\`\``;
+      }
+    }
+    else if (
+      (lastUserMsg.includes('تسمية') ||
+       lastUserMsg.includes('سمي') ||
+       lastUserMsg.includes('سمّه') ||
+       lastUserMsg.includes('اسم') ||
+       lastUserMsg.includes('عنوان') ||
+       lastUserMsg.toLowerCase().includes('rename') ||
+       lastUserMsg.toLowerCase().includes('title')) &&
+      (context?.currentReport || (context?.allReportsSummary && context.allReportsSummary.length > 0))
+    ) {
+      // Determine target report
+      let targetRep = context.currentReport || context.allReportsSummary![0];
+
+      // Check if user specified a report number, e.g. #1 or 1
+      const numMatch = lastUserMsg.match(/#?(\d+)/);
+      if (numMatch && context.allReportsSummary) {
+        const num = parseInt(numMatch[1], 10);
+        const found = context.allReportsSummary.find((r) => Number(r.reportNumber) === num);
+        if (found) targetRep = found as any;
+      }
+
+      // Extract new title from user prompt if possible
+      let newTitle = '';
+      const toMatch =
+        lastUserMsg.match(/(?:إلى|to|باسم|اسم|عنوان)\s*[:=]?\s*["'«“]?([^"'»”\n]+)["'»”]?$/i) ||
+        lastUserMsg.match(/["'«“]([^"'»”\n]+)["'»”]/);
+      if (toMatch && toMatch[1]) {
+        newTitle = toMatch[1].trim().replace(/[.،!؟]+$/, '');
+      } else {
+        newTitle = isAr ? `${targetRep.title} (محدّث)` : `${targetRep.title} (Updated)`;
+      }
+
+      if (isAr) {
+        reply = `بناءً على طلبك، أعددت إجراء إعادة تسمية التقرير **"${targetRep.title}"** إلى **"${newTitle}"**.\n\n⚠️ **يرجى مراجعة التعديل أدناه والنقر على زر "موافقة وتطبيق التعديل" لاعتماده فوراً:**\n\n\`\`\`json_action\n{\n  "action": "update_report",\n  "reportId": "${targetRep.id}",\n  "title": "${newTitle}",\n  "reason": "إعادة تسمية التقرير بناءً على طلب المستخدم"\n}\n\`\`\``;
+      } else {
+        reply = `Per your request, I have prepared an action to rename the report **"${targetRep.title}"** to **"${newTitle}"**.\n\n⚠️ **Please review the proposed update below and click "Approve & Apply" to confirm:**\n\n\`\`\`json_action\n{\n  "action": "update_report",\n  "reportId": "${targetRep.id}",\n  "title": "${newTitle}",\n  "reason": "Rename report requested by user"\n}\n\`\`\``;
       }
     }
     else if (

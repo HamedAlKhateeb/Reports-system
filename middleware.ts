@@ -4,7 +4,7 @@ import type { NextRequest } from 'next/server';
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Static files and public API routes
+  // Static files and public assets
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon.ico') ||
@@ -19,10 +19,20 @@ export function middleware(request: NextRequest) {
   // Public paths
   const isPublicPath = pathname === '/login';
 
+  // API paths: ensure Cache-Control: private, no-store
+  if (pathname.startsWith('/api/')) {
+    const response = NextResponse.next();
+    response.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    response.headers.set('Pragma', 'no-cache');
+    response.headers.set('Expires', '0');
+    return response;
+  }
+
   // Protected paths
   const isProtectedPath =
     pathname.startsWith('/reports') ||
     pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/issues') ||
     pathname.startsWith('/settings') ||
     pathname === '/';
 
@@ -30,15 +40,25 @@ export function middleware(request: NextRequest) {
   if (isProtectedPath && !session) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('redirect', pathname);
-    return NextResponse.redirect(loginUrl);
+    const redirectResponse = NextResponse.redirect(loginUrl);
+    redirectResponse.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    redirectResponse.headers.set('Pragma', 'no-cache');
+    return redirectResponse;
   }
 
   // If already logged in and visiting /login, redirect to /reports
   if (isPublicPath && session) {
-    return NextResponse.redirect(new URL('/reports', request.url));
+    const redirectResponse = NextResponse.redirect(new URL('/reports', request.url));
+    redirectResponse.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    redirectResponse.headers.set('Pragma', 'no-cache');
+    return redirectResponse;
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  response.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+  response.headers.set('Pragma', 'no-cache');
+  response.headers.set('Expires', '0');
+  return response;
 }
 
 export const config = {

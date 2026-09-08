@@ -1,11 +1,17 @@
 import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
+import { getTablesByReportId } from './db';
+import { evaluateFormula } from './grid/formula-parser';
 import JSZip from 'jszip';
 
 /**
  * Converts TipTap JSON content to clean Markdown string
  */
-export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
+export function tipTapJsonToMarkdown(
+  json: any,
+  report: ReportItem,
+  tablesMap?: Record<string, any>
+): string {
   const lang = report.language;
   const isAr = lang === 'ar';
   const lines: string[] = [];
@@ -25,7 +31,25 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
     lines.push(`| **${lang === 'ar' ? 'المنصب الوظيفي' : 'Job Title'}** | ${report.authorTitle} |`);
   }
   if (report.organization) {
-    lines.push(`| **${lang === 'ar' ? 'الجهة / القسم' : 'Organization'}** | ${report.organization} |`);
+    lines.push(`| **${lang === 'ar' ? 'الجهة / المنظمة' : 'Organization'}** | ${report.organization} |`);
+  }
+  if (report.department) {
+    lines.push(`| **${lang === 'ar' ? 'القسم / الإدارة' : 'Department'}** | ${report.department} |`);
+  }
+  if (report.reviewerName) {
+    lines.push(`| **${lang === 'ar' ? 'المراجع / المعتمد' : 'Reviewer / Approver'}** | ${report.reviewerName}${report.reviewerTitle ? ` (${report.reviewerTitle})` : ''} |`);
+  }
+  if (report.email) {
+    lines.push(`| **${lang === 'ar' ? 'البريد الرسمي' : 'Official Email'}** | ${report.email} |`);
+  }
+  if (report.website) {
+    lines.push(`| **${lang === 'ar' ? 'الموقع الإلكتروني' : 'Website'}** | ${report.website} |`);
+  }
+  if (report.projectUrl) {
+    lines.push(`| **${lang === 'ar' ? 'رابط المشروع' : 'Project URL'}** | ${report.projectUrl} |`);
+  }
+  if (report.repoUrl) {
+    lines.push(`| **${lang === 'ar' ? 'مستودع الكود' : 'Repository URL'}** | ${report.repoUrl} |`);
   }
   lines.push(`| **${t('systemUnderReview', lang)}** | ${report.systemUnderReview || '-'} |`);
   lines.push(`| **${t('reportLanguage', lang)}** | ${lang === 'ar' ? 'العربية' : 'English'} |`);
@@ -150,6 +174,47 @@ export function tipTapJsonToMarkdown(json: any, report: ReportItem): string {
         return `${mdTableRows.join('\n')}\n\n`;
       }
 
+      case 'smartTable': {
+        const tableId = node.attrs?.tableId;
+        const tbl = tablesMap?.[tableId];
+        if (!tbl || !tbl.columns_data || tbl.columns_data.length === 0) return '';
+        const mdTableRows: string[] = [];
+
+        // Build evaluated values map so exported markdown shows computed
+        // results (e.g. 150) instead of raw formula strings (=C2+D2).
+        const evalMap: Record<string, unknown> = {};
+        (tbl.rows_data || []).forEach((row: any, rIdx: number) => {
+          tbl.columns_data.forEach((c: any) => {
+            evalMap[`${c.id}${rIdx + 1}`.toUpperCase()] = row[c.id] ?? '';
+          });
+        });
+        const displayValue = (raw: any): string => {
+          if (typeof raw === 'string' && raw.startsWith('=')) {
+            try {
+              const v = evaluateFormula(raw, evalMap);
+              return String(v ?? '');
+            } catch (err) {
+              console.error('Markdown export formula evaluation failed:', err);
+              return '#ERROR!';
+            }
+          }
+          return String(raw ?? '');
+        };
+
+        const colNames = tbl.columns_data.map((c: any) => (c.name || c.id).replace(/\|/g, '\\|'));
+        mdTableRows.push(`| ${colNames.join(' | ')} |`);
+        const divider = tbl.columns_data.map(() => (isAr ? '---:' : '---')).join(' | ');
+        mdTableRows.push(`| ${divider} |`);
+        (tbl.rows_data || []).forEach((row: any) => {
+          const cells = tbl.columns_data.map((c: any) => {
+            const val = displayValue(row[c.id]).replace(/\|/g, '\\|');
+            return val || ' ';
+          });
+          mdTableRows.push(`| ${cells.join(' | ')} |`);
+        });
+        return `${mdTableRows.join('\n')}\n\n`;
+      }
+
       default:
         if (node.content) {
           return node.content.map(processNode).join('');
@@ -176,8 +241,18 @@ export async function createMarkdownZip(
   report: ReportItem,
   images: ReportImageItem[]
 ): Promise<Blob> {
+  const tablesMap: Record<string, any> = {};
+  try {
+    const list = await getTablesByReportId(report.id);
+    for (const t of list) {
+      tablesMap[t.id] = t;
+    }
+  } catch (e) {
+    console.warn('Could not fetch tables for markdown export:', e);
+  }
+
   const zip = new JSZip();
-  const mdContent = tipTapJsonToMarkdown(report.contentJson, report);
+  const mdContent = tipTapJsonToMarkdown(report.contentJson, report, tablesMap);
   const lang = report.language;
 
   // Add the markdown file named after report title

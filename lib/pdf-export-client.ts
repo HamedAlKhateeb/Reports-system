@@ -1,19 +1,25 @@
 import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { formatWhatsAppUrl } from './contact-links';
+import { evaluateFormula } from './grid/formula-parser';
 
 /**
  * Converts TipTap JSON node to clean styled HTML for print/PDF
  */
-function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = []): string {
+function tipTapNodeToHtml(
+  node: any,
+  isAr: boolean,
+  images: ReportImageItem[] = [],
+  tablesMap: Record<string, any> = {}
+): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<p class="report-p">${content || '&nbsp;'}</p>`;
     }
 
@@ -49,27 +55,27 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<h${level} class="report-h${level}">${content}</h${level}>`;
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<ul class="report-ul">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<ol class="report-ol">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<li class="report-li">${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       return `<blockquote class="report-quote">${content}</blockquote>`;
     }
 
@@ -111,7 +117,7 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images)).join('');
+          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let extraClass = '';
@@ -139,9 +145,77 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
       `;
     }
 
+    case 'smartTable': {
+      const tableId = node.attrs?.tableId;
+      const tbl = tablesMap?.[tableId];
+      if (!tbl || !tbl.columns_data || tbl.columns_data.length === 0) return '';
+      const cells: Record<string, unknown> = {};
+      (tbl.rows_data || []).forEach((row: any, rIdx: number) => {
+        tbl.columns_data.forEach((col: any) => {
+          cells[`${col.id}${rIdx + 1}`.toUpperCase()] = row[col.id] ?? '';
+        });
+      });
+
+      const tableDir = tbl.direction || 'ltr';
+      const mergedList = tbl.merged_cells || [];
+      const totalWidth = tbl.columns_data.reduce((s: number, c: any) => s + (c.width || 140), 0);
+      const headerThs = tbl.columns_data
+        .map((col: any) => `<th class="report-cell" style="text-align: center; background-color: var(--theme-primary, #2E4034); color: #fff; width: ${Math.round(((col.width || 140) / Math.max(totalWidth, 1)) * 100)}%;">${col.name || col.id}</th>`)
+        .join('');
+
+      const bodyTrs = (tbl.rows_data || [])
+        .map((row: any, rIdx: number) => {
+          const rowNum = rIdx + 1;
+          const tds = tbl.columns_data
+            .map((col: any, colIdx: number) => {
+              const coord = `${col.id}${rowNum}`.toUpperCase();
+              const isCovered = mergedList.some((m: any) => m.end === coord && m.start !== coord);
+              if (isCovered) return '';
+              const merge = mergedList.find((m: any) => m.start === coord);
+              const colSpanAttr = merge?.colSpan && merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : '';
+              const rowSpanAttr = merge?.rowSpan && merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : '';
+              const widthStyle = !colSpanAttr
+                ? ` width: ${Math.round((((col.width || 140) as number) / Math.max(totalWidth, 1)) * 100)}%;`
+                : '';
+
+              const raw = row[col.id];
+              let val: unknown = raw;
+              if (typeof raw === 'string' && raw.startsWith('=')) {
+                try {
+                  val = evaluateFormula(raw, cells);
+                } catch (err) {
+                  console.error('PDF export formula evaluation failed at', coord, err);
+                  val = '#ERROR!';
+                }
+              }
+              const cellFormat = tbl.cell_formats?.[coord];
+              const align = cellFormat?.align || cellFormat?.horizontalAlign || (typeof val === 'number' ? 'right' : (typeof val === 'string' && /[\u0600-\u06FF]/.test(val) ? 'right' : 'left'));
+              const styleClasses = [
+                cellFormat?.bold ? 'font-weight: bold;' : '',
+                cellFormat?.italic ? 'font-style: italic;' : '',
+                cellFormat?.underline ? 'text-decoration: underline;' : '',
+              ].join(' ');
+
+              return `<td class="report-cell"${colSpanAttr}${rowSpanAttr} style="text-align: ${align};${widthStyle} ${styleClasses}">${val !== undefined && val !== null ? String(val) : ''}</td>`;
+            })
+            .join('');
+          return `<tr class="report-row">${tds}</tr>`;
+        })
+        .join('');
+
+      return `
+        <div class="table-wrapper" style="margin: 16px 0;">
+          <table class="report-table" dir="${tableDir}">
+            <thead><tr class="report-header-row">${headerThs}</tr></thead>
+            <tbody>${bodyTrs}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
     default:
       if (node.content) {
-        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images)).join('');
+        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
       }
       return '';
   }
@@ -150,7 +224,11 @@ function tipTapNodeToHtml(node: any, isAr: boolean, images: ReportImageItem[] = 
 /**
  * Generates the full standalone HTML page for printing to PDF
  */
-export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[] = []): string {
+export function buildPrintableHtml(
+  report: ReportItem,
+  images: ReportImageItem[] = [],
+  tables: any[] = []
+): string {
   const isAr = report.language === 'ar';
   const lang = report.language;
 
@@ -170,7 +248,50 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
   const theme = THEME_PALETTES[report.themeColor || 'olive'] || THEME_PALETTES.olive;
   const bg = BG_PALETTES[report.backgroundColor || 'white'] || BG_PALETTES.white;
 
-  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images);
+  // Extract all images already embedded in report content to prevent duplication in appendix
+  const embeddedImageIds = new Set<string>();
+  function traverseForEmbeddedImages(node: any) {
+    if (!node) return;
+    if (node.type === 'reportImage') {
+      if (node.attrs?.imageId) embeddedImageIds.add(String(node.attrs.imageId));
+      if (node.attrs?.src) embeddedImageIds.add(String(node.attrs.src));
+      if (node.attrs?.fileName) embeddedImageIds.add(String(node.attrs.fileName));
+      if (node.attrs?.sequenceNumber !== undefined) embeddedImageIds.add(`seq_${node.attrs.sequenceNumber}`);
+    }
+    if (node.content && Array.isArray(node.content)) {
+      node.content.forEach(traverseForEmbeddedImages);
+    }
+  }
+  traverseForEmbeddedImages(report.contentJson);
+
+  const unplacedImages = images.filter((img) => {
+    if (embeddedImageIds.has(img.id)) return false;
+    if (img.downloadUrl && embeddedImageIds.has(img.downloadUrl)) return false;
+    if (img.fileName && embeddedImageIds.has(img.fileName)) return false;
+    if (img.sequenceNumber !== undefined && embeddedImageIds.has(`seq_${img.sequenceNumber}`)) return false;
+    return true;
+  });
+
+  const tablesMap: Record<string, any> = {};
+  if (tables && tables.length > 0) {
+    for (const t of tables) {
+      tablesMap[t.id] = t;
+    }
+  } else if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('review_app_mock_tables');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const t of parsed) {
+            tablesMap[t.id] = t;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images, tablesMap);
   const formattedDate = new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US', {
     year: 'numeric',
     month: 'long',
@@ -574,9 +695,39 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
         <span class="meta-val">${report.authorTitle || '-'}</span>
       </div>
       <div class="meta-item">
-        <span class="meta-label">${isAr ? 'الجهة / القسم' : 'Organization'}:</span>
+        <span class="meta-label">${isAr ? 'الجهة / المنظمة' : 'Organization'}:</span>
         <span class="meta-val">${report.organization || '-'}</span>
       </div>
+      ${report.department ? `
+      <div class="meta-item">
+        <span class="meta-label">${isAr ? 'القسم / الإدارة' : 'Department'}:</span>
+        <span class="meta-val">${report.department}</span>
+      </div>
+      ` : ''}
+      ${report.reviewerName ? `
+      <div class="meta-item">
+        <span class="meta-label">${isAr ? 'المراجع / المعتمد' : 'Reviewer / Approver'}:</span>
+        <span class="meta-val">${report.reviewerName}${report.reviewerTitle ? ` (${report.reviewerTitle})` : ''}</span>
+      </div>
+      ` : ''}
+      ${report.email ? `
+      <div class="meta-item">
+        <span class="meta-label">${isAr ? 'البريد الرسمي' : 'Official Email'}:</span>
+        <span class="meta-val">${report.email}</span>
+      </div>
+      ` : ''}
+      ${report.website ? `
+      <div class="meta-item">
+        <span class="meta-label">${isAr ? 'الموقع الإلكتروني' : 'Website'}:</span>
+        <span class="meta-val">${report.website}</span>
+      </div>
+      ` : ''}
+      ${report.projectUrl ? `
+      <div class="meta-item">
+        <span class="meta-label">${isAr ? 'رابط المشروع' : 'Project URL'}:</span>
+        <span class="meta-val"><a href="${report.projectUrl}" target="_blank" style="color: inherit;">${report.projectUrl}</a></span>
+      </div>
+      ` : ''}
       ${report.customFields && report.customFields.length > 0 ? report.customFields.map(cf => `
       <div class="meta-item">
         <span class="meta-label">${cf.label || '-'}:</span>
@@ -620,6 +771,16 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
           <span class="signature-field-label">${isAr ? 'التاريخ' : 'Date'}:</span>
           <span>${formattedDate}</span>
         </div>
+        ${report.authorTitle ? `
+        <div class="signature-field">
+          <span class="signature-field-label">${isAr ? 'المنصب الوظيفي' : 'Job Title'}:</span>
+          <span>${report.authorTitle}</span>
+        </div>` : ''}
+        ${report.organization ? `
+        <div class="signature-field">
+          <span class="signature-field-label">${isAr ? 'الجهة / القسم' : 'Organization'}:</span>
+          <span>${report.organization}</span>
+        </div>` : ''}
         ${report.customFooterFields && report.customFooterFields.length > 0 ? report.customFooterFields.map(cff => `
         <div class="signature-field">
           <span class="signature-field-label">${cff.label || '-'}:</span>
@@ -632,14 +793,14 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
       </div>
     </section>
 
-    ${images && images.length > 0 ? `
-    <!-- Appendix: Screenshots & Attached Images -->
+    ${unplacedImages && unplacedImages.length > 0 ? `
+    <!-- Appendix: Screenshots & Attached Images (Unplaced Only) -->
     <section class="report-appendix-section" style="page-break-before: always; margin-top: 40px; padding-top: 20px;">
       <h2 class="report-h1" style="border-bottom: 2px solid #0f766e; padding-bottom: 8px; margin-bottom: 20px;">
         ${isAr ? 'ملحق الصور ولقطات الشاشة المعتمدة' : 'Appendix: Verified Images & Screenshots'}
       </h2>
       <div style="display: flex; flex-direction: column; gap: 28px;">
-        ${images.map((img) => `
+        ${unplacedImages.map((img) => `
           <figure class="report-image-figure" style="page-break-inside: avoid; text-align: center; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px;">
             <img src="${img.downloadUrl}" alt="${img.caption || img.fileName}" class="report-image" style="max-width: 95%; max-height: 520px; object-fit: contain; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08);" />
             <figcaption class="report-image-caption" style="margin-top: 12px; font-size: 12px; color: #475569; display: flex; justify-content: center; align-items: center; gap: 10px;">
@@ -699,13 +860,17 @@ export function buildPrintableHtml(report: ReportItem, images: ReportImageItem[]
 /**
  * Executes high-fidelity printing / saving as PDF directly in browser
  */
-export function printReportAsPdf(report: ReportItem, images: ReportImageItem[] = []): void {
+export function printReportAsPdf(
+  report: ReportItem,
+  images: ReportImageItem[] = [],
+  tables: any[] = []
+): void {
   const isAr = report.language === 'ar';
   const rawTitle = (report.title || (isAr ? 'تقرير أخطاء النظام' : 'Review Report')).trim();
   const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
   const filename = `${sanitizedTitle} - #${report.reportNumber}`;
 
-  const html = buildPrintableHtml(report, images);
+  const html = buildPrintableHtml(report, images, tables);
 
   // Try opening in popup window for clean isolated print experience
   const printWindow = window.open('', '_blank');

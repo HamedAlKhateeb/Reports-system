@@ -19,6 +19,8 @@ import {
 } from 'docx';
 import { ReportItem, ReportImageItem } from './types';
 import { t, DICTIONARY } from './i18n/dictionary';
+import { getTableById } from './db';
+import { evaluateFormula } from './grid/formula-parser';
 
 async function resolveImageBuffer(downloadUrl?: string): Promise<Buffer | null> {
   if (!downloadUrl) return null;
@@ -98,7 +100,13 @@ export async function buildDocxDocument(
     [t('reportNumber', lang), `#${report.reportNumber}`],
     [t('author', lang), report.author || '-'],
     ...(report.authorTitle ? [[isAr ? 'المنصب الوظيفي' : 'Job Title', report.authorTitle] as [string, string]] : []),
-    ...(report.organization ? [[isAr ? 'الجهة / القسم' : 'Organization', report.organization] as [string, string]] : []),
+    ...(report.reviewerName ? [[isAr ? 'المراجع / المعتمد' : 'Reviewer / Approver', `${report.reviewerName}${report.reviewerTitle ? ` (${report.reviewerTitle})` : ''}`] as [string, string]] : []),
+    ...(report.organization ? [[isAr ? 'الجهة / المنظمة' : 'Organization', report.organization] as [string, string]] : []),
+    ...(report.department ? [[isAr ? 'القسم / الإدارة' : 'Department', report.department] as [string, string]] : []),
+    ...(report.email ? [[isAr ? 'البريد الرسمي' : 'Official Email', report.email] as [string, string]] : []),
+    ...(report.website ? [[isAr ? 'الموقع الإلكتروني' : 'Website', report.website] as [string, string]] : []),
+    ...(report.projectUrl ? [[isAr ? 'رابط المشروع' : 'Project URL', report.projectUrl] as [string, string]] : []),
+    ...(report.repoUrl ? [[isAr ? 'مستودع الكود' : 'Repository URL', report.repoUrl] as [string, string]] : []),
     [t('systemUnderReview', lang), report.systemUnderReview || '-'],
     [t('reportLanguage', lang), isAr ? 'العربية' : 'English'],
     [t('createdAt', lang), new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')],
@@ -353,6 +361,151 @@ export async function buildDocxDocument(
           );
           children.push(new Paragraph({ text: '', spacing: { after: 200 }, alignment, bidirectional: isAr }));
         }
+      } else if (node.type === 'smartTable') {
+        const tableId = node.attrs?.tableId;
+        if (tableId) {
+          const tbl = await getTableById(tableId);
+          if (tbl && tbl.columns_data && tbl.columns_data.length > 0) {
+            const docxRows: TableRow[] = [];
+
+            // Column widths in DXA (1px ~= 15 dxa), normalized against a
+            // ~9360 dxa content width so proportions survive the export.
+            const totalPxWidth = tbl.columns_data.reduce(
+              (sum: number, c: any) => sum + (c.width || 140), 0
+            );
+            const scale = 9360 / Math.max(totalPxWidth, 1);
+            const columnWidths: number[] = tbl.columns_data.map(
+              (c: any) => Math.max(900, Math.round((c.width || 140) * scale))
+            );
+
+            const headerCells = tbl.columns_data.map((col: any, colIdx: number) => {
+              return new TableCell({
+                shading: { fill: theme.primary, type: ShadingType.CLEAR, color: 'auto' },
+                margins: { top: 120, bottom: 120, left: 140, right: 140 },
+                width: { size: columnWidths[colIdx], type: WidthType.DXA },
+                children: [
+                  new Paragraph({
+                    children: [
+                      makeRun(col.name || col.id, {
+                        color: 'ffffff',
+                        bold: true,
+                        size: 20,
+                      }),
+                    ],
+                    alignment: AlignmentType.CENTER,
+                    bidirectional: isAr,
+                  }),
+                ],
+              });
+            });
+
+            docxRows.push(
+              new TableRow({
+                children: headerCells,
+                tableHeader: true,
+                cantSplit: true,
+              })
+            );
+
+            const cellsMap: Record<string, unknown> = {};
+            (tbl.rows_data || []).forEach((r: any, rIdx: number) => {
+              tbl.columns_data.forEach((c: any) => {
+                cellsMap[`${c.id}${rIdx + 1}`.toUpperCase()] = r[c.id] ?? '';
+              });
+            });
+
+            const mergedList = tbl.merged_cells || [];
+            const isCoveredByMerge = (coord: string) =>
+              mergedList.some((m: any) => m.end === coord && m.start !== coord);
+            const findMerge = (coord: string) =>
+              mergedList.find((m: any) => m.start === coord);
+
+            (tbl.rows_data || []).forEach((row: any, rIdx: number) => {
+              const rowNum = rIdx + 1;
+              const rowCells = tbl.columns_data
+                .map((col: any, colIdx: number) => {
+                  const coord = `${col.id}${rowNum}`.toUpperCase();
+                  if (isCoveredByMerge(coord)) return null;
+                  const merge = findMerge(coord);
+                  const colSpan = merge?.colSpan && merge.colSpan > 1 ? merge.colSpan : 1;
+                  const rowSpan = merge?.rowSpan && merge.rowSpan > 1 ? merge.rowSpan : 1;
+
+                  const raw = row[col.id];
+                  let evaluated: unknown = raw;
+                  if (typeof raw === 'string' && raw.startsWith('=')) {
+                    try {
+                      evaluated = evaluateFormula(raw, cellsMap);
+                    } catch (err) {
+                      console.error('DOCX export formula evaluation failed at', coord, err);
+                      evaluated = '#ERROR!';
+                    }
+                  }
+                  const cellVal = evaluated !== undefined && evaluated !== null ? String(evaluated) : '';
+                  const cellFormat = tbl.cell_formats?.[coord];
+                  const cellAlign = cellFormat?.align || cellFormat?.horizontalAlign;
+                  const docxAlign = cellAlign === 'center'
+                    ? AlignmentType.CENTER
+                    : cellAlign === 'right'
+                    ? AlignmentType.RIGHT
+                    : cellAlign === 'left'
+                    ? AlignmentType.LEFT
+                    : cellAlign === 'justify'
+                    ? AlignmentType.JUSTIFIED
+                    : alignment;
+
+                  // Merged span widths combine the covered columns
+                  let spanWidth = columnWidths[colIdx] || 1200;
+                  if (colSpan > 1) {
+                    spanWidth = columnWidths
+                      .slice(colIdx, colIdx + colSpan)
+                      .reduce((a, b) => a + b, 0);
+                  }
+
+                  return new TableCell({
+                    columnSpan: colSpan > 1 ? colSpan : undefined,
+                    rowSpan: rowSpan > 1 ? rowSpan : undefined,
+                    width: { size: spanWidth, type: WidthType.DXA },
+                    shading: { fill: 'ffffff', type: ShadingType.CLEAR, color: 'auto' },
+                    margins: { top: 100, bottom: 100, left: 120, right: 120 },
+                    children: [
+                      new Paragraph({
+                        children: [
+                          makeRun(cellVal, {
+                            color: '000000',
+                            size: 20,
+                            bold: !!cellFormat?.bold,
+                            italics: !!cellFormat?.italic,
+                            underline: cellFormat?.underline ? {} : undefined,
+                          }),
+                        ],
+                        alignment: docxAlign,
+                        bidirectional: isAr,
+                      }),
+                    ],
+                  });
+                })
+                .filter(Boolean) as TableCell[];
+
+              docxRows.push(
+                new TableRow({
+                  children: rowCells,
+                  cantSplit: true,
+                })
+              );
+            });
+
+            const tableIsRtl = tbl.direction ? tbl.direction === 'rtl' : isAr;
+            children.push(
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                alignment,
+                visuallyRightToLeft: tableIsRtl,
+                rows: docxRows,
+              })
+            );
+            children.push(new Paragraph({ text: '', spacing: { after: 200 }, alignment, bidirectional: isAr }));
+          }
+        }
       } else if (node.type === 'reportImage') {
         const seq = node.attrs?.sequenceNumber || 1;
         const caption = node.attrs?.caption || '';
@@ -485,22 +638,55 @@ export async function buildDocxDocument(
                 }),
                 new Paragraph({
                   children: [
-                    makeRun(`${isAr ? 'المنصب الوظيفي' : 'Job Title'}: `, { bold: true, size: 20 }),
-                    makeRun(report.authorTitle || '-', { size: 20 }),
+                    makeRun(`${isAr ? 'التاريخ' : 'Date'}: `, { bold: true, size: 20 }),
+                    makeRun(new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US'), { size: 20 }),
                   ],
                   alignment,
                   bidirectional: isAr,
                   spacing: { after: 50 },
                 }),
-                new Paragraph({
-                  children: [
-                    makeRun(`${isAr ? 'الجهة / القسم' : 'Organization'}: `, { bold: true, size: 20 }),
-                    makeRun(report.organization || '-', { size: 20 }),
-                  ],
-                  alignment,
-                  bidirectional: isAr,
-                  spacing: { after: 100 },
-                }),
+                ...(report.authorTitle
+                  ? [
+                      new Paragraph({
+                        children: [
+                          makeRun(`${isAr ? 'المنصب الوظيفي' : 'Job Title'}: `, { bold: true, size: 20 }),
+                          makeRun(report.authorTitle, { size: 20 }),
+                        ],
+                        alignment,
+                        bidirectional: isAr,
+                        spacing: { after: 50 },
+                      }),
+                    ]
+                  : []),
+                ...(report.organization
+                  ? [
+                      new Paragraph({
+                        children: [
+                          makeRun(`${isAr ? 'الجهة / القسم' : 'Organization'}: `, { bold: true, size: 20 }),
+                          makeRun(report.organization, { size: 20 }),
+                        ],
+                        alignment,
+                        bidirectional: isAr,
+                        spacing: { after: 50 },
+                      }),
+                    ]
+                  : []),
+                ...(report.customFooterFields && report.customFooterFields.length > 0
+                  ? report.customFooterFields
+                      .filter((cff) => cff.label || cff.value)
+                      .map(
+                        (cff) =>
+                          new Paragraph({
+                            children: [
+                              makeRun(`${cff.label || '-'}: `, { bold: true, size: 20 }),
+                              makeRun(cff.value || '-', { size: 20 }),
+                            ],
+                            alignment,
+                            bidirectional: isAr,
+                            spacing: { after: 50 },
+                          })
+                      )
+                  : []),
                 new Paragraph({
                   children: [
                     makeRun(
@@ -517,7 +703,7 @@ export async function buildDocxDocument(
                   ],
                   alignment,
                   bidirectional: isAr,
-                  spacing: { before: 60, after: 60 },
+                  spacing: { before: 80, after: 60 },
                 }),
               ],
             }),
@@ -527,81 +713,31 @@ export async function buildDocxDocument(
     })
   );
 
-  // Official Sign-off & Endorsement Section
-  if (report.signatureData || (report.customFooterFields && report.customFooterFields.length > 0)) {
-    children.push(
-      new Paragraph({
-        children: [
-          makeRun(isAr ? 'المصادقة والتوقيع الرسمي' : 'Official Sign-off & Endorsement', {
-            bold: true,
-            size: 24,
-            color: theme.primary,
-          }),
-        ],
-        heading: HeadingLevel.HEADING_2,
-        alignment,
-        bidirectional: isAr,
-        spacing: { before: 300, after: 120 },
-      })
-    );
-
-    const signRows: [string, string][] = [
-      [t('author', lang), report.author || '-'],
-      [isAr ? 'التاريخ' : 'Date', new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US')],
-    ];
-
-    if (report.customFooterFields && report.customFooterFields.length > 0) {
-      for (const cff of report.customFooterFields) {
-        if (cff.label || cff.value) {
-          signRows.push([cff.label || '-', cff.value || '-']);
-        }
-      }
+  // Screenshots Appendix Section at the end only for UNPLACED images (not already embedded in contentJson)
+  const embeddedImageIds = new Set<string>();
+  function traverseForEmbeddedImages(node: any) {
+    if (!node) return;
+    if (node.type === 'reportImage') {
+      if (node.attrs?.imageId) embeddedImageIds.add(String(node.attrs.imageId));
+      if (node.attrs?.src) embeddedImageIds.add(String(node.attrs.src));
+      if (node.attrs?.fileName) embeddedImageIds.add(String(node.attrs.fileName));
+      if (node.attrs?.sequenceNumber !== undefined) embeddedImageIds.add(`seq_${node.attrs.sequenceNumber}`);
     }
-
-    if (report.signatureData) {
-      signRows.push([isAr ? 'التوقيع' : 'Signature', report.signatureData]);
+    if (node.content && Array.isArray(node.content)) {
+      node.content.forEach(traverseForEmbeddedImages);
     }
-
-    const signTable = new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      alignment,
-      visuallyRightToLeft: isAr,
-      rows: signRows.map(
-        ([k, v]) =>
-          new TableRow({
-            children: [
-              new TableCell({
-                width: { size: 30, type: WidthType.PERCENTAGE },
-                shading: { fill: 'f8fafc', type: ShadingType.CLEAR, color: 'auto' },
-                children: [
-                  new Paragraph({
-                    children: [makeRun(k, { bold: true, size: 20 })],
-                    alignment,
-                    bidirectional: isAr,
-                  }),
-                ],
-              }),
-              new TableCell({
-                width: { size: 70, type: WidthType.PERCENTAGE },
-                children: [
-                  new Paragraph({
-                    children: [makeRun(v, { size: 20, italics: k === (isAr ? 'التوقيع' : 'Signature') })],
-                    alignment,
-                    bidirectional: isAr,
-                  }),
-                ],
-              }),
-            ],
-          })
-      ),
-    });
-
-    children.push(signTable);
-    children.push(new Paragraph({ text: '', spacing: { after: 240 }, alignment, bidirectional: isAr }));
   }
+  traverseForEmbeddedImages(report.contentJson);
 
-  // Screenshots Appendix Section at the end if images exist (with PageBreak)
-  if (images.length > 0) {
+  const unplacedImages = images.filter((img) => {
+    if (embeddedImageIds.has(img.id)) return false;
+    if (img.downloadUrl && embeddedImageIds.has(img.downloadUrl)) return false;
+    if (img.fileName && embeddedImageIds.has(img.fileName)) return false;
+    if (img.sequenceNumber !== undefined && embeddedImageIds.has(`seq_${img.sequenceNumber}`)) return false;
+    return true;
+  });
+
+  if (unplacedImages.length > 0) {
     children.push(
       new Paragraph({
         children: [new PageBreak()],
@@ -626,7 +762,7 @@ export async function buildDocxDocument(
       })
     );
 
-    for (const img of images) {
+    for (const img of unplacedImages) {
       children.push(
         new Paragraph({
           children: [

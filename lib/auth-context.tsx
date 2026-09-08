@@ -408,9 +408,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInAsGuest = async () => {
     setError(null);
     setLoading(true);
+    const guestId = 'guest_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
     const guestUser: AuthUser = {
-      uid: 'guest_user_session',
-      email: 'guest@review-app.local',
+      uid: guestId,
+      email: `${guestId}@review-app.local`,
       displayName: 'Guest Reviewer',
       photoURL: null,
       emailVerified: true,
@@ -478,7 +479,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const clearError = () => setError(null);
 
-  const isGuest = user?.uid === 'guest_user_session' || user?.email === 'guest@review-app.local';
+  const isGuest = Boolean(
+    user?.uid?.startsWith('guest_') ||
+    user?.uid === 'guest_user_session' ||
+    user?.email === 'guest@review-app.local' ||
+    user?.email?.endsWith('@review-app.local')
+  );
 
   return (
     <AuthContext.Provider

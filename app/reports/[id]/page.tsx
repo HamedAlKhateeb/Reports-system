@@ -34,10 +34,57 @@ import {
   Trash2,
   Tag,
   Award,
+  Folder,
+  CheckCircle2,
+  Copy,
+  SlidersHorizontal,
+  ScanSearch,
+  RotateCcw,
+  LayoutDashboard,
+  AlertOctagon,
+  BarChart3,
+  Settings,
+  Scale,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
-import { getReportById, updateReport, getReportImages, getIssuesByReportId } from '@/lib/db';
-import { ReportItem, ReportImageItem, IssueItem, CustomFieldItem } from '@/lib/types';
+import {
+  getReportById,
+  updateReport,
+  getReportImages,
+  getIssuesByReportId,
+  createOrUpdateShareToken,
+  revokeShareToken,
+  getFolders,
+  getReportIssues,
+  getProjectById,
+  DEFAULT_PROJECT_ID,
+} from '@/lib/db';
+import {
+  extractCandidates,
+  CandidateScanResult,
+} from '@/lib/issue-intelligence-engine';
+import {
+  ReportItem,
+  ReportImageItem,
+  IssueItem,
+  CustomFieldItem,
+  FolderItem,
+  ProjectItem,
+  ReportIssueItem,
+} from '@/lib/types';
+import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
+import { AnalysisTable } from '@/components/reports/AnalysisTable';
+import { CandidateReviewModal } from '@/components/reports/CandidateReviewModal';
+import { DiscrepancyInspectorModal } from '@/components/reports/DiscrepancyInspectorModal';
+import {
+  CreateWidgetFromElementModal,
+  WidgetCreationSourceTarget,
+} from '@/components/reports/CreateWidgetFromElementModal';
+import { OverviewTab } from '@/components/reports/tabs/OverviewTab';
+import { ContentTab } from '@/components/reports/tabs/ContentTab';
+import { IssuesTab } from '@/components/reports/tabs/IssuesTab';
+import { AnalyticsTab } from '@/components/reports/tabs/AnalyticsTab';
+import { SettingsTab } from '@/components/reports/tabs/SettingsTab';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
@@ -47,11 +94,20 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table';
 import { saveCustomTemplate } from '@/lib/custom-templates';
 import { useAuth } from '@/lib/auth-context';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { ContactLinkItem, getReportContactLinks, formatWhatsAppUrl } from '@/lib/contact-links';
 import { cn } from '@/lib/utils';
+import { useAIContext } from '@/lib/ai-context';
 
 const TipTapEditor = dynamic(
   () => import('@/components/editor/TipTapEditor').then((m) => m.TipTapEditor),
@@ -71,7 +127,8 @@ export default function ReportDetailPage() {
   const reportId = params.id as string;
 
   const { lang, t } = useLanguage();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const { setActiveReportInfo, updateActiveReportContent } = useAIContext();
 
   const [report, setReport] = useState<ReportItem | null>(null);
   const [images, setImages] = useState<ReportImageItem[]>([]);
@@ -80,10 +137,33 @@ export default function ReportDetailPage() {
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
   const latestContentRef = useRef<any>(null);
+  const liveEditorRef = useRef<any>(null);
+
+  // Tab navigation state
+  const [activeMainTab, setActiveMainTab] = useState<'overview' | 'content' | 'issues' | 'analytics' | 'settings'>('overview');
+  const [activeIssueFilter, setActiveIssueFilter] = useState<{ severity?: string; status?: string; search?: string } | null>(null);
+
+  const handleNavigateTab = (tabKey: string, meta?: any) => {
+    const targetTab = tabKey === 'tables' ? 'content' : tabKey;
+    setActiveMainTab(targetTab as any);
+    if (targetTab === 'issues' && meta) {
+      setActiveIssueFilter(meta);
+    }
+  };
+
+  // Intelligence Modals & relations state
+  const [showCandidateModal, setShowCandidateModal] = useState(false);
+  const [candidateScanResult, setCandidateScanResult] = useState<CandidateScanResult | null>(null);
+  const [isScanningCandidates, setIsScanningCandidates] = useState(false);
+  const [showInspectorModal, setShowInspectorModal] = useState(false);
+  const [showCreateWidgetModal, setShowCreateWidgetModal] = useState(false);
+  const [widgetCreationSource, setWidgetCreationSource] = useState<WidgetCreationSourceTarget | null>(null);
+  const [reportIssues, setReportIssues] = useState<ReportIssueItem[]>([]);
+  const [project, setProject] = useState<ProjectItem | null>(null);
 
   // Metadata form states
   const [title, setTitle] = useState('');
-  const [reportNumber, setReportNumber] = useState<number | string>(101);
+  const [reportNumber, setReportNumber] = useState<number | string>(1);
   const [author, setAuthor] = useState('');
   const [authorTitle, setAuthorTitle] = useState('');
   const [organization, setOrganization] = useState('');
@@ -100,6 +180,7 @@ export default function ReportDetailPage() {
   const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
   const [customTemplateName, setCustomTemplateName] = useState('');
   const [customTemplateDesc, setCustomTemplateDesc] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
   const [templateSaveSuccess, setTemplateSaveSuccess] = useState(false);
 
   const handleConfirmSaveTemplate = () => {
@@ -128,13 +209,123 @@ export default function ReportDetailPage() {
     }, 1500);
   };
 
+  // Folder states
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+
+  // AI Pre-mutation Backup state
+  const [hasAiBackup, setHasAiBackup] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && reportId) {
+      const backup = localStorage.getItem(`report_ai_backup_${reportId}`);
+      setHasAiBackup(Boolean(backup));
+    }
+    const handleSnapshotSaved = (e: any) => {
+      if (e.detail?.reportId === reportId) {
+        setHasAiBackup(true);
+      }
+    };
+    window.addEventListener('ai-report-snapshot-saved', handleSnapshotSaved);
+    return () => window.removeEventListener('ai-report-snapshot-saved', handleSnapshotSaved);
+  }, [reportId]);
+
+  const handleRestoreAiBackup = () => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ai-revert-report-content', {
+          detail: {},
+        })
+      );
+    }
+  };
+
+  const handleScanCandidates = async () => {
+    if (!report) return;
+    try {
+      setIsScanningCandidates(true);
+      const scanResult = await extractCandidates(reportId, user?.uid);
+      setCandidateScanResult(scanResult);
+      setShowCandidateModal(true);
+    } catch (err: any) {
+      console.error('Candidate scan error:', err);
+      alert((lang === 'ar' ? 'فشل فحص المرشحين: ' : 'Candidate scan failed: ') + err.message);
+    } finally {
+      setIsScanningCandidates(false);
+    }
+  };
+
+  const handleOpenInspector = () => {
+    setShowInspectorModal(true);
+  };
+
+  const [showFolderModal, setShowFolderModal] = useState(false);
+
+  // Web Sharing states
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [sharingAction, setSharingAction] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+  const handleCreateShareLink = async () => {
+    if (!report) return;
+    try {
+      setSharingAction(true);
+      const token = await createOrUpdateShareToken(reportId);
+      setReport((prev) => (prev ? { ...prev, shareToken: token, isShared: true, sharedAt: new Date().toISOString() } : null));
+    } catch (err: any) {
+      console.error('Failed to create share link', err);
+      alert((lang === 'ar' ? 'فشل إنشاء رابط المشاركة: ' : 'Failed to create share link: ') + err.message);
+    } finally {
+      setSharingAction(false);
+    }
+  };
+
+  const handleRevokeShareLink = async () => {
+    if (!report) return;
+    if (!confirm(lang === 'ar' ? 'هل أنت متأكد من إلغاء المشاركة؟ سيتوقف الرابط القديم عن العمل فوراً.' : 'Are you sure you want to revoke this link? The current link will immediately stop working.')) {
+      return;
+    }
+    try {
+      setSharingAction(true);
+      await revokeShareToken(reportId);
+      setReport((prev) => (prev ? { ...prev, shareToken: null, isShared: false, sharedAt: null } : null));
+    } catch (err: any) {
+      console.error('Failed to revoke share link', err);
+      alert((lang === 'ar' ? 'فشل إلغاء المشاركة: ' : 'Failed to revoke share link: ') + err.message);
+    } finally {
+      setSharingAction(false);
+    }
+  };
+
+  const handleCopyShareLink = () => {
+    if (!report?.shareToken) return;
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const url = `${origin}/share/${report.shareToken}`;
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url);
+    }
+    setCopiedShareLink(true);
+    setTimeout(() => setCopiedShareLink(false), 2000);
+  };
+
+  const handleMoveReportToFolder = async (targetFolderId: string | null) => {
+    await updateReport(reportId, { folderId: targetFolderId });
+    setReport((prev) => (prev ? { ...prev, folderId: targetFolderId } : null));
+  };
+
   const loadReportData = useCallback(async () => {
+    if (authLoading) return;
     try {
       setLoading(true);
-      const [rep, imgs, issues] = await Promise.all([
-        getReportById(reportId),
+      if (!user) {
+        router.push('/reports');
+        return;
+      }
+      const [rep, imgs, issues, flds, rIssues] = await Promise.all([
+        getReportById(reportId, user.uid),
         getReportImages(reportId),
-        getIssuesByReportId(reportId),
+        getIssuesByReportId(reportId, user.uid),
+        getFolders(user.uid),
+        getReportIssues(reportId),
       ]);
 
       if (!rep) {
@@ -142,9 +333,15 @@ export default function ReportDetailPage() {
         return;
       }
       setReport(rep);
+      setFolders(flds);
+      setReportIssues(rIssues);
+
+      // Load project details if available
+      const projId = rep.project_id || rep.projectId || DEFAULT_PROJECT_ID;
+      getProjectById(projId, user.uid).then(setProject).catch(() => {});
       latestContentRef.current = rep.contentJson;
       setTitle(rep.title || '');
-      setReportNumber(rep.reportNumber ?? 101);
+      setReportNumber(rep.reportNumber ?? 1);
       setAuthor(rep.author || '');
       setAuthorTitle(rep.authorTitle || '');
       setOrganization(rep.organization || '');
@@ -160,25 +357,76 @@ export default function ReportDetailPage() {
       setCustomFooterFields(rep.customFooterFields || []);
       setImages(imgs);
       setLinkedIssues(issues);
+
+      // Register active report with AI Context bridge
+      setActiveReportInfo({
+        id: rep.id,
+        title: rep.title || '',
+        contentJson: rep.contentJson,
+        folder: rep.folderId || 'root',
+        createdAt: rep.createdAt,
+        updatedAt: rep.updatedAt,
+        issues: issues.map((iss) => ({
+          id: iss.id,
+          title: iss.title,
+          severity: iss.severity,
+          status: iss.status,
+        })),
+      });
     } catch (err) {
       console.error('Failed to load report', err);
     } finally {
       setLoading(false);
     }
-  }, [reportId, router, user?.uid]);
+  }, [reportId, router, user, authLoading, setActiveReportInfo]);
 
   useEffect(() => {
     loadReportData();
   }, [loadReportData]);
 
-  // Real-time editor content tracking
-  const handleContentChange = useCallback((contentJson: any) => {
-    latestContentRef.current = contentJson;
-  }, []);
+  // Sync state in real time when AI assistant or background tasks update this report or its issues
+  useEffect(() => {
+    const handleReportUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent<{ reportId: string; updates: any }>;
+      if (customEvent.detail?.reportId === reportId) {
+        const { updates } = customEvent.detail;
+        if (updates.title !== undefined) setTitle(updates.title);
+        if (updates.systemUnderReview !== undefined) setSystemUnderReview(updates.systemUnderReview);
+        if (updates.summary !== undefined) {
+          loadReportData();
+        } else {
+          setReport((prev) => (prev ? { ...prev, ...updates } : null));
+        }
+      }
+    };
+
+    const handleIssuesChanged = () => {
+      getIssuesByReportId(reportId).then(setLinkedIssues).catch(() => {});
+    };
+
+    window.addEventListener('report-updated', handleReportUpdated);
+    window.addEventListener('issue-updated', handleIssuesChanged);
+    window.addEventListener('issue-created', handleIssuesChanged);
+    return () => {
+      window.removeEventListener('report-updated', handleReportUpdated);
+      window.removeEventListener('issue-updated', handleIssuesChanged);
+      window.removeEventListener('issue-created', handleIssuesChanged);
+    };
+  }, [reportId, loadReportData]);
+
+  // Real-time editor content tracking synced with AIContext
+  const handleContentChange = useCallback(
+    (contentJson: any) => {
+      latestContentRef.current = contentJson;
+      updateActiveReportContent(contentJson);
+    },
+    [updateActiveReportContent]
+  );
 
   // Autosave TipTap JSON content
   const handleEditorSave = async (contentJson: any) => {
     latestContentRef.current = contentJson;
+    updateActiveReportContent(contentJson);
     await updateReport(reportId, { contentJson });
     setReport((prev) => (prev ? { ...prev, contentJson } : null));
     // refresh images in case a new image was uploaded
@@ -431,17 +679,35 @@ export default function ReportDetailPage() {
     <div className="mx-auto max-w-6xl px-2.5 sm:px-6 lg:px-8 py-6 sm:py-8 w-full max-w-full">
       {/* Top Navigation & Actions Bar */}
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <Button
-          asChild
-          variant="ghost"
-          size="sm"
-          className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground self-start rounded-lg"
-        >
-          <Link href="/reports">
-            <BackIcon className="h-4 w-4" />
-            <span>{t('reports')}</span>
-          </Link>
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground self-start rounded-lg"
+          >
+            <Link href="/reports">
+              <BackIcon className="h-4 w-4" />
+              <span>{t('reports')}</span>
+            </Link>
+          </Button>
+
+          {/* Folder Selector */}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFolderModal(true)}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold text-muted-foreground hover:text-foreground shadow-2xs"
+            title={lang === 'ar' ? 'نقل التقرير إلى مجلد' : 'Move report to folder'}
+          >
+            <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
+            <span>
+              {folders.find((f) => f.id === report.folderId)?.name ||
+                (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
+            </span>
+          </Button>
+        </div>
 
         {/* Export & Action Buttons with Unified Styling */}
         <div className="flex flex-wrap items-center gap-2">
@@ -487,6 +753,21 @@ export default function ReportDetailPage() {
             type="button"
             variant="outline"
             size="sm"
+            onClick={() => setShowShareModal(true)}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-800 hover:bg-teal-50 dark:hover:bg-teal-950"
+            title={lang === 'ar' ? 'مشاركة التقرير كصفحة ويب مستقلة' : 'Share report as standalone web page'}
+          >
+            <Share2 className="h-3.5 w-3.5" />
+            <span>{lang === 'ar' ? 'مشاركة' : 'Share'}</span>
+            {report.isShared && report.shareToken && (
+              <span className="h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-950 animate-pulse" />
+            )}
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
             onClick={() => {
               setCustomTemplateName(title || report.title || '');
               setShowSaveTemplateModal(true);
@@ -496,6 +777,31 @@ export default function ReportDetailPage() {
           >
             <BookmarkPlus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
             <span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleScanCandidates}
+            disabled={isScanningCandidates}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
+            title={lang === 'ar' ? 'فحص واكتشاف مرشحي المشاكل في التقرير' : 'Scan document for issue candidates'}
+          >
+            <ScanSearch className={cn("h-3.5 w-3.5 text-primary", isScanningCandidates && "animate-spin")} />
+            <span>{isScanningCandidates ? (lang === 'ar' ? 'جاري الفحص...' : 'Scanning...') : (lang === 'ar' ? 'فحص المشاكل' : 'Scan Issues')}</span>
+          </Button>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleOpenInspector}
+            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 shadow-2xs"
+            title={lang === 'ar' ? 'فاحص اتساق العدادات والمشاكل' : 'Counter Consistency Inspector'}
+          >
+            <Scale className="h-3.5 w-3.5 text-amber-600" />
+            <span>{lang === 'ar' ? 'فاحص المطابقة' : 'Inspector'}</span>
           </Button>
         </div>
       </div>
@@ -515,458 +821,211 @@ export default function ReportDetailPage() {
         </div>
       )}
 
-      {/* Report Metadata Card */}
-      <Card
-        className="mb-6 border-border/80 bg-card text-card-foreground shadow-2xs rounded-xl overflow-hidden transition-all duration-300"
-        style={{
-          borderTopColor: currentTheme.primary,
-          borderTopWidth: '3px',
-        }}
-      >
-        <CardHeader className="p-4 sm:p-6 pb-4 sm:pb-4">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-            {/* Title and Editable Report # */}
-            <div className="md:col-span-8 space-y-2.5">
-              <div className="flex flex-wrap items-center gap-3">
-                {/* Editable Report Number Badge */}
-                <div
-                  className="inline-flex items-center rounded-lg border px-2.5 py-1 shadow-2xs transition-all focus-within:ring-2 focus-within:border-transparent"
-                  style={{
-                    backgroundColor: currentTheme.light,
-                    borderColor: currentTheme.border,
-                    color: currentTheme.primary,
-                  }}
-                >
-                  <span className="text-xs font-bold me-1" style={{ color: currentTheme.primary }}>#</span>
+      {/* AI Pre-modification Backup Notification Banner */}
+      {hasAiBackup && (
+        <div className="mb-6 rounded-xl border border-olive-300 dark:border-olive-800 bg-olive-50/70 dark:bg-olive-950/40 p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs">
+          <div className="flex items-center gap-2 text-olive-950 dark:text-olive-100">
+            <RotateCcw className="h-4 w-4 text-olive-700 dark:text-olive-400 shrink-0" />
+            <span className="font-medium">
+              {lang === 'ar'
+                ? 'توجد نسخة احتياطية محفوظة لهذا التقرير تم أخذها تلقائياً قبل تعديل المساعد الذكي.'
+                : 'An automatic backup of this report exists from before the AI assistant modification.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRestoreAiBackup}
+              className="h-7 text-xs font-semibold gap-1.5 border-olive-400 dark:border-olive-700 hover:bg-olive-100 dark:hover:bg-olive-900 shadow-2xs"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>{t('restorePreAiBackup')}</span>
+            </Button>
+            <button
+              type="button"
+              onClick={() => {
+                if (typeof window !== 'undefined') {
+                  localStorage.removeItem(`report_ai_backup_${reportId}`);
+                  setHasAiBackup(false);
+                }
+              }}
+              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5"
+              title={lang === 'ar' ? 'إخفاء التنبيه وحذف النسخة الاحتياطية' : 'Dismiss backup'}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modern Intelligence Tab Navigation Bar */}
+      <div className="mb-6 border-b border-border/80 pb-px">
+        <nav className="-mb-px flex space-x-1 sm:space-x-2 overflow-x-auto no-scrollbar" aria-label="Tabs">
+          {[
+            { id: 'overview', label: lang === 'ar' ? 'نظرة عامة' : 'Overview', icon: LayoutDashboard },
+            { id: 'content', label: lang === 'ar' ? 'المحتوى والتحرير' : 'Content & Editor', icon: FileText },
+            { id: 'issues', label: lang === 'ar' ? 'المشاكل والمطابقة' : 'Issues & Deduplication', icon: AlertOctagon, badge: linkedIssues.length },
+            { id: 'analytics', label: lang === 'ar' ? 'التحليلات والمؤشرات' : 'Analytics', icon: BarChart3 },
+            { id: 'settings', label: lang === 'ar' ? 'الإعدادات والتصدير' : 'Settings & Export', icon: Settings },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeMainTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveMainTab(tab.id as any)}
+                className={cn(
+                  'group inline-flex items-center gap-2 py-3 px-3.5 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer rounded-t-lg',
+                  isActive
+                    ? 'border-[#2E4034] text-[#2E4034] dark:border-emerald-400 dark:text-emerald-300 bg-[#2E4034]/5 font-semibold'
+                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border hover:bg-muted/30'
+                )}
+              >
+                <Icon className={cn('h-4 w-4', isActive ? 'text-[#2E4034] dark:text-emerald-400' : 'text-muted-foreground')} />
+                <span>{tab.label}</span>
+                {typeof tab.badge === 'number' && tab.badge > 0 && (
+                  <span
+                    className={cn(
+                      'ms-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                      isActive ? 'bg-[#2E4034] text-white' : 'bg-muted text-muted-foreground'
+                    )}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* Tab Panels */}
+      <div className="transition-all duration-200">
+        {activeMainTab === 'overview' && (
+          <OverviewTab
+            report={report}
+            project={project}
+            issues={linkedIssues}
+            userUid={user?.uid}
+            onNavigateTab={handleNavigateTab}
+            onReportUpdate={(updatedReport) => setReport(updatedReport)}
+            onOpenScanner={handleScanCandidates}
+            onOpenInspector={handleOpenInspector}
+          />
+        )}
+
+        {activeMainTab === 'content' && (
+          <div className="space-y-6">
+            {/* Quick Title & Report # Header for Content Tab */}
+            <div className="rounded-xl border border-border/80 bg-card p-4 sm:p-5 shadow-2xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-1 min-w-[240px]">
+                  <span className="text-xs font-bold text-muted-foreground">#</span>
                   <input
                     type="text"
                     value={reportNumber}
                     onChange={(e) => setReportNumber(e.target.value)}
                     onBlur={handleMetaBlur}
-                    title={lang === 'ar' ? 'رقم التقرير (قابل للتعديل)' : 'Report Number (Editable)'}
                     placeholder="101"
-                    className="w-16 bg-transparent text-xs font-bold outline-none focus:outline-none"
-                    style={{ color: currentTheme.primary }}
+                    className="w-16 rounded-md border border-border bg-background px-2 py-1 text-xs font-bold"
                   />
-                  <Edit3 className="h-3 w-3 opacity-60 ms-0.5" style={{ color: currentTheme.primary }} />
-                </div>
-
-                {/* Date */}
-                <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Calendar className="h-3.5 w-3.5 opacity-70" />
-                  <span>
-                    {new Date(report.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-US')}
-                  </span>
-                </div>
-              </div>
-
-              <input
-                id="report-title-input"
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                onBlur={handleMetaBlur}
-                placeholder={t('reportTitle')}
-                className="w-full text-xl sm:text-2xl font-bold text-foreground bg-transparent border-b border-border/50 hover:border-border focus:border-olive-600 focus:outline-none py-1 transition-colors"
-              />
-            </div>
-
-            {/* Report Content Language Switcher */}
-            <div className="md:col-span-4 flex md:justify-end">
-              <div className="flex flex-col items-start md:items-end gap-1">
-                <label className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
-                  {t('reportLanguage')}
-                </label>
-                <Tabs
-                  value={reportLanguage}
-                  onValueChange={(val) => handleLanguageToggle(val as AppLanguage)}
-                >
-                  <TabsList className="h-8 p-0.5 bg-muted/60 rounded-lg">
-                    <TabsTrigger
-                      value="ar"
-                      className="text-xs px-3 py-1 font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
-                    >
-                      العربية (RTL)
-                    </TabsTrigger>
-                    <TabsTrigger
-                      value="en"
-                      className="text-xs px-3 py-1 font-semibold data-[state=active]:bg-[#2E4034] data-[state=active]:text-white rounded-md transition-all"
-                    >
-                      English (LTR)
-                    </TabsTrigger>
-                  </TabsList>
-                </Tabs>
-              </div>
-            </div>
-          </div>
-        </CardHeader>
-
-        <Separator className="bg-border/60" />
-
-        <CardContent className="p-4 sm:p-6 pt-4 sm:pt-5 space-y-4">
-          {/* Reviewer & System Metadata Inputs - Enhanced Visual Hierarchy */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-            {/* System Under Review */}
-            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-teal-50 dark:bg-teal-950/60 text-teal-700 dark:text-teal-300">
-                  <Cpu className="h-3.5 w-3.5" />
-                </div>
-                <span>{t('systemUnderReview')}</span>
-              </div>
-              <Input
-                type="text"
-                value={systemUnderReview}
-                onChange={(e) => setSystemUnderReview(e.target.value)}
-                onBlur={handleMetaBlur}
-                placeholder={lang === 'ar' ? 'مثال: النظام الأساسي أو بوابة الدفع v2.4' : 'e.g. Core Platform or Payment Gateway'}
-                className="h-8 text-xs bg-background/80"
-              />
-            </div>
-
-            {/* Author / Reviewer */}
-            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-olive-50 dark:bg-olive-950/60 text-olive-700 dark:text-olive-300">
-                  <UserIcon className="h-3.5 w-3.5" />
-                </div>
-                <span>{t('author')}</span>
-              </div>
-              <Input
-                type="text"
-                value={author}
-                onChange={(e) => setAuthor(e.target.value)}
-                onBlur={handleMetaBlur}
-                placeholder={lang === 'ar' ? 'اسم المدقق / المراجع' : 'Auditor / Reviewer Name'}
-                className="h-8 text-xs bg-background/80"
-              />
-            </div>
-
-            {/* Job Title */}
-            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
-                  <Briefcase className="h-3.5 w-3.5" />
-                </div>
-                <span>{t('jobTitle')}</span>
-              </div>
-              <Input
-                type="text"
-                value={authorTitle}
-                onChange={(e) => setAuthorTitle(e.target.value)}
-                onBlur={handleMetaBlur}
-                placeholder={t('jobTitlePlaceholder')}
-                className="h-8 text-xs bg-background/80"
-              />
-            </div>
-
-            {/* Organization */}
-            <div className="rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs">
-              <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground mb-1.5">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300">
-                  <Building2 className="h-3.5 w-3.5" />
-                </div>
-                <span>{t('organization')}</span>
-              </div>
-              <Input
-                type="text"
-                value={organization}
-                onChange={(e) => setOrganization(e.target.value)}
-                onBlur={handleMetaBlur}
-                placeholder={t('organizationPlaceholder')}
-                className="h-8 text-xs bg-background/80"
-              />
-            </div>
-
-            {/* Custom Top Metadata Fields */}
-            {customFields.map((field) => (
-              <div
-                key={field.id}
-                className="relative rounded-lg border border-border/70 bg-background/50 hover:bg-background p-3 transition-all hover:border-border hover:shadow-2xs group/cf"
-              >
-                <div className="flex items-center justify-between gap-1 mb-1.5">
-                  <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
-                      <Tag className="h-3.5 w-3.5" />
-                    </div>
-                    <input
-                      type="text"
-                      value={field.label}
-                      onChange={(e) => handleUpdateCustomField(field.id, 'label', e.target.value)}
-                      onBlur={handleMetaBlur}
-                      placeholder={lang === 'ar' ? 'عنوان القسم' : 'Field Title'}
-                      className="w-full text-xs font-semibold text-muted-foreground bg-transparent border-b border-dashed border-transparent hover:border-border focus:border-olive-500 focus:outline-none py-0.5 truncate"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveCustomField(field.id)}
-                    className="text-muted-foreground/60 hover:text-red-600 dark:hover:text-red-400 p-0.5 rounded transition-colors"
-                    title={lang === 'ar' ? 'حذف هذا القسم' : 'Delete field'}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <Input
-                  type="text"
-                  value={field.value}
-                  onChange={(e) => handleUpdateCustomField(field.id, 'value', e.target.value)}
-                  onBlur={handleMetaBlur}
-                  placeholder={lang === 'ar' ? 'القيمة...' : 'Value...'}
-                  className="h-8 text-xs bg-background/80"
-                />
-              </div>
-            ))}
-
-            {/* Add Custom Field Button Card */}
-            <button
-              type="button"
-              onClick={handleAddCustomField}
-              className="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/80 bg-background/30 hover:bg-background hover:border-olive-500 hover:text-olive-700 dark:hover:text-olive-300 p-3 transition-all min-h-[76px] text-muted-foreground group/add cursor-pointer"
-            >
-              <Plus className="h-4 w-4 transition-transform group-hover/add:scale-110 text-olive-600 dark:text-olive-400" />
-              <span className="font-semibold text-xs">{lang === 'ar' ? '+ إضافة قسم' : '+ Add Field'}</span>
-            </button>
-          </div>
-
-          {/* Approved Contact & Social Media Links */}
-          {contactLinks && contactLinks.length > 0 && (
-            <div className="rounded-lg border border-border/70 bg-background/50 p-3 space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                  <Share2 className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-                  <span>
-                    {lang === 'ar'
-                      ? 'بيانات التواصل وروابط التواصل المعتمدة للتقرير:'
-                      : 'Approved Contact & Social Media Links:'}
-                  </span>
-                </div>
-                <Link
-                  href="/settings"
-                  className="text-[11px] font-medium text-olive-700 dark:text-olive-400 hover:underline inline-flex items-center gap-1"
-                  title={lang === 'ar' ? 'تعديل في الإعدادات' : 'Edit in Settings'}
-                >
-                  <span>{lang === 'ar' ? 'تعديل الروابط' : 'Edit Links'}</span>
-                  <ExternalLink className="h-3 w-3" />
-                </Link>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {contactLinks.map((link) => {
-                  const isPhone = link.type === 'phone' || link.type === 'whatsapp';
-                  const isEmail = link.type === 'email';
-                  const href = isPhone
-                    ? formatWhatsAppUrl(link.value)
-                    : isEmail
-                    ? `mailto:${link.value}`
-                    : link.value.startsWith('http')
-                    ? link.value
-                    : `https://${link.value}`;
-
-                  return (
-                    <a
-                      key={link.id}
-                      href={href}
-                      target={isEmail ? undefined : '_blank'}
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:border-olive-400 hover:text-olive-800 dark:hover:text-olive-300 transition-colors shadow-2xs group/link"
-                      title={isPhone ? (lang === 'ar' ? 'مراسلة مباشرة عبر واتساب' : 'Direct WhatsApp chat') : undefined}
-                    >
-                      {isPhone ? (
-                        <Phone className="h-3 w-3 text-emerald-600 dark:text-emerald-400 group-hover/link:scale-110 transition-transform" />
-                      ) : isEmail ? (
-                        <Mail className="h-3 w-3 text-blue-600 dark:text-blue-400" />
-                      ) : (
-                        <Globe className="h-3 w-3 text-slate-500 dark:text-slate-400" />
-                      )}
-                      {link.label && <span className="font-bold text-muted-foreground">{link.label}:</span>}
-                      <span
-                        dir={isPhone ? 'ltr' : undefined}
-                        style={isPhone ? { unicodeBidi: 'isolate' } : undefined}
-                        className="font-mono text-[11px]"
-                      >
-                        {link.value}
-                      </span>
-                    </a>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <Separator className="bg-border/60" />
-
-          {/* Signature, Custom Footer Fields & Appearance Controls */}
-          <div className="space-y-3 pt-1">
-            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 text-xs">
-              {/* Signature Endorsement */}
-              <div className="flex-1 flex flex-col sm:flex-row items-start sm:items-center gap-2.5">
-                <div className="flex items-center gap-1.5 font-semibold text-foreground min-w-max">
-                  <PenTool className="h-4 w-4 text-olive-700 dark:text-olive-400" />
-                  <span>{t('signature')}:</span>
-                </div>
-                <Input
-                  type="text"
-                  value={signatureData}
-                  onChange={(e) => setSignatureData(e.target.value)}
-                  onBlur={handleMetaBlur}
-                  placeholder={t('signaturePlaceholder')}
-                  className="w-full sm:max-w-md h-8 text-xs italic font-serif bg-background/80"
-                />
-              </div>
-
-              {/* Theme & Background Controls */}
-              <div className="flex flex-wrap items-center gap-4">
-                {/* Color Palette Selector */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-muted-foreground">{t('reportTheme')}:</span>
-                  <div className="flex items-center gap-1.5">
-                    {[
-                      { id: 'olive', bg: 'bg-[#2E4034]', label: t('themeOlive') },
-                      { id: 'blue', bg: 'bg-blue-600', label: t('themeBlue') },
-                      { id: 'slate', bg: 'bg-slate-700', label: t('themeSlate') },
-                      { id: 'emerald', bg: 'bg-emerald-600', label: t('themeEmerald') },
-                    ].map((th) => (
-                      <button
-                        key={th.id}
-                        type="button"
-                        onClick={() => handleThemeChange(th.id)}
-                        className={cn(
-                          'h-5 w-5 rounded-full transition-all focus:outline-none cursor-pointer',
-                          th.bg,
-                          themeColor === th.id
-                            ? 'ring-2 ring-olive-600 ring-offset-2 ring-offset-card scale-110 shadow-xs'
-                            : 'opacity-70 hover:opacity-100 hover:scale-105'
-                        )}
-                        title={th.label}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <Separator orientation="vertical" className="hidden sm:block h-5 bg-border/60" />
-
-                {/* Background Style Selector */}
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-muted-foreground">{t('reportBackground')}:</span>
-                  <div className="flex rounded-lg border border-border bg-muted/40 p-0.5 shadow-2xs">
-                    {[
-                      { id: 'white', label: t('bgWhite') },
-                      { id: 'cream', label: t('bgCream') },
-                      { id: 'cool', label: t('bgCool') },
-                    ].map((bg) => (
-                      <button
-                        key={bg.id}
-                        type="button"
-                        onClick={() => handleBackgroundChange(bg.id)}
-                        className={cn(
-                          'rounded-md px-2.5 py-1 text-[11px] font-medium transition-all cursor-pointer',
-                          backgroundColor === bg.id
-                            ? 'bg-background text-foreground font-bold shadow-2xs'
-                            : 'text-muted-foreground hover:text-foreground'
-                        )}
-                      >
-                        {bg.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Custom Footer / Sign-off Fields */}
-            <div className="flex flex-wrap items-center gap-2.5 pt-0.5">
-              {customFooterFields.map((field) => (
-                <div
-                  key={field.id}
-                  className="flex items-center gap-2 rounded-lg border border-border/80 bg-background/60 p-1.5 px-2.5 text-xs shadow-2xs group/cff"
-                >
-                  <div className="flex items-center gap-1.5">
-                    <Award className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400 shrink-0" />
-                    <input
-                      type="text"
-                      value={field.label}
-                      onChange={(e) => handleUpdateCustomFooterField(field.id, 'label', e.target.value)}
-                      onBlur={handleMetaBlur}
-                      placeholder={lang === 'ar' ? 'العنوان' : 'Label'}
-                      className="w-24 sm:w-28 text-xs font-semibold text-foreground bg-transparent border-b border-dashed border-transparent hover:border-border focus:border-olive-500 focus:outline-none py-0.5 truncate"
-                    />
-                  </div>
-                  <span className="text-muted-foreground font-bold">:</span>
                   <input
                     type="text"
-                    value={field.value}
-                    onChange={(e) => handleUpdateCustomFooterField(field.id, 'value', e.target.value)}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
                     onBlur={handleMetaBlur}
-                    placeholder={lang === 'ar' ? 'القيمة (مثال: الختم، الاعتماد)' : 'Value...'}
-                    className="w-36 sm:w-48 h-7 text-xs px-2 rounded-md border border-border bg-background focus:outline-none focus:border-olive-500"
+                    placeholder={t('reportTitle')}
+                    className="w-full text-lg sm:text-xl font-bold bg-transparent border-b border-transparent hover:border-border focus:border-olive-600 focus:outline-none py-1 transition-colors"
                   />
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveCustomFooterField(field.id)}
-                    className="text-muted-foreground/60 hover:text-red-600 dark:hover:text-red-400 p-1 rounded transition-colors"
-                    title={lang === 'ar' ? 'حذف هذا الحقل' : 'Remove field'}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
                 </div>
-              ))}
-
-              <button
-                type="button"
-                onClick={handleAddCustomFooterField}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-dashed border-border/80 hover:border-olive-500 hover:text-olive-700 dark:hover:text-olive-300 bg-background/40 hover:bg-background px-3 py-1.5 text-xs font-medium text-muted-foreground transition-all shadow-2xs cursor-pointer"
-              >
-                <Plus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-                <span>{lang === 'ar' ? '+ إضافة قسم مخصص بجانب التوقيع' : '+ Add Custom Footer Field'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Linked Issues Indicator */}
-          {linkedIssues.length > 0 && (
-            <>
-              <Separator className="bg-border/60" />
-              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground pt-1">
-                <div className="flex items-center gap-1.5 font-semibold text-foreground">
-                  <Layers className="h-3.5 w-3.5 text-olive-700 dark:text-olive-400" />
-                  <span>
-                    {lang === 'ar'
-                      ? `مرتبط بـ ${linkedIssues.length} مشكلة في لوحة المتابعة:`
-                      : `Linked to ${linkedIssues.length} issues in tracker:`}
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {linkedIssues.map((iss) => (
-                    <Button
-                      key={iss.id}
-                      asChild
-                      variant="secondary"
-                      size="sm"
-                      className="h-6 px-2 text-[11px] font-medium rounded-md"
-                    >
-                      <Link href="/dashboard">
-                        {iss.title}
-                      </Link>
-                    </Button>
-                  ))}
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs">
+                    {reportLanguage === 'ar' ? 'العربية (RTL)' : 'English (LTR)'}
+                  </Badge>
                 </div>
               </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
+            </div>
 
-      {/* TipTap Rich Text Editor */}
-      <TipTapEditor
-        reportId={report.id}
-        initialContent={report.contentJson}
-        reportLanguage={reportLanguage}
-        onSave={handleEditorSave}
-        onContentChange={handleContentChange}
-        onSaveImmediately={handleSaveImmediately}
-        themeColor={themeColor}
-        backgroundColor={backgroundColor}
-      />
+            <ContentTab
+              report={report}
+              reportLanguage={reportLanguage}
+              themeColor={themeColor}
+              backgroundColor={backgroundColor}
+              onEditorSave={handleEditorSave}
+              onContentChange={handleContentChange}
+              onSaveImmediately={handleSaveImmediately}
+              onEditorReady={(ed) => {
+                liveEditorRef.current = ed;
+              }}
+            />
+          </div>
+        )}
+
+        {activeMainTab === 'issues' && (
+          <IssuesTab
+            report={report}
+            issues={linkedIssues}
+            reportIssues={reportIssues}
+            liveEditorRef={liveEditorRef}
+            onReportUpdate={(updatedReport) => setReport(updatedReport)}
+            onOpenScanner={handleScanCandidates}
+            onOpenInspector={handleOpenInspector}
+            onRefreshIssues={loadReportData}
+            activeFilter={activeIssueFilter}
+            onClearActiveFilter={() => setActiveIssueFilter(null)}
+          />
+        )}
+
+
+        {activeMainTab === 'analytics' && (
+          <AnalyticsTab
+            report={report}
+            issues={linkedIssues}
+            userUid={user?.uid}
+            onOpenCreateWidgetModal={() => {
+              setWidgetCreationSource({
+                type: 'report_issues',
+                reportId: report.id,
+                projectId: report.projectId,
+                issues: linkedIssues,
+                elementName: report.title,
+              });
+              setShowCreateWidgetModal(true);
+            }}
+          />
+        )}
+
+        {activeMainTab === 'settings' && (
+          <SettingsTab
+            report={report}
+            reportLanguage={reportLanguage}
+            themeColor={themeColor}
+            backgroundColor={backgroundColor}
+            signatureData={signatureData}
+            signatureType="text"
+            customFields={customFields}
+            customFooterFields={customFooterFields}
+            exporting={exporting}
+            onLanguageChange={handleLanguageToggle}
+            onThemeChange={handleThemeChange}
+            onBackgroundChange={handleBackgroundChange}
+            onSignatureChange={setSignatureData}
+            onExport={handleExport}
+            onSaveTemplate={() => {
+              setCustomTemplateName(title || report.title || '');
+              setShowSaveTemplateModal(true);
+            }}
+            onOpenShareModal={() => setShowShareModal(true)}
+            onAddCustomField={handleAddCustomField}
+            onRemoveCustomField={handleRemoveCustomField}
+            onUpdateCustomField={handleUpdateCustomField}
+            onAddCustomFooterField={handleAddCustomFooterField}
+            onRemoveCustomFooterField={handleRemoveCustomFooterField}
+            onUpdateCustomFooterField={handleUpdateCustomFooterField}
+          />
+        )}
+      </div>
 
       {/* Save as Custom Template Modal */}
       {showSaveTemplateModal && (
@@ -1049,6 +1108,213 @@ export default function ReportDetailPage() {
           </div>
         </div>
       )}
+      {/* Share Report Modal */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl text-card-foreground animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300">
+                <Share2 className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-foreground">
+                  {lang === 'ar' ? 'مشاركة التقرير كصفحة ويب' : 'Share Report as Web Page'}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {lang === 'ar'
+                    ? 'رابط ويب مستقل (للقراءة فقط) بتصميم احترافي يتيح تصدير PDF و Word مباشرة.'
+                    : 'A standalone read-only web page allowing direct PDF and Word exports.'}
+                </p>
+              </div>
+            </div>
+
+            {report.isShared && report.shareToken ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-3 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    <span>{lang === 'ar' ? 'المشاركة مفعّلة حالياً' : 'Sharing is currently active'}</span>
+                  </div>
+                  <Badge variant="outline" className="text-[10px] bg-emerald-100 dark:bg-emerald-900 border-emerald-300">
+                    {lang === 'ar' ? 'نشط' : 'Active'}
+                  </Badge>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-foreground">
+                    {lang === 'ar' ? 'رابط المشاركة المباشر:' : 'Share Link:'}
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      readOnly
+                      dir="ltr"
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/share/${report.shareToken}` : ''}
+                      className="w-full rounded-xl border border-border bg-muted/60 px-3 py-2 text-xs font-mono text-foreground focus:outline-none select-all"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleCopyShareLink}
+                      className="h-9 px-3 shrink-0 rounded-xl bg-[#2E4034] text-white hover:bg-[#24382F]"
+                    >
+                      {copiedShareLink ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 me-1 text-emerald-400" />
+                          <span>{lang === 'ar' ? 'تم النسخ' : 'Copied'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3.5 w-3.5 me-1" />
+                          <span>{lang === 'ar' ? 'نسخ' : 'Copy'}</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border/80 bg-muted/30 p-3 text-[11px] text-muted-foreground leading-relaxed flex items-start gap-2">
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
+                  <div>
+                    {lang === 'ar'
+                      ? 'يمكن لأي شخص معاه الرابط الاطلاع على التقرير بدون تسجيل دخول. الرابط غير مفهرس في محركات البحث.'
+                      : 'Anyone with this link can view the report without logging in. The link is not indexed by search engines.'}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-border">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={sharingAction}
+                    onClick={handleRevokeShareLink}
+                    className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 me-1" />
+                    <span>{lang === 'ar' ? 'إلغاء المشاركة (Revoke)' : 'Revoke Link'}</span>
+                  </Button>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      asChild
+                      className="h-8 text-xs"
+                    >
+                      <a
+                        href={`/share/${report.shareToken}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5 me-1" />
+                        <span>{lang === 'ar' ? 'فتح الصفحة' : 'Open Page'}</span>
+                      </a>
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => setShowShareModal(false)}
+                      className="h-8 text-xs bg-[#2E4034] text-white hover:bg-[#24382F]"
+                    >
+                      {lang === 'ar' ? 'إغلاق' : 'Close'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-dashed border-border p-4 text-center">
+                  <p className="text-xs text-muted-foreground leading-relaxed mb-3">
+                    {lang === 'ar'
+                      ? 'هذا التقرير خاص حالياً ولا يمكن الوصول إليه إلا من خلال حسابك. اضغط أدناه لإنشاء رابط مشاركة عام مستقل.'
+                      : 'This report is currently private. Click below to generate an unguessable public share link.'}
+                  </p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={sharingAction}
+                    onClick={handleCreateShareLink}
+                    className="h-9 gap-1.5 rounded-xl bg-[#2E4034] text-white hover:bg-[#24382F]"
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                    <span>{sharingAction ? (lang === 'ar' ? 'جاري التوليد...' : 'Generating...') : (lang === 'ar' ? 'إنشاء رابط المشاركة' : 'Generate Share Link')}</span>
+                  </Button>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowShareModal(false)}
+                  >
+                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Move to Folder Modal */}
+      {showFolderModal && (
+        <MoveToFolderModal
+          isOpen={showFolderModal}
+          onClose={() => setShowFolderModal(false)}
+          reportToMove={report}
+          folders={folders}
+          onConfirmMove={handleMoveReportToFolder}
+        />
+      )}
+
+      {/* Candidate Review Modal (Single Source of Truth) */}
+      {showCandidateModal && candidateScanResult && (
+        <CandidateReviewModal
+          isOpen={showCandidateModal}
+          onClose={() => setShowCandidateModal(false)}
+          scanResult={candidateScanResult}
+          userUid={user?.uid}
+          onApprovalComplete={async () => {
+            await loadReportData();
+          }}
+        />
+      )}
+
+      {/* Discrepancy Inspector Modal (Counter Consistency) */}
+      {showInspectorModal && (
+        <DiscrepancyInspectorModal
+          isOpen={showInspectorModal}
+          onClose={() => setShowInspectorModal(false)}
+          reportId={reportId}
+          userUid={user?.uid}
+          onSyncComplete={async () => {
+            await loadReportData();
+          }}
+        />
+      )}
+
+      {/* Create Widget From Element Modal (Selection to Widget Pipeline) */}
+      {showCreateWidgetModal && widgetCreationSource && (
+        <CreateWidgetFromElementModal
+          isOpen={showCreateWidgetModal}
+          onClose={() => {
+            setShowCreateWidgetModal(false);
+            setWidgetCreationSource(null);
+          }}
+          sourceTarget={widgetCreationSource}
+          report={report}
+          userUid={user?.uid}
+          onWidgetCreated={async () => {
+            setShowCreateWidgetModal(false);
+            setWidgetCreationSource(null);
+            await loadReportData();
+          }}
+        />
+      )}
     </div>
   );
 }
+

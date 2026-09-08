@@ -25,7 +25,7 @@ let db: Firestore | undefined;
 let storage: FirebaseStorage | undefined;
 let googleProvider: GoogleAuthProvider | undefined;
 
-if (typeof window !== 'undefined' && isFirebaseConfigured) {
+if (typeof window !== 'undefined' && typeof window.document !== 'undefined' && isFirebaseConfigured) {
   try {
     app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
     auth = getAuth(app);

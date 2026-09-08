@@ -18,6 +18,7 @@ import {
   X,
   Trash2,
   AlertTriangle,
+  Maximize2,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { updateImageCaption, updateImageFileName, deleteReportImage, getReportImages } from '@/lib/db';
@@ -237,10 +238,12 @@ export function ReportImageView(props: NodeViewProps) {
         }
       }
 
-      const newStoragePath = `reports/${reportId || 'default'}/images/${finalName}`;
+      // Preserve storagePath to avoid breaking stored file references
+      const currentStoragePath =
+        node.attrs.storagePath || `reports/${reportId || 'default'}/images/${finalName}`;
       updateAttributes({
         fileName: finalName,
-        storagePath: newStoragePath,
+        storagePath: currentStoragePath,
       });
 
       if (reportId && imageId) {
@@ -257,13 +260,15 @@ export function ReportImageView(props: NodeViewProps) {
     }
   };
 
-  const handleCopyPath = async () => {
-    const currentPath =
-      node.attrs.storagePath ||
-      `reports/${reportId || 'default'}/images/${fileName || `صورة-${sequenceNumber || 1}.png`}`;
+  const handleCopyReference = async () => {
+    const refPrefix = isAr ? 'صورة' : 'image';
+    const seq = sequenceNumber || 1;
+    const titlePart = caption ? caption : (fileName || `${refPrefix}-${seq}.png`);
+    const token = `[${refPrefix}-${seq}: ${titlePart}]`;
+
     try {
       if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(currentPath);
+        await navigator.clipboard.writeText(token);
       } else {
         throw new Error('Clipboard API unavailable');
       }
@@ -272,7 +277,7 @@ export function ReportImageView(props: NodeViewProps) {
     } catch (err) {
       try {
         const textarea = document.createElement('textarea');
-        textarea.value = currentPath;
+        textarea.value = token;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
         document.body.appendChild(textarea);
@@ -282,9 +287,55 @@ export function ReportImageView(props: NodeViewProps) {
         setCopyFeedback(true);
         setTimeout(() => setCopyFeedback(false), 2000);
       } catch (e) {
-        console.error('Copy path failed', e);
+        console.error('Copy reference failed', e);
       }
     }
+  };
+
+  // Interactive corner touch-drag resize support
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartRef = useRef<{ startX: number; startWidth: number; containerWidth: number }>({
+    startX: 0,
+    startWidth: 0,
+    containerWidth: 0,
+  });
+
+  const handleResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const frameEl = e.currentTarget.closest('.group') as HTMLElement;
+    const parentContainer = frameEl?.parentElement;
+    const containerWidth = parentContainer?.clientWidth || window.innerWidth;
+
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    setIsResizing(true);
+    resizeStartRef.current = {
+      startX: e.clientX,
+      startWidth: frameEl ? frameEl.clientWidth : containerWidth,
+      containerWidth: Math.max(200, containerWidth),
+    };
+  };
+
+  const handleResizePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const { startX, startWidth, containerWidth } = resizeStartRef.current;
+    const deltaX = isAr ? startX - e.clientX : e.clientX - startX;
+    const newPixelWidth = Math.max(100, Math.min(containerWidth, startWidth + deltaX));
+    const newPercent = Math.round((newPixelWidth / containerWidth) * 100);
+    handleSetZoom(newPercent);
+  };
+
+  const handleResizePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isResizing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch (_) {}
+    setIsResizing(false);
   };
 
   const handleConfirmDelete = async () => {
@@ -389,24 +440,24 @@ export function ReportImageView(props: NodeViewProps) {
 
                   <button
                     type="button"
-                    onClick={handleCopyPath}
+                    onClick={handleCopyReference}
                     className={cn(
                       'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors cursor-pointer',
                       copyFeedback
                         ? 'bg-emerald-500/15 text-emerald-600 font-medium'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                     )}
-                    title={isAr ? 'نسخ مسار الصورة' : 'Copy image path'}
+                    title={isAr ? 'نسخ إشارة الصورة داخل التقرير [صورة-X: العنوان]' : 'Copy image reference token'}
                   >
                     {copyFeedback ? (
                       <>
                         <CheckCheck className="h-3 w-3" />
-                        <span>{isAr ? 'تم النسخ' : 'Path copied'}</span>
+                        <span>{isAr ? 'تم نسخ الإشارة' : 'Ref copied'}</span>
                       </>
                     ) : (
                       <>
                         <Copy className="h-3 w-3" />
-                        <span className="hidden sm:inline">{isAr ? 'نسخ المسار' : 'Copy path'}</span>
+                        <span className="hidden sm:inline">{isAr ? 'نسخ الإشارة' : 'Copy ref'}</span>
                       </>
                     )}
                   </button>
@@ -439,8 +490,8 @@ export function ReportImageView(props: NodeViewProps) {
                 <ZoomOut className="h-3 w-3" />
               </button>
 
-              {/* Presets */}
-              <div className="flex items-center gap-0.5 overflow-x-auto">
+              {/* Presets (desktop & tablet) */}
+              <div className="hidden sm:flex items-center gap-0.5 overflow-x-auto">
                 {ZOOM_PRESETS.map((p) => (
                   <button
                     key={p.value}
@@ -458,6 +509,11 @@ export function ReportImageView(props: NodeViewProps) {
                   </button>
                 ))}
               </div>
+
+              {/* Mobile current zoom indicator */}
+              <span className="sm:hidden px-1 text-[10px] font-mono font-bold text-foreground">
+                {currentZoom}%
+              </span>
 
               {/* Zoom In Button */}
               <button
@@ -608,7 +664,7 @@ export function ReportImageView(props: NodeViewProps) {
             isPanning && 'cursor-grabbing select-none'
           )}
         >
-          <div className="w-full flex items-center justify-center p-0">
+          <div className="w-full flex items-center justify-center p-0 relative">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               ref={imgRef}
@@ -626,6 +682,21 @@ export function ReportImageView(props: NodeViewProps) {
               className="rounded-none transition-none pointer-events-auto select-none"
               draggable={false}
             />
+
+            {/* Touch/Drag Resize Handle with touch-action: none */}
+            <div
+              onPointerDown={handleResizePointerDown}
+              onPointerMove={handleResizePointerMove}
+              onPointerUp={handleResizePointerUp}
+              style={{ touchAction: 'none' }}
+              className={cn(
+                'absolute bottom-2 end-2 h-6 w-6 rounded-md bg-black/60 hover:bg-black/85 text-white flex items-center justify-center cursor-nwse-resize select-none shadow-md z-20 transition-opacity touch-none',
+                isResizing ? 'opacity-100 ring-2 ring-white scale-110' : 'opacity-70 hover:opacity-100'
+              )}
+              title={isAr ? 'اسحب لتكبير وتصغير الصورة باللمس' : 'Touch/Drag to resize image'}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </div>
           </div>
         </div>
 

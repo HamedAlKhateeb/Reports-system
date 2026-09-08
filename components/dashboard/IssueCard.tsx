@@ -1,10 +1,14 @@
 'use client';
 
-import React from 'react';
-import { MessageSquare, Calendar, Link2, AlertCircle, Clock, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import React, { useState } from 'react';
+import { Link2, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { getSeverityLabel, IssueSeverity } from '@/lib/i18n/dictionary';
+import { Card, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface IssueCardProps {
   issue: IssueItem;
@@ -38,21 +42,29 @@ export function IssueCard({
   canMoveDown = false,
 }: IssueCardProps) {
   const { lang, t } = useLanguage();
+  const [canDrag, setCanDrag] = useState(false);
 
-  const getSeverityStyle = (sev: IssueSeverity) => {
+  // 5 Canonical severities using standard shadcn badge variants
+  const getSeverityBadgeVariant = (
+    sev: IssueSeverity | string
+  ): 'destructive' | 'default' | 'secondary' | 'outline' => {
     switch (sev) {
       case 'critical':
-        return 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400 dark:border-red-900/50';
+      case 'حرجة':
+        return 'destructive';
       case 'major':
-        return 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950/30 dark:text-orange-400 dark:border-orange-900/50';
+      case 'كبيرة':
+        return 'default';
       case 'medium':
-        return 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-900/50';
+      case 'متوسطة':
+        return 'secondary';
       case 'normal':
-        return 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-400 dark:border-blue-900/50';
+      case 'عادية':
+        return 'secondary';
       case 'minor':
-        return 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400 dark:border-emerald-900/50';
+      case 'طفيفة':
       default:
-        return 'bg-slate-50 text-slate-700 border-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:border-slate-800';
+        return 'outline';
     }
   };
 
@@ -72,108 +84,101 @@ export function IssueCard({
     <div className="relative">
       {/* Drop indicator: Before */}
       {isDragOverTarget && dropPosition === 'before' && (
-        <div className="h-1.5 w-full bg-olive-600 dark:bg-olive-400 rounded-full mb-1.5 shadow-sm animate-pulse" />
+        <div className="h-1.5 w-full bg-primary rounded-full mb-1.5 shadow-2xs animate-pulse" />
       )}
 
-      <div
-        draggable
+      <Card
+        draggable={canDrag}
         onDragStart={(e) => onDragStart(e, issue.id)}
+        onDragEnd={() => setCanDrag(false)}
         onDragOver={handleCardDragOver}
         onDragLeave={onDragLeaveCard}
         onDrop={handleCardDrop}
         onClick={onClick}
-        className="group relative cursor-grab active:cursor-grabbing rounded-xl border border-slate-200 dark:border-border bg-white dark:bg-card p-4 shadow-2xs transition-all hover:border-olive-500 dark:hover:border-olive-400 hover:shadow-md"
+        style={{ touchAction: 'pan-y' }}
+        className={cn(
+          "group relative transition-all hover:border-primary/60 hover:shadow-md select-none overflow-hidden",
+          canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+        )}
       >
-        {/* Top: Severity Badge, Grip Handle & Actions */}
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <div className="flex items-center gap-1.5">
-            <span
-              className="text-muted-foreground/50 group-hover:text-muted-foreground transition-colors cursor-grab"
-              title={lang === 'ar' ? 'اسحب للترتيب لأعلى أو لأسفل' : 'Drag to reorder up or down'}
-            >
-              <GripVertical className="h-3.5 w-3.5" />
-            </span>
+        <CardHeader className="p-3.5 pb-2">
+          {/* Top: Severity Badge, Grip Handle & Actions */}
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <span
+                onMouseEnter={() => setCanDrag(true)}
+                onMouseLeave={() => setCanDrag(false)}
+                onMouseDown={() => setCanDrag(true)}
+                onTouchStart={() => setCanDrag(true)}
+                onTouchEnd={() => setCanDrag(false)}
+                className="text-muted-foreground/60 group-hover:text-muted-foreground transition-colors cursor-grab active:cursor-grabbing p-1 rounded hover:bg-muted/50 touch-none"
+                title={lang === 'ar' ? 'اسحب للترتيب الرأسي' : 'Drag to reorder vertically'}
+              >
+                <GripVertical className="size-3.5" />
+              </span>
 
-            <span
-              className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-bold ${getSeverityStyle(
-                issue.severity
-              )}`}
-            >
-              <span className="h-1.5 w-1.5 rounded-full bg-current" />
-              <span>{getSeverityLabel(issue.severity, lang)}</span>
-            </span>
-          </div>
-
-          <div className="flex items-center gap-1">
-            {/* Quick Move Up/Down Buttons */}
-            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center bg-muted/60 dark:bg-muted/30 rounded-md p-0.5">
-              {canMoveUp && (
-                <button
-                  type="button"
-                  onClick={onMoveUp}
-                  className="p-1 hover:bg-background rounded text-muted-foreground hover:text-foreground transition-colors"
-                  title={t('moveIssueUp')}
-                >
-                  <ChevronUp className="h-3 w-3" />
-                </button>
-              )}
-              {canMoveDown && (
-                <button
-                  type="button"
-                  onClick={onMoveDown}
-                  className="p-1 hover:bg-background rounded text-muted-foreground hover:text-foreground transition-colors"
-                  title={t('moveIssueDown')}
-                >
-                  <ChevronDown className="h-3 w-3" />
-                </button>
-              )}
+              <Badge
+                variant={getSeverityBadgeVariant(issue.severity)}
+                className="gap-1 px-2 py-0.5 text-[11px] font-bold"
+              >
+                <span className="size-1.5 rounded-full bg-current" />
+                <span>{getSeverityLabel(issue.severity, lang)}</span>
+              </Badge>
             </div>
 
-            {linkedReport && (
-              <span
-                className="flex items-center gap-1 text-[11px] font-semibold text-olive-700 bg-olive-50 dark:bg-olive-950/40 px-2 py-0.5 rounded border border-olive-200 dark:border-olive-800 max-w-[130px] truncate"
-                title={`${linkedReport.title} (#${linkedReport.reportNumber})`}
-              >
-                <Link2 className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate">#{linkedReport.reportNumber}</span>
-              </span>
-            )}
-          </div>
-        </div>
+            <div className="flex items-center gap-1">
+              {/* Quick Move Up/Down Buttons */}
+              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center bg-muted/60 dark:bg-muted/30 rounded-md p-0.5 gap-0.5">
+                {canMoveUp && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={onMoveUp}
+                    className="size-5 rounded p-0 text-muted-foreground hover:text-foreground"
+                    title={t('moveIssueUp')}
+                  >
+                    <ChevronUp className="size-3" />
+                  </Button>
+                )}
+                {canMoveDown && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={onMoveDown}
+                    className="size-5 rounded p-0 text-muted-foreground hover:text-foreground"
+                    title={t('moveIssueDown')}
+                  >
+                    <ChevronDown className="size-3" />
+                  </Button>
+                )}
+              </div>
 
-        {/* Title */}
-        <h3 className="text-sm font-bold text-foreground group-hover:text-olive-700 dark:group-hover:text-olive-400 transition-colors line-clamp-2">
-          {issue.title}
-        </h3>
-
-        {/* Description Snippet */}
-        {issue.description && (
-          <p className="mt-1 text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-            {issue.description}
-          </p>
-        )}
-
-        {/* Footer: Date & Comments Count */}
-        <div className="mt-3 flex items-center justify-between border-t border-border/60 pt-2 text-[11px] text-muted-foreground">
-          <div className="flex items-center gap-1">
-            <Clock className="h-3 w-3" />
-            <span>
-              {new Date(issue.updatedAt || issue.createdAt).toLocaleDateString(
-                lang === 'ar' ? 'ar-EG' : 'en-US'
+              {linkedReport && (
+                <Badge
+                  variant="outline"
+                  className="flex items-center gap-1 text-[11px] font-semibold bg-primary/5 text-primary border-primary/20 max-w-[120px] truncate"
+                  title={`${linkedReport.title} (#${linkedReport.reportNumber})`}
+                >
+                  <Link2 className="size-3 shrink-0" />
+                  <span className="truncate">#{linkedReport.reportNumber}</span>
+                </Badge>
               )}
-            </span>
+            </div>
           </div>
 
-          <div className="flex items-center gap-1 font-medium text-foreground">
-            <MessageSquare className="h-3 w-3" />
-            <span>{issue.commentsCount || 0}</span>
-          </div>
-        </div>
-      </div>
+          {/* Title */}
+          <CardTitle className="text-sm font-bold text-foreground group-hover:text-primary transition-colors line-clamp-2 leading-snug">
+            {issue.title}
+          </CardTitle>
+        </CardHeader>
+
+      </Card>
 
       {/* Drop indicator: After */}
       {isDragOverTarget && dropPosition === 'after' && (
-        <div className="h-1.5 w-full bg-olive-600 dark:bg-olive-400 rounded-full mt-1.5 shadow-sm animate-pulse" />
+        <div className="h-1.5 w-full bg-primary rounded-full mt-1.5 shadow-2xs animate-pulse" />
       )}
     </div>
   );

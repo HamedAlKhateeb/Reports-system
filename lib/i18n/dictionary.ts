@@ -9,8 +9,8 @@
 
 export type AppLanguage = 'ar' | 'en';
 export type AppDirection = 'rtl' | 'ltr';
-export type IssueStatus = 'open' | 'in_progress' | 'done';
-export type IssueSeverity = 'critical' | 'major' | 'medium' | 'normal' | 'minor';
+export type IssueStatus = 'open' | 'in_progress' | 'resolved' | 'closed' | 'done';
+export type IssueSeverity = 'critical' | 'high' | 'major' | 'medium' | 'normal' | 'minor';
 
 export interface DictionaryEntry {
   ar: string;
@@ -34,6 +34,10 @@ export const DICTIONARY = {
   settings: {
     ar: 'الإعدادات',
     en: 'Settings',
+  },
+  instructions: {
+    ar: 'التعليمات والدليل',
+    en: 'Instructions & Guide',
   },
   login: {
     ar: 'تسجيل الدخول',
@@ -188,26 +192,26 @@ export const DICTIONARY = {
     en: 'Done',
   },
 
-  // Severities (language-neutral keys in DB, localized with numbers 1-5 in UI and exports)
+  // Severities (language-neutral keys in DB; ordering is internal only)
   severity_critical: {
-    ar: '1 - حرجة',
-    en: '1 - Critical',
+    ar: 'حرجة',
+    en: 'Critical',
   },
   severity_major: {
-    ar: '2 - كبيرة',
-    en: '2 - Major',
+    ar: 'كبيرة',
+    en: 'Major',
   },
   severity_medium: {
-    ar: '3 - متوسطة',
-    en: '3 - Medium',
+    ar: 'متوسطة',
+    en: 'Medium',
   },
   severity_normal: {
-    ar: '4 - عادية',
-    en: '4 - Normal',
+    ar: 'عادية',
+    en: 'Normal',
   },
   severity_minor: {
-    ar: '5 - طفيفة',
-    en: '5 - Minor',
+    ar: 'طفيفة',
+    en: 'Minor',
   },
 
   // Drag & Drop Reordering
@@ -708,6 +712,74 @@ export const DICTIONARY = {
     ar: 'خبير تدقيق ومراجعة',
     en: 'Audit & Review Expert',
   },
+  showAiAssistant: {
+    ar: 'إظهار المساعد الذكي',
+    en: 'Show AI Assistant',
+  },
+  showAiAssistantDesc: {
+    ar: 'إظهار أو إخفاء زر المساعد الذكي واختصاراته عبر صفحات النظام',
+    en: 'Show or hide the AI assistant floating button and shortcuts across pages',
+  },
+  hideAiAssistant: {
+    ar: 'إخفاء المساعد الذكي',
+    en: 'Hide AI Assistant',
+  },
+  aiAssistantHiddenNotice: {
+    ar: 'تم إخفاء المساعد الذكي. يمكنك إعادة تفعيله في أي وقت من الإعدادات أو القائمة العلوية.',
+    en: 'AI Assistant hidden. You can re-enable it at any time from Settings or top menu.',
+  },
+  aiAssistantVisibleNotice: {
+    ar: 'تم تفعيل وإظهار المساعد الذكي بنجاح.',
+    en: 'AI Assistant enabled and visible successfully.',
+  },
+  aiProposalTitle: {
+    ar: 'اقتراح تعديل محتوى التقرير',
+    en: 'Report Content Modification Proposal',
+  },
+  aiProposalReplaceAll: {
+    ar: 'استبدال محتوى التقرير بالكامل',
+    en: 'Replace Entire Report Content',
+  },
+  aiProposalAppend: {
+    ar: 'إضافة قسم في نهاية التقرير',
+    en: 'Append Section to Report',
+  },
+  aiProposalPrepend: {
+    ar: 'إضافة قسم في بداية التقرير',
+    en: 'Prepend Section to Report',
+  },
+  aiProposalReplaceSelection: {
+    ar: 'استبدال النص المحدد في المحرر',
+    en: 'Replace Selected Text',
+  },
+  aiProposalReplaceWarning: {
+    ar: '⚠️ تنبيه أمان: سيتم استبدال كامل محتوى التقرير بهذا النص الجديد. يتم أخذ نسخة احتياطية تلقائياً للتمكن من التراجع في أي لحظة.',
+    en: '⚠️ Safety Warning: This will replace the entire report content. A backup is created so you can undo at any time.',
+  },
+  aiApplyProposal: {
+    ar: 'موافقة وتطبيق التعديل',
+    en: 'Approve & Apply Modification',
+  },
+  aiDismissProposal: {
+    ar: 'تجاهل',
+    en: 'Dismiss',
+  },
+  aiUndoModification: {
+    ar: 'تراجع واستعادة المحتوى السابق',
+    en: 'Undo & Restore Previous Content',
+  },
+  aiModificationApplied: {
+    ar: 'تم تطبيق التعديل على التقرير بنجاح',
+    en: 'Modification applied to report successfully',
+  },
+  aiModificationUndone: {
+    ar: 'تم التراجع عن التعديل واستعادة محتوى التقرير السابق بنجاح!',
+    en: 'Modification undone and previous report content restored successfully!',
+  },
+  restorePreAiBackup: {
+    ar: 'استعادة النسخة السابقة قبل تعديل الذكاء الاصطناعي',
+    en: 'Restore pre-AI backup snapshot',
+  },
 
   // Theme Modes
   themeSettingTitle: {
@@ -885,9 +957,132 @@ export const DICTIONARY = {
     ar: 'زمردي أنيق',
     en: 'Elegant Emerald',
   },
+
+  // Issue Metrics & Status Taxonomy (Unified Single Source of Truth)
+  status_resolved: { ar: 'تمت المعالجة', en: 'Resolved' },
+  status_closed: { ar: 'مغلقة', en: 'Closed' },
+  severity_high: { ar: 'كبيرة', en: 'High' },
+
+  totalIssues: { ar: 'إجمالي المشاكل', en: 'Total Issues' },
+  criticalOrHighIssues: { ar: 'حرجة أو كبيرة', en: 'Critical or High' },
+  openIssues: { ar: 'مفتوحة', en: 'Open' },
+  inProgressIssues: { ar: 'قيد المعالجة', en: 'In Progress' },
+  closedIssues: { ar: 'مغلقة', en: 'Closed' },
+  closureRate: { ar: 'نسبة الإغلاق', en: 'Closure Rate' },
+  noIssuesForReport: { ar: 'لا توجد مشاكل مرتبطة بهذا التقرير', en: 'No issues linked to this report' },
+  issuesMetricSummary: { ar: 'ملخص المشاكل في التقرير', en: 'Report Issues Summary' },
+  issuesMetricSummaryDesc: {
+    ar: 'إحصائيات دقيقة ومحصورة في المشاكل المرتبطة بهذا التقرير فقط',
+    en: 'Accurate metrics scoped strictly to this report',
+  },
+  clearFilters: { ar: 'مسح الفلاتر', en: 'Clear Filters' },
+  activeFilters: { ar: 'الفلاتر النشطة:', en: 'Active Filters:' },
+  filterMatchingCount: {
+    ar: 'مشكلة مطابقة للفلاتر الحالية',
+    en: 'issues matching active filters',
+  },
+  registeredIssuesTitle: {
+    ar: 'المشاكل المسجلة في هذا التقرير',
+    en: 'Issues Registered in this Report',
+  },
+  emptyIssuesDesc: {
+    ar: 'لا توجد مشاكل مسجلة في هذا التقرير. يمكنك تشغيل فحص المشاكل لاكتشاف المرشحين، أو إضافة مشكلة يدويًا.',
+    en: 'No issues recorded for this report. You can scan for candidates or add an issue manually.',
+  },
+
+  // Institutional and Corporate Details
+  corporateMetadata: { ar: 'بيانات المؤسسة والاعتماد', en: 'Institutional & Review Details' },
+  organizationDefaults: { ar: 'بيانات المؤسسة الافتراضية', en: 'Organization Defaults' },
+  inheritedFromOrg: { ar: 'موروثة من بيانات المؤسسة', en: 'Inherited from Organization' },
+  customForReport: { ar: 'مخصصة لهذا التقرير', en: 'Customized for this Report' },
+  applyToNewReportsOnly: { ar: 'تطبيق على التقارير الجديدة فقط', en: 'Apply to new reports only' },
+  applyToThisReportAlso: { ar: 'تطبيق على هذا التقرير أيضاً', en: 'Apply to this report also' },
+  revertToPrevious: { ar: 'إلغاء التطبيق على هذا التقرير', en: 'Revert on this report' },
 } as const;
 
 export type DictionaryKey = keyof typeof DICTIONARY;
+
+/**
+ * Standardized internal taxonomy maps for display without exposing raw keys
+ */
+export const severityLabels = {
+  ar: {
+    critical: 'حرجة',
+    high: 'كبيرة',
+    major: 'كبيرة',
+    medium: 'متوسطة',
+    normal: 'عادية',
+    minor: 'طفيفة',
+  },
+  en: {
+    critical: 'Critical',
+    high: 'High',
+    major: 'Major',
+    medium: 'Medium',
+    normal: 'Normal',
+    minor: 'Minor',
+  },
+} as const;
+
+export const statusLabels = {
+  ar: {
+    open: 'مفتوحة',
+    in_progress: 'قيد المعالجة',
+    resolved: 'تمت المعالجة',
+    closed: 'مغلقة',
+    done: 'مغلقة',
+  },
+  en: {
+    open: 'Open',
+    in_progress: 'In Progress',
+    resolved: 'Resolved',
+    closed: 'Closed',
+    done: 'Closed',
+  },
+} as const;
+
+/**
+ * Normalize any legacy severity or Arabic label to standard internal lowercase string
+ */
+export function normalizeSeverity(sev?: string | null): IssueSeverity {
+  if (!sev) return 'normal';
+  const s = String(sev).trim().toLowerCase();
+  if (s === 'critical' || s === 'حرجة') return 'critical';
+  // "high" is a legacy alias. "major" is the canonical persisted/aggregated key.
+  if (s === 'high' || s === 'major' || s === 'كبيرة') return 'major';
+  if (s === 'medium' || s === 'متوسطة') return 'medium';
+  if (s === 'normal' || s === 'عادية') return 'normal';
+  if (s === 'minor' || s === 'طفيفة' || s === 'low' || s === 'منخفضة' || s === 'trivial') return 'minor';
+  return 'normal';
+}
+
+/**
+ * Normalize any legacy status or Arabic label to standard internal lowercase string
+ */
+export function normalizeStatus(status?: string | null): IssueStatus {
+  if (!status) return 'open';
+  const st = String(status).trim().toLowerCase();
+  if (st === 'open' || st === 'مفتوحة') return 'open';
+  if (st === 'in_progress' || st === 'قيد المعالجة' || st === 'قيد التنفيذ') return 'in_progress';
+  // The current workflow has one completed lane. Legacy resolved/closed values belong to it.
+  if (st === 'resolved' || st === 'تمت المعالجة' || st === 'closed' || st === 'مغلقة' || st === 'done' || st === 'مكتملة' || st === 'completed') return 'done';
+  return 'open';
+}
+
+/**
+ * Check if a status represents completed/closed work
+ */
+export function isDoneStatus(status?: string | null): boolean {
+  return normalizeStatus(status) === 'done';
+}
+
+/**
+ * Check if a severity is critical or major
+ */
+export function isCriticalOrMajor(severity?: string | null): boolean {
+  const norm = normalizeSeverity(severity);
+  return norm === 'critical' || norm === 'major';
+}
 
 /**
  * Helper to get a localized string from the dictionary.
@@ -903,39 +1098,21 @@ export function t(key: DictionaryKey, lang: AppLanguage): string {
 }
 
 /**
- * Localize Issue Status
+ * Localize Issue Status with unified taxonomy
  */
-export function getStatusLabel(status: IssueStatus, lang: AppLanguage): string {
-  switch (status) {
-    case 'open':
-      return t('status_open', lang);
-    case 'in_progress':
-      return t('status_in_progress', lang);
-    case 'done':
-      return t('status_done', lang);
-    default:
-      return status;
-  }
+export function getStatusLabel(status: IssueStatus | string, lang: AppLanguage): string {
+  const norm = normalizeStatus(status);
+  const map = statusLabels[lang] || statusLabels.ar;
+  return (map as any)[norm] || (map as any)[status] || status;
 }
 
 /**
- * Localize Issue Severity
+ * Localize Issue Severity with unified taxonomy
  */
-export function getSeverityLabel(severity: IssueSeverity, lang: AppLanguage): string {
-  switch (severity) {
-    case 'critical':
-      return t('severity_critical', lang);
-    case 'major':
-      return t('severity_major', lang);
-    case 'medium':
-      return t('severity_medium', lang);
-    case 'normal':
-      return t('severity_normal', lang);
-    case 'minor':
-      return t('severity_minor', lang);
-    default:
-      return severity;
-  }
+export function getSeverityLabel(severity: IssueSeverity | string, lang: AppLanguage): string {
+  const norm = normalizeSeverity(severity);
+  const map = severityLabels[lang] || severityLabels.ar;
+  return (map as any)[norm] || (map as any)[severity] || severity;
 }
 
 /**

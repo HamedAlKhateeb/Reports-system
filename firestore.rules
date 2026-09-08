@@ -7,13 +7,39 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function owns(data) {
+      return isAuthenticated() && data.ownerUid == request.auth.uid;
+    }
+
+    function ownsReport(reportId) {
+      return isAuthenticated()
+        && get(/databases/$(database)/documents/reports/$(reportId)).data.ownerUid == request.auth.uid;
+    }
+
     // Reports collection & subcollections
     match /reports/{reportId} {
-      allow read, write: if isAuthenticated();
+      // Anonymous reads are strictly limited to fetching a specific report explicitly made public (get).
+      // Listing or enumerating the collection is restricted to authenticated users (list).
+      allow get: if owns(resource.data) || resource.data.isShared == true;
+      allow list: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
+      allow update, delete: if owns(resource.data);
 
       match /images/{imageId} {
-        allow read, write: if isAuthenticated();
+        allow read: if ownsReport(reportId)
+          || get(/databases/$(database)/documents/reports/$(reportId)).data.isShared == true;
+        allow write: if ownsReport(reportId);
       }
+    }
+
+    // Folders collection for hierarchical report organization
+    match /folders/{folderId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // API Keys collection for AI agents and integrations
+    match /api_keys/{keyId} {
+      allow read, write: if isAuthenticated();
     }
 
     // Counters collection for atomic report numbering
@@ -34,6 +60,57 @@ service cloud.firestore {
     match /authorized_users/{userEmail} {
       allow read: if isAuthenticated();
       allow write: if isAuthenticated() && (request.auth.token.admin == true || request.auth.token.email.matches('.*@example[.]com'));
+    }
+
+    // User-specific settings (AI config, severity ordering, etc.)
+    match /user_settings/{userId} {
+      allow read, write: if isAuthenticated() && (request.auth.uid == userId || request.auth.token.admin == true);
+    }
+
+    // Projects collection
+    match /projects/{projectId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Report-Issue join collection
+    match /report_issues/{linkId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Evidences collection
+    match /evidences/{evidenceId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Structured tables collection
+    match /tables/{tableId} {
+      // Public sharing may fetch a table by its known id only; listing remains private.
+      allow get: if isAuthenticated()
+        || get(/databases/$(database)/documents/reports/$(resource.data.report_id)).data.isShared == true;
+      allow list: if isAuthenticated();
+      allow create: if ownsReport(request.resource.data.report_id);
+      allow update, delete: if ownsReport(resource.data.report_id);
+    }
+
+    // Dashboards & Widgets collection
+    match /dashboards/{dashboardId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /widgets/{widgetId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Insights collection
+    match /insights/{insightId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Audit events collection (append-only for actors)
+    match /audit_events/{eventId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit log!
     }
   }
 }

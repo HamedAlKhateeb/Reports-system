@@ -39,9 +39,18 @@ function restoreDigits(str: string, useArabicIndic: boolean): string {
   return str.replace(/\d/g, (d) => ARABIC_INDIC_DIGITS[Number(d)]);
 }
 
+export function isNumericValue(str: string): boolean {
+  if (!str) return false;
+  const clean = normalizeDigits(str.trim()).normalized;
+  if (!clean) return false;
+  return /^-?\d+(\.\d+)?$/.test(clean);
+}
+
 /**
- * Infers next values based on source sequence with support for pure numbers,
- * text with numbers, zero padding, and Arabic numerals.
+ * Infers next numeric values based on source sequence:
+ * - Single cell selected: strictly step = +1 per row.
+ * - Two or more cells selected: step is inferred from difference = (last - first) / (count - 1).
+ * - Preserves Arabic-Indic numerals, decimals, and zero-padding.
  */
 export function inferNextValues(sourceValues: string[], count: number): string[] {
   if (count <= 0) return [];
@@ -51,73 +60,31 @@ export function inferNextValues(sourceValues: string[], count: number): string[]
   const hasArabicIndic = cleanSources.some((v) => /[٠-٩]/.test(v));
   const normalizedSources = cleanSources.map((v) => normalizeDigits(v).normalized);
 
-  // 1. Pure numbers
-  const numRegex = /^-?\d+(\.\d+)?$/;
-  if (normalizedSources.every((v) => numRegex.test(v))) {
-    const nums = normalizedSources.map((v) => parseFloat(v));
-    let step = 1;
-    if (nums.length > 1) {
-      step = (nums[nums.length - 1] - nums[0]) / (nums.length - 1);
-      if (step === 0) step = 1;
-    }
-    const hasDecimals = normalizedSources.some((v) => v.includes('.'));
-    const decimalPlaces = hasDecimals
-      ? Math.max(...normalizedSources.map((v) => (v.split('.')[1] || '').length))
-      : 0;
-
-    const firstStr = normalizedSources[0];
-    const isZeroPadded = !hasDecimals && firstStr.length > 1 && firstStr.startsWith('0');
-    const padLen = isZeroPadded ? firstStr.length : 0;
-
-    let lastNum = nums[nums.length - 1];
-    const results: string[] = [];
-    for (let i = 0; i < count; i++) {
-      lastNum += step;
-      let outStr = hasDecimals ? lastNum.toFixed(decimalPlaces) : String(Math.round(lastNum));
-      if (padLen > 0 && !hasDecimals && lastNum >= 0) {
-        outStr = outStr.padStart(padLen, '0');
-      }
-      results.push(restoreDigits(outStr, hasArabicIndic));
-    }
-    return results;
+  // Pure numbers
+  const nums = normalizedSources.map((v) => parseFloat(v));
+  let step = 1;
+  if (nums.length > 1) {
+    step = (nums[nums.length - 1] - nums[0]) / (nums.length - 1);
+    if (step === 0) step = 1;
   }
+  const hasDecimals = normalizedSources.some((v) => v.includes('.'));
+  const decimalPlaces = hasDecimals
+    ? Math.max(...normalizedSources.map((v) => (v.split('.')[1] || '').length))
+    : 0;
 
-  // 2. Text + Number pattern (e.g., "Item 1", "Task-001", "BUG-05", "صورة-1", "صورة 1")
-  const textNumRegex = /^(.*?)(\d+)(\D*)$/;
-  const firstMatch = normalizedSources[0].match(textNumRegex);
+  const firstStr = normalizedSources[0];
+  const isZeroPadded = !hasDecimals && firstStr.length > 1 && firstStr.startsWith('0');
+  const padLen = isZeroPadded ? firstStr.length : 0;
 
-  if (firstMatch) {
-    const prefix = firstMatch[1];
-    const suffix = firstMatch[3];
-    const allMatch = normalizedSources.every((v) => {
-      const m = v.match(textNumRegex);
-      return m && m[1] === prefix && m[3] === suffix;
-    });
-
-    if (allMatch) {
-      const numbers = normalizedSources.map((v) => parseInt(v.match(textNumRegex)![2], 10));
-      const zeroPaddingLen = firstMatch[2].length;
-      let step = 1;
-      if (numbers.length > 1) {
-        step = Math.round((numbers[numbers.length - 1] - numbers[0]) / (numbers.length - 1)) || 1;
-      }
-
-      let lastNum = numbers[numbers.length - 1];
-      const results: string[] = [];
-      for (let i = 0; i < count; i++) {
-        lastNum += step;
-        const numStr = String(lastNum).padStart(zeroPaddingLen, '0');
-        const formatted = `${prefix}${restoreDigits(numStr, hasArabicIndic)}${suffix}`;
-        results.push(formatted);
-      }
-      return results;
-    }
-  }
-
-  // 3. Repeating / cyclic pattern fallback
+  let lastNum = nums[nums.length - 1];
   const results: string[] = [];
   for (let i = 0; i < count; i++) {
-    results.push(cleanSources[i % cleanSources.length]);
+    lastNum += step;
+    let outStr = hasDecimals ? lastNum.toFixed(decimalPlaces) : String(Math.round(lastNum));
+    if (padLen > 0 && !hasDecimals && lastNum >= 0) {
+      outStr = outStr.padStart(padLen, '0');
+    }
+    results.push(restoreDigits(outStr, hasArabicIndic));
   }
   return results;
 }
@@ -237,6 +204,29 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
         const domNode = view.nodeDOM(cellPos) as HTMLElement;
         if (domNode) selectedCells.push(domNode);
       }
+    }
+
+    // Only allow fill handle on a single column
+    if (startCoords.col !== endCoords.col) {
+      setHandlePos(null);
+      activeTableInfoRef.current = null;
+      return;
+    }
+
+    // Verify all selected cells in this column are numeric
+    const colTexts: string[] = [];
+    for (let r = startCoords.row; r <= endCoords.row; r++) {
+      const cellOffset = map.positionAt(r, startCoords.col, tableNode);
+      const cellNode = state.doc.nodeAt(tablePos + cellOffset);
+      const txt = cellNode ? cellNode.textContent.trim() : '';
+      colTexts.push(txt);
+    }
+
+    const allNumeric = colTexts.length > 0 && colTexts.every((txt) => isNumericValue(txt));
+    if (!allNumeric) {
+      setHandlePos(null);
+      activeTableInfoRef.current = null;
+      return;
     }
 
     // Robust table element resolution
@@ -407,7 +397,7 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
     currentDragTargetRef.current = { row: targetRow, col: endCoords.col };
 
-    // Calculate full-row visual drag outline
+    // Calculate cell-column visual drag outline (constrained to active cell's column)
     const effectiveMaxRow = Math.max(endCoords.row, targetRow);
     const rowsToAdd = effectiveMaxRow - endCoords.row;
 
@@ -415,8 +405,9 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
     const startTr = trList[startRowIdx];
     const startRowTop = startTr ? startTr.getBoundingClientRect().top : tableRect.top;
 
-    const tableLeftOnContainer = tableRect.left - containerRect.left;
-    const tableWidthOnContainer = tableRect.width;
+    // Use selected cell's column coordinates to prevent stretching across full table
+    const cellLeftOnContainer = handlePos ? handlePos.rect.left : (tableRect.left - containerRect.left);
+    const cellWidthOnContainer = handlePos ? handlePos.rect.width : tableRect.width;
 
     let previewTop = startRowTop - containerRect.top;
     let previewHeight = 0;
@@ -435,22 +426,15 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
     setDragBox({
       top: previewTop,
-      left: tableLeftOnContainer,
-      width: tableWidthOnContainer,
-      height: Math.max(20, previewHeight),
+      left: cellLeftOnContainer,
+      width: cellWidthOnContainer,
+      height: Math.max(handlePos ? handlePos.rect.height : 20, previewHeight),
     });
 
     // Inferred preview badge text
     if (rowsToAdd > 0) {
       // Peek what value will be generated for the sequence column
       const sourceTexts: string[] = [];
-      if (startCoords.row === endCoords.row && startCoords.row > 0) {
-        const prevOffset = tableMap.positionAt(startCoords.row - 1, startCoords.col, tableNode);
-        const prevNode = editor.state.doc.nodeAt(tablePos + prevOffset);
-        if (prevNode && prevNode.textContent.trim()) {
-          sourceTexts.push(prevNode.textContent.trim());
-        }
-      }
       for (let r = startCoords.row; r <= endCoords.row; r++) {
         const cellOffset = tableMap.positionAt(r, startCoords.col, tableNode);
         const cellNode = editor.state.doc.nodeAt(tablePos + cellOffset);
@@ -459,7 +443,7 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
       const generated = inferNextValues(sourceTexts, rowsToAdd);
       const nextSample = generated[0] || '';
-      const rowLabel = rowsToAdd === 1 ? (isAr ? 'صف كامل جديد' : 'new full row') : (isAr ? `${rowsToAdd} صفوف جديدة` : `${rowsToAdd} new rows`);
+      const rowLabel = rowsToAdd === 1 ? (isAr ? 'صف جديد' : 'new row') : (isAr ? `${rowsToAdd} صفوف جديدة` : `${rowsToAdd} new rows`);
       setDragPreviewText(`+${rowsToAdd === 1 ? '1 ' : ''}${rowLabel}${nextSample ? ` (${nextSample})` : ''}`);
     } else {
       setDragPreviewText(null);
@@ -506,14 +490,6 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
 
     for (let c = startCol; c <= endCol; c++) {
       const sourceTexts: string[] = [];
-      // If single row is selected, check previous row to infer step if applicable
-      if (startRow === endRow && startRow > 0) {
-        const prevOffset = tableMap.positionAt(startRow - 1, c, tableNode);
-        const prevCell = state.doc.nodeAt(tablePos + prevOffset);
-        if (prevCell && prevCell.textContent.trim()) {
-          sourceTexts.push(prevCell.textContent.trim());
-        }
-      }
       for (let r = startRow; r <= endRow; r++) {
         const cellOffset = tableMap.positionAt(r, c, tableNode);
         const cellNode = state.doc.nodeAt(tablePos + cellOffset);
@@ -643,13 +619,14 @@ export function TableFillHandle({ editor }: TableFillHandleProps) {
             style={{
               top: `${handlePos.top}px`,
               left: `${handlePos.left}px`,
+              touchAction: 'none',
             }}
-            className="group/handle absolute w-3.5 h-3.5 bg-[#2E4034] dark:bg-olive-500 border-2 border-white dark:border-[#161615] rounded-[2px] cursor-crosshair pointer-events-auto shadow-md hover:scale-125 transition-transform z-40 flex items-center justify-center"
-            title={isAr ? 'مقبض التعبئة التلقائية (اسحب لأسفل لإضافة صفوف جديدة، أو انقر مرتين لإضافة صف فوري)' : 'Auto-Fill Handle (Drag down to add rows, or double-click to add 1 row)'}
+            className="group/handle absolute w-3.5 h-3.5 bg-[#2E4034] dark:bg-olive-500 border-2 border-white dark:border-[#161615] rounded-[2px] cursor-crosshair pointer-events-auto shadow-md hover:scale-125 transition-transform z-40 flex items-center justify-center select-none"
+            title={isAr ? 'مقبض التعبئة التلقائية (اسحب لأسفل لملء خلايا العمود، أو انقر مرتين لإضافة صف فوري)' : 'Auto-Fill Handle (Drag down to fill column cells, or double-click to add 1 row)'}
           >
             {/* Tooltip hint on hover */}
             <span className="opacity-0 group-hover/handle:opacity-100 transition-opacity duration-150 pointer-events-none absolute bottom-full mb-1.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-md bg-[#2E4034] text-white text-[11px] font-bold px-2 py-0.5 shadow-xl border border-white/20 z-50">
-              {isAr ? '+ سحب لإضافة صفوف' : '+ Drag to fill'}
+              {isAr ? '+ سحب لتعبئة العمود' : '+ Drag to fill column'}
             </span>
           </div>
         </>

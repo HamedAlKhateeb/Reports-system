@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, Plus, AlertCircle, Link2 } from 'lucide-react';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import {
@@ -10,6 +9,16 @@ import {
   IssueSeverity,
   IssueStatus,
 } from '@/lib/i18n/dictionary';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import { FieldGroup, Field, FieldLabel } from '@/components/ui/field';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 interface NewIssueModalProps {
   reports: ReportItem[];
@@ -29,8 +38,6 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
   const [severity, setSeverity] = useState<IssueSeverity>('medium');
   const [linkedReportId, setLinkedReportId] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
-
-  if (!isOpen) return null;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,123 +69,95 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
   const severities: IssueSeverity[] = ['critical', 'major', 'medium', 'normal', 'minor'];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-          <h2 className="text-lg font-bold text-slate-900">{t('addNewIssue')}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-lg p-6">
+        <DialogHeader>
+          <DialogTitle className="text-lg font-bold">{t('addNewIssue')}</DialogTitle>
+        </DialogHeader>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {t('issueTitleLabel')} <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder={t('issueTitlePlaceholder')}
-              className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
-            />
-          </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <FieldGroup>
+            <Field>
+              <FieldLabel required>{t('issueTitleLabel')}</FieldLabel>
+              <Input
+                type="text"
+                required
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={t('issueTitlePlaceholder')}
+              />
+            </Field>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {t('issueDescriptionLabel')}
-            </label>
-            <textarea
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={t('issueDescriptionPlaceholder')}
-              className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
-            />
-          </div>
+            <Field>
+              <FieldLabel>{t('issueDescriptionLabel')}</FieldLabel>
+              <textarea
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t('issueDescriptionPlaceholder')}
+                className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+            </Field>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {t('issueSeverity')}
-              </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field>
+                <FieldLabel>{t('issueSeverity')}</FieldLabel>
+                <select
+                  value={severity}
+                  onChange={(e) => setSeverity(e.target.value as IssueSeverity)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  {severities.map((s) => (
+                    <option key={s} value={s}>
+                      {getSeverityLabel(s, lang)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field>
+                <FieldLabel>{t('issueStatus')}</FieldLabel>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as IssueStatus)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                >
+                  {statuses.map((st) => (
+                    <option key={st} value={st}>
+                      {getStatusLabel(st, lang)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+
+            <Field>
+              <FieldLabel>{t('linkedReportLabel')}</FieldLabel>
               <select
-                value={severity}
-                onChange={(e) => setSeverity(e.target.value as IssueSeverity)}
-                className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
+                value={linkedReportId}
+                onChange={(e) => setLinkedReportId(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                {severities.map((s) => (
-                  <option key={s} value={s}>
-                    {getSeverityLabel(s, lang)}
+                <option value="">{t('noneLinked')}</option>
+                {reports.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    #{r.reportNumber} - {r.title}
                   </option>
                 ))}
               </select>
-            </div>
+            </Field>
+          </FieldGroup>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {t('issueStatus')}
-              </label>
-              <select
-                value={status}
-                onChange={(e) => setStatus(e.target.value as IssueStatus)}
-                className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
-              >
-                {statuses.map((st) => (
-                  <option key={st} value={st}>
-                    {getStatusLabel(st, lang)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Linked Report Selection */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {t('linkedReportLabel')}
-            </label>
-            <select
-              value={linkedReportId}
-              onChange={(e) => setLinkedReportId(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-teal-500 focus:bg-white focus:outline-none"
-            >
-              <option value="">{t('noneLinked')}</option>
-              {reports.map((r) => (
-                <option key={r.id} value={r.id}>
-                  #{r.reportNumber} - {r.title}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Actions */}
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-            >
+          <DialogFooter className="gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={submitting || !title.trim()}
-              className="rounded-lg bg-teal-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-teal-700 disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" disabled={submitting || !title.trim()}>
               {submitting ? t('loading') : t('create')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

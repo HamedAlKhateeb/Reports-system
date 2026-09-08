@@ -22,21 +22,32 @@ import {
   PanelRightClose,
   Check,
   ShieldCheck,
+  AlertCircle,
+  Database,
+  RotateCcw,
+  AlertTriangle,
+  EyeOff,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
 import { createReport, createIssue, updateReport, updateIssue, getReports, getReportById, getIssues } from '@/lib/db';
-import { ReportItem, IssueItem } from '@/lib/types';
+import { ReportItem, IssueItem, IssueStatus } from '@/lib/types';
 import { getTemplateContent, TemplateType } from '@/components/editor/templates';
+import {
+  AiProviderConfig,
+  AI_CONFIG_KEY,
+  getLocalAiConfig,
+  getAiProviderConfig,
+  saveAiProviderConfig,
+  saveAiAssistantVisible,
+} from '@/lib/ai-config';
+import { useAIContext, buildAiSystemPrompt, extractCleanTextFromTipTap, ActiveContext } from '@/lib/ai-context';
+import { Badge } from '@/components/ui/badge';
+import { toast } from '@/components/ui/toast';
+import { cn } from '@/lib/utils';
 
-export interface AiProviderConfig {
-  provider: 'gemini' | 'openai' | 'anthropic' | 'custom';
-  modelName: string;
-  apiKey: string;
-  baseUrl?: string;
-}
-
-export const AI_CONFIG_KEY = 'ai_provider_config';
+export type { AiProviderConfig };
+export { AI_CONFIG_KEY };
 
 interface Message {
   id: string;
@@ -44,6 +55,7 @@ interface Message {
   content: string;
   attachmentName?: string;
   actionData?: any;
+  toolCalls?: Array<{ name: string; parameters: any }>;
 }
 
 interface AiAssistantModalProps {
@@ -57,6 +69,7 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
   const { user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const { harvestContext, context: liveContext, setSystemStats } = useAIContext();
 
   const isAr = lang === 'ar';
 
@@ -90,6 +103,10 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
   const [createdIssues, setCreatedIssues] = useState<Record<string, number>>({});
   const [appliedModifications, setAppliedModifications] = useState<Record<string, { type: 'issue' | 'report'; id: string; success: boolean }>>({});
   const [dismissedModifications, setDismissedModifications] = useState<Record<string, boolean>>({});
+  const [appliedContentUpdates, setAppliedContentUpdates] = useState<
+    Record<string, { applied: boolean; reverted: boolean; backupSnapshot?: any }>
+  >({});
+  const [dismissedContentUpdates, setDismissedContentUpdates] = useState<Record<string, boolean>>({});
   const [actionLoadingMsgId, setActionLoadingMsgId] = useState<string | null>(null);
 
   // Context State
@@ -101,26 +118,21 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
 
   // Load provider configuration on mount and on open
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(AI_CONFIG_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setProviderConfig((prev) => ({ ...prev, ...parsed }));
-      } else {
-        const legacyKey = localStorage.getItem('gemini_custom_api_key');
-        if (legacyKey) {
-          setProviderConfig({
-            provider: 'gemini',
-            modelName: 'gemini-1.5-flash',
-            apiKey: legacyKey,
-            baseUrl: '',
-          });
-        }
-      }
-    } catch (e) {
-      console.warn('Could not read AI config from localStorage', e);
+    // Synchronous immediate load from cache
+    const initial = getLocalAiConfig(user?.uid);
+    setProviderConfig(initial);
+
+    // Asynchronous sync from Firestore user_settings
+    if (isOpen) {
+      getAiProviderConfig(user?.uid)
+        .then((cfg) => {
+          if (cfg.apiKey || cfg.provider) {
+            setProviderConfig((prev) => ({ ...prev, ...cfg }));
+          }
+        })
+        .catch((e) => console.warn('Could not sync AI config', e));
     }
-  }, [isOpen]);
+  }, [isOpen, user?.uid]);
 
   // Determine active report ID from prop or URL
   const effectiveReportId =
@@ -140,7 +152,7 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
     return () => {
       isMounted = false;
     };
-  }, [effectiveReportId]);
+  }, [effectiveReportId, isOpen]);
 
   useEffect(() => {
     if (isOpen) {
@@ -148,13 +160,10 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
     }
   }, [messages, sending, isOpen]);
 
-  const handleSaveConfig = (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(providerConfig));
-      if (providerConfig.provider === 'gemini' && providerConfig.apiKey) {
-        localStorage.setItem('gemini_custom_api_key', providerConfig.apiKey);
-      }
+      await saveAiProviderConfig(providerConfig, user?.uid);
       setConfigSavedNotice(true);
       setTimeout(() => setConfigSavedNotice(false), 2000);
       setShowSettingsAccordion(false);
@@ -233,6 +242,293 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
     }
   };
 
+  const getSeverityBadgeVariant = (severity?: string): 'destructive' | 'default' | 'secondary' | 'outline' => {
+    const s = (severity || '').toLowerCase();
+    if (s === 'critical' || s === 'حرجة') return 'destructive';
+    if (s === 'major' || s === 'كبيرة') return 'default';
+    if (s === 'medium' || s === 'متوسطة') return 'secondary';
+    if (s === 'normal' || s === 'عادية') return 'secondary';
+    return 'outline';
+  };
+
+  // Tool 1: update_report_content (Safe proposal handler with automatic backup and undo)
+  const handleApplyContentUpdate = async (
+    updateKey: string,
+    parameters: { mode?: string; content?: string }
+  ) => {
+    const mode = parameters.mode || 'append';
+    const content = parameters.content || '';
+
+    let snapshot = (window as any).__lastReportAiSnapshot || currentReport?.contentJson || null;
+    if (typeof window !== 'undefined' && effectiveReportId) {
+      try {
+        const localSaved = localStorage.getItem(`report_ai_backup_${effectiveReportId}`);
+        if (localSaved) {
+          snapshot = JSON.parse(localSaved);
+        }
+      } catch (_) {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ai-update-report-content', {
+          detail: {
+            mode,
+            content,
+            onSnapshotSaved: (snap: any) => {
+              snapshot = snap;
+              setAppliedContentUpdates((prev) => ({
+                ...prev,
+                [updateKey]: { applied: true, reverted: false, backupSnapshot: snap },
+              }));
+            },
+          },
+        })
+      );
+    }
+
+    setAppliedContentUpdates((prev) => ({
+      ...prev,
+      [updateKey]: { applied: true, reverted: false, backupSnapshot: snapshot },
+    }));
+
+    toast.success(
+      isAr ? 'تم تطبيق التعديل على محتوى التقرير بنجاح' : 'Report content updated successfully'
+    );
+  };
+
+  const handleRevertContentUpdate = async (updateKey: string) => {
+    const record = appliedContentUpdates[updateKey];
+    let snapshot = record?.backupSnapshot;
+
+    if (!snapshot && typeof window !== 'undefined' && effectiveReportId) {
+      try {
+        const localSaved = localStorage.getItem(`report_ai_backup_${effectiveReportId}`);
+        if (localSaved) {
+          snapshot = JSON.parse(localSaved);
+        }
+      } catch (_) {}
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ai-revert-report-content', {
+          detail: { snapshot },
+        })
+      );
+    }
+
+    setAppliedContentUpdates((prev) => ({
+      ...prev,
+      [updateKey]: { applied: true, reverted: true, backupSnapshot: snapshot },
+    }));
+
+    toast.success(
+      isAr
+        ? 'تم التراجع عن تعديل المساعد الذكي واستعادة المحتوى السابق بنجاح'
+        : 'Reverted AI modification and restored previous content successfully'
+    );
+  };
+
+  // Tool 2: create_new_report
+  const executeCreateNewReport = async (parameters: {
+    title?: string;
+    folder?: string;
+    content?: string;
+    autoRedirect?: boolean;
+  }): Promise<string | null> => {
+    if (!user) return null;
+    const repTitle = parameters.title || (isAr ? 'مسودة تقرير جديد' : 'New Report Draft');
+    const folder = parameters.folder && parameters.folder !== 'root' ? parameters.folder : null;
+    const rawContent = parameters.content || '';
+
+    const contentLines = rawContent.split('\n');
+    const contentNodes: any[] = [];
+    contentLines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      if (trimmed.startsWith('# ')) {
+        contentNodes.push({
+          type: 'heading',
+          attrs: { level: 1 },
+          content: [{ type: 'text', text: trimmed.slice(2).trim() }],
+        });
+      } else if (trimmed.startsWith('## ')) {
+        contentNodes.push({
+          type: 'heading',
+          attrs: { level: 2 },
+          content: [{ type: 'text', text: trimmed.slice(3).trim() }],
+        });
+      } else if (trimmed.startsWith('### ')) {
+        contentNodes.push({
+          type: 'heading',
+          attrs: { level: 3 },
+          content: [{ type: 'text', text: trimmed.slice(4).trim() }],
+        });
+      } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+        contentNodes.push({
+          type: 'paragraph',
+          content: [{ type: 'text', text: '• ' + trimmed.slice(2).trim() }],
+        });
+      } else {
+        contentNodes.push({
+          type: 'paragraph',
+          content: [{ type: 'text', text: trimmed }],
+        });
+      }
+    });
+
+    const contentJson = {
+      type: 'doc',
+      content:
+        contentNodes.length > 0
+          ? contentNodes
+          : [
+              {
+                type: 'paragraph',
+                content: [{ type: 'text', text: rawContent || (isAr ? 'محتوى التقرير...' : 'Report content...') }],
+              },
+            ],
+    };
+
+    const created = await createReport({
+      title: repTitle,
+      language: lang,
+      author: user.displayName || user.email?.split('@')[0] || 'المراجع',
+      systemUnderReview: isAr ? 'النظام الأساسي' : 'Core Platform',
+      contentJson,
+      folderId: folder,
+      ownerUid: user.uid,
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('report-created', {
+          detail: { reportId: created.id },
+        })
+      );
+    }
+
+    toast.success(isAr ? `تم إنشاء تقرير جديد: ${repTitle}` : `Created new report: ${repTitle}`);
+
+    return created.id;
+  };
+
+  // Tool 3: create_kanban_issue
+  const executeCreateKanbanIssue = async (parameters: {
+    title?: string;
+    description?: string;
+    severity?: string;
+    status?: string;
+    reportId?: string;
+  }) => {
+    if (!user) return;
+    const issueTitle = parameters.title || (isAr ? 'مشكلة مرصودة جديدة' : 'New Logged Issue');
+    const description = parameters.description || '';
+
+    let normSeverity: 'critical' | 'major' | 'medium' | 'normal' | 'minor' = 'medium';
+    const rawSev = (parameters.severity || '').toLowerCase();
+    if (rawSev === 'حرجة' || rawSev === 'critical') normSeverity = 'critical';
+    else if (rawSev === 'كبيرة' || rawSev === 'major') normSeverity = 'major';
+    else if (rawSev === 'متوسطة' || rawSev === 'medium') normSeverity = 'medium';
+    else if (rawSev === 'عادية' || rawSev === 'normal') normSeverity = 'normal';
+    else if (rawSev === 'طفيفة' || rawSev === 'minor') normSeverity = 'minor';
+
+    let normStatus: IssueStatus = 'open';
+    const rawStat = (parameters.status || '').toLowerCase();
+    if (rawStat === 'مفتوحة' || rawStat === 'open') normStatus = 'open';
+    else if (rawStat === 'قيد التنفيذ' || rawStat === 'in_progress') normStatus = 'in_progress';
+    else if (rawStat === 'مكتملة' || rawStat === 'completed' || rawStat === 'done') normStatus = 'done';
+
+    const linkedRepId =
+      parameters.reportId ||
+      currentReport?.id ||
+      (pathname?.startsWith('/reports/') ? pathname.split('/')[2] : null);
+
+    const newIssue = await createIssue({
+      title: issueTitle,
+      description,
+      severity: normSeverity,
+      status: normStatus,
+      linkedReportId: linkedRepId || null,
+      ownerUid: user.uid,
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('issue-created', {
+          detail: { count: 1, issue: newIssue },
+        })
+      );
+    }
+
+    toast.success(isAr ? `تم رصد مشكلة: ${issueTitle}` : `Issue logged: ${issueTitle}`);
+  };
+
+  // Tool 4: query_system_data
+  const executeQuerySystemData = async (parameters: { target?: string; filter?: string }) => {
+    const target = parameters.target || 'all_reports_metadata';
+    const filter = parameters.filter || '';
+    let dataSlice: any = null;
+
+    if (target === 'all_reports_metadata') {
+      const allReps = await getReports(user?.uid).catch(() => []);
+      let filtered = allReps;
+      if (filter && filter.trim()) {
+        const q = filter.toLowerCase().trim();
+        filtered = allReps.filter(
+          (r) => r.title?.toLowerCase().includes(q) || r.author?.toLowerCase().includes(q)
+        );
+      }
+      dataSlice = filtered.slice(0, 15).map((r) => ({
+        id: r.id,
+        reportNumber: r.reportNumber,
+        title: r.title,
+        author: r.author,
+        createdAt: r.createdAt,
+        folderId: r.folderId,
+      }));
+    } else if (target === 'all_issues') {
+      const issues = await getIssues(user?.uid).catch(() => []);
+      let filtered = issues;
+      if (filter && filter.trim()) {
+        const q = filter.toLowerCase().trim();
+        filtered = issues.filter(
+          (i) =>
+            i.title?.toLowerCase().includes(q) ||
+            i.severity?.toLowerCase().includes(q) ||
+            i.status?.toLowerCase().includes(q) ||
+            i.description?.toLowerCase().includes(q)
+        );
+      }
+      dataSlice = filtered.slice(0, 20).map((i) => ({
+        id: i.id,
+        title: i.title,
+        severity: i.severity,
+        status: i.status,
+        linkedReportId: i.linkedReportId,
+      }));
+    } else if (target === 'specific_report_by_id') {
+      const repId = filter || currentReport?.id;
+      if (repId) {
+        const rep = await getReportById(repId, user?.uid).catch(() => null);
+        if (rep) {
+          dataSlice = {
+            id: rep.id,
+            reportNumber: rep.reportNumber,
+            title: rep.title,
+            author: rep.author,
+            systemUnderReview: rep.systemUnderReview,
+            contentSummary: extractCleanTextFromTipTap(rep.contentJson, 2500),
+            createdAt: rep.createdAt,
+          };
+        }
+      }
+    }
+
+    return dataSlice;
+  };
+
   const handleSendMessage = async (textToSend?: string) => {
     const query = textToSend || inputValue;
     if (!query.trim() && !attachedFile) return;
@@ -251,32 +547,30 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
     setSending(true);
 
     try {
-      // Gather context
-      let currentReportContext: any = undefined;
-      if (includeCurrentReportContext && currentReport) {
-        let contentPreview = '';
-        try {
-          const docContent = currentReport.contentJson?.content || [];
-          contentPreview = docContent
-            .map((c: any) => {
-              if (c.content && Array.isArray(c.content)) {
-                return c.content.map((child: any) => child.text || '').join(' ');
-              }
-              return '';
-            })
-            .filter(Boolean)
-            .slice(0, 8)
-            .join('\n');
-        } catch (_) {}
+      // Gather context & harvest live state
+      const activeContext = harvestContext();
 
-        currentReportContext = {
-          id: currentReport.id,
-          reportNumber: currentReport.reportNumber,
-          title: currentReport.title,
-          author: currentReport.author,
-          systemUnderReview: currentReport.systemUnderReview,
-          contentPreview,
-        };
+      let currentReportContext: any = undefined;
+      if (includeCurrentReportContext) {
+        if (activeContext.activeReport) {
+          currentReportContext = {
+            id: activeContext.activeReport.id,
+            reportNumber: currentReport?.reportNumber || 'N/A',
+            title: activeContext.activeReport.title,
+            author: currentReport?.author,
+            systemUnderReview: currentReport?.systemUnderReview,
+            contentPreview: activeContext.activeReport.content,
+          };
+        } else if (currentReport) {
+          currentReportContext = {
+            id: currentReport.id,
+            reportNumber: currentReport.reportNumber,
+            title: currentReport.title,
+            author: currentReport.author,
+            systemUnderReview: currentReport.systemUnderReview,
+            contentPreview: extractCleanTextFromTipTap(currentReport.contentJson),
+          };
+        }
       }
 
       // Always fetch user's live issues and reports for complete context
@@ -284,6 +578,12 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
         getIssues(user?.uid).catch(() => []),
         getReports(user?.uid).catch(() => []),
       ]);
+
+      const totalReports = allReps.length;
+      const openIssuesCount = issues.filter((i) => i.status === 'open').length;
+      const criticalIssuesCount = issues.filter((i) => i.severity === 'critical').length;
+      const liveStats = { totalReports, openIssuesCount, criticalIssuesCount };
+      setSystemStats(liveStats);
 
       const issuesSummary = issues.map((iss) => ({
         id: iss.id,
@@ -302,6 +602,36 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
         systemUnderReview: r.systemUnderReview,
         createdAt: r.createdAt,
       }));
+
+      // Enrich activeContext with related issues and system stats
+      const activeRepId = activeContext.activeReport?.id || currentReport?.id;
+      const effectiveIssues = activeContext.activeReport?.issues?.length
+        ? activeContext.activeReport.issues
+        : activeRepId
+        ? issuesSummary
+            .filter((i) => i.linkedReportId === activeRepId)
+            .map((i) => ({ id: i.id, title: i.title, severity: i.severity, status: i.status }))
+        : [];
+
+      const enrichedActiveContext: ActiveContext = {
+        ...activeContext,
+        systemStats: liveStats,
+        activeReport: activeContext.activeReport
+          ? {
+              ...activeContext.activeReport,
+              issues: effectiveIssues,
+            }
+          : currentReportContext
+          ? {
+              id: currentReportContext.id,
+              title: currentReportContext.title,
+              content: currentReportContext.contentPreview || '',
+              issues: effectiveIssues,
+            }
+          : undefined,
+      };
+
+      const systemPrompt = buildAiSystemPrompt(enrichedActiveContext);
 
       // Read freshest config from storage in case it was updated in settings
       let activeConfig = { ...providerConfig };
@@ -333,6 +663,8 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
           modelName: activeConfig.modelName,
           apiKey: activeConfig.apiKey,
           baseUrl: activeConfig.baseUrl,
+          systemPrompt,
+          activeContext: enrichedActiveContext,
           context: {
             currentReport: currentReportContext,
             issuesSummary,
@@ -348,28 +680,75 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
       const data = await res.json();
       const rawReply = data.reply || '';
 
-      // Extract json_action if present
-      let cleanedReply = rawReply;
-      let actionData = null;
+      // 1. Extract tool_call blocks if present
+      const toolCalls: Array<{ name: string; parameters: any }> = [];
+      const toolRegex = /```tool_call([\s\S]*?)```/g;
+      let toolMatch;
+      while ((toolMatch = toolRegex.exec(rawReply)) !== null) {
+        try {
+          const parsed = JSON.parse(toolMatch[1].trim());
+          if (parsed && (parsed.name || parsed.tool)) {
+            toolCalls.push({
+              name: parsed.name || parsed.tool,
+              parameters: parsed.parameters || parsed.args || {},
+            });
+          }
+        } catch (err) {
+          console.warn('Could not parse tool_call JSON from AI reply', err);
+        }
+      }
 
+      // 2. Extract legacy json_action if present
+      let actionData = null;
       const actionMatch = rawReply.match(/```json_action([\s\S]*?)```/);
       if (actionMatch && actionMatch[1]) {
         try {
           actionData = JSON.parse(actionMatch[1].trim());
-          cleanedReply = rawReply.replace(/```json_action[\s\S]*?```/, '').trim();
         } catch (err) {
           console.warn('Could not parse action JSON from AI reply', err);
         }
       }
 
+      // Clean markdown tags from display content
+      const cleanedReply = rawReply
+        .replace(/```tool_call[\s\S]*?```/g, '')
+        .replace(/```json_action[\s\S]*?```/g, '')
+        .trim();
+
+      const assistantMsgId = 'reply_' + Date.now();
       const assistantMessage: Message = {
-        id: 'reply_' + Date.now(),
+        id: assistantMsgId,
         role: 'assistant',
         content: cleanedReply,
         actionData,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
+
+      // 3. Execute Structured Tools
+      for (const tc of toolCalls) {
+        if (tc.name === 'update_report_content') {
+          // CRITICAL SAFEGUARD: Do NOT auto-execute content mutations!
+          // The proposal is displayed interactively with approval and rollback controls.
+        } else if (tc.name === 'create_new_report') {
+          const newRepId = await executeCreateNewReport(tc.parameters);
+          if (newRepId) {
+            setCreatedReports((prev) => ({ ...prev, [assistantMsgId]: newRepId }));
+          }
+        } else if (tc.name === 'create_kanban_issue') {
+          await executeCreateKanbanIssue(tc.parameters);
+        } else if (tc.name === 'query_system_data') {
+          const queryResult = await executeQuerySystemData(tc.parameters);
+          if (queryResult) {
+            setTimeout(() => {
+              handleSendMessage(
+                `[نتيجة استعلام بيانات النظام / System Query Result for "${tc.parameters.target}"]:\n${JSON.stringify(queryResult, null, 2)}`
+              );
+            }, 350);
+          }
+        }
+      }
     } catch (err: any) {
       console.error('AI chat error:', err);
       setMessages((prev) => [
@@ -530,6 +909,14 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
         ownerUid: user.uid,
       });
 
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('report-created', {
+            detail: { reportId: created.id },
+          })
+        );
+      }
+
       return created.id;
     } catch (err) {
       console.error('Failed to create report from AI action', err);
@@ -566,6 +953,14 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
         count++;
       }
       setCreatedIssues((prev) => ({ ...prev, [msgId]: count }));
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('issue-created', {
+            detail: { count },
+          })
+        );
+      }
     } catch (err) {
       console.error('Failed to create issues from AI action', err);
     } finally {
@@ -577,18 +972,48 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
   const handleExecuteUpdateIssue = async (msgId: string, actionData: any) => {
     try {
       setActionLoadingMsgId(msgId);
-      const { issueId, title, status, severity, description } = actionData;
+      let targetIssueId = actionData.issueId;
+      if (!targetIssueId) {
+        throw new Error('Issue ID could not be determined');
+      }
+
+      const numMatch = typeof targetIssueId === 'string' ? targetIssueId.replace(/^#/, '').trim() : String(targetIssueId);
+      if (/^\d+$/.test(numMatch)) {
+        try {
+          const userIssues = await getIssues(user?.uid);
+          const matched = userIssues.find((i) => i.id === targetIssueId || i.id.endsWith(numMatch));
+          if (matched) {
+            targetIssueId = matched.id;
+          }
+        } catch (_) {}
+      }
+
+      const { title, status, severity, description } = actionData;
       const updates: any = {};
       if (title !== undefined) updates.title = title;
-      if (status !== undefined) updates.status = status;
+      if (status !== undefined) {
+        let normStatus = status;
+        if (status === 'مفتوحة' || status === 'open') normStatus = 'open';
+        else if (status === 'قيد التنفيذ' || status === 'in_progress') normStatus = 'in_progress';
+        else if (status === 'مكتملة' || status === 'completed' || status === 'resolved') normStatus = 'completed';
+        updates.status = normStatus;
+      }
       if (severity !== undefined) updates.severity = severity;
       if (description !== undefined) updates.description = description;
 
-      await updateIssue(issueId, updates);
+      await updateIssue(targetIssueId, updates);
       setAppliedModifications((prev) => ({
         ...prev,
-        [msgId]: { type: 'issue', id: issueId, success: true },
+        [msgId]: { type: 'issue', id: targetIssueId, success: true },
       }));
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('issue-updated', {
+            detail: { issueId: targetIssueId, updates },
+          })
+        );
+      }
     } catch (err) {
       console.error('Failed to update issue from AI action', err);
     } finally {
@@ -600,17 +1025,59 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
   const handleExecuteUpdateReport = async (msgId: string, actionData: any) => {
     try {
       setActionLoadingMsgId(msgId);
-      const { reportId, title, summary, systemUnderReview } = actionData;
+      let targetReportId = actionData.reportId;
+      if (!targetReportId || targetReportId === 'current' || targetReportId === 'N/A') {
+        targetReportId = currentReport?.id;
+      }
+
+      // If targetReportId looks like a report number (e.g. "#1" or "1" or numeric)
+      const numMatch = typeof targetReportId === 'string' ? targetReportId.replace(/^#/, '').trim() : String(targetReportId);
+      if (/^\d+$/.test(numMatch)) {
+        const num = parseInt(numMatch, 10);
+        if (currentReport && (currentReport.reportNumber === num || currentReport.id === targetReportId)) {
+          targetReportId = currentReport.id;
+        } else {
+          try {
+            const userReps = await getReports(user?.uid);
+            const matched = userReps.find((r) => r.reportNumber === num || r.id === targetReportId);
+            if (matched) {
+              targetReportId = matched.id;
+            }
+          } catch (_) {}
+        }
+      } else if (currentReport?.id && (!targetReportId || targetReportId === currentReport.reportNumber?.toString())) {
+        targetReportId = currentReport.id;
+      }
+
+      if (!targetReportId) {
+        throw new Error('Report ID could not be determined');
+      }
+
+      const { title, summary, systemUnderReview } = actionData;
       const updates: any = {};
       if (title !== undefined) updates.title = title;
       if (systemUnderReview !== undefined) updates.systemUnderReview = systemUnderReview;
       if (summary !== undefined) updates.summary = summary;
 
-      await updateReport(reportId, updates);
+      await updateReport(targetReportId, updates);
       setAppliedModifications((prev) => ({
         ...prev,
-        [msgId]: { type: 'report', id: reportId, success: true },
+        [msgId]: { type: 'report', id: targetReportId, success: true },
       }));
+
+      // Update currentReport local state if it is the one being modified
+      if (currentReport && currentReport.id === targetReportId) {
+        setCurrentReport((prev) => (prev ? { ...prev, ...updates } : null));
+      }
+
+      // Notify all pages and components that this report was updated
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('report-updated', {
+            detail: { reportId: targetReportId, updates },
+          })
+        );
+      }
     } catch (err) {
       console.error('Failed to update report from AI action', err);
     } finally {
@@ -693,11 +1160,27 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
                 setCreatedIssues({});
                 setAppliedModifications({});
                 setDismissedModifications({});
+                setAppliedContentUpdates({});
+                setDismissedContentUpdates({});
               }}
               className="rounded-lg p-1.5 text-[#6B6964] dark:text-[#9E9C96] hover:bg-black/5 dark:hover:bg-white/5 hover:text-[#202020] transition-colors"
               title={t('clearChat')}
             >
               <Trash2 className="h-4 w-4" />
+            </button>
+
+            {/* Hide AI Assistant Button */}
+            <button
+              type="button"
+              onClick={async () => {
+                await saveAiAssistantVisible(false, user?.uid);
+                toast.info(t('aiAssistantHiddenNotice'));
+                onClose();
+              }}
+              className="rounded-lg p-1.5 text-[#6B6964] dark:text-[#9E9C96] hover:bg-black/5 dark:hover:bg-white/5 hover:text-[#202020] transition-colors"
+              title={t('hideAiAssistant')}
+            >
+              <EyeOff className="h-4 w-4" />
             </button>
 
             {/* Close Drawer Button */}
@@ -1170,6 +1653,216 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
                           )}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {/* Tool Call Cards executed by Autonomous AI Agent */}
+                  {msg.toolCalls && msg.toolCalls.length > 0 && (
+                    <div className="mt-3.5 space-y-2 border-t border-[#E7E6E2] dark:border-[#2B2B29] pt-2.5">
+                      {msg.toolCalls.map((tool, idx) => {
+                        if (tool.name === 'update_report_content') {
+                          const updateKey = `${msg.id}_tool_${idx}`;
+                          const status = appliedContentUpdates[updateKey];
+                          const isDismissed = dismissedContentUpdates[updateKey];
+                          const mode = tool.parameters?.mode || 'append';
+                          const content = tool.parameters?.content || '';
+                          const isReplaceAll = mode === 'replace_all';
+
+                          if (isDismissed) {
+                            return (
+                              <div
+                                key={idx}
+                                className="rounded-xl border border-border/60 bg-muted/30 p-2.5 text-xs text-muted-foreground italic text-center"
+                              >
+                                {isAr ? 'تم تجاهل اقتراح تعديل المحتوى.' : 'Content update proposal dismissed.'}
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div
+                              key={idx}
+                              className={cn(
+                                'rounded-xl border p-3 text-xs space-y-2.5 shadow-2xs transition-all',
+                                isReplaceAll
+                                  ? 'border-red-300 dark:border-red-900/60 bg-red-50/40 dark:bg-red-950/20'
+                                  : 'border-olive-300 dark:border-olive-800/60 bg-olive-50/40 dark:bg-olive-950/20'
+                              )}
+                            >
+                              {/* Header with Mode Badge */}
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-1.5 font-bold">
+                                  {isReplaceAll ? (
+                                    <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0" />
+                                  ) : (
+                                    <FileText className="h-4 w-4 text-olive-700 dark:text-olive-400 shrink-0" />
+                                  )}
+                                  <span className={isReplaceAll ? 'text-red-900 dark:text-red-200' : 'text-foreground'}>
+                                    {t('aiProposalTitle')}
+                                  </span>
+                                </div>
+
+                                <Badge
+                                  variant={isReplaceAll ? 'destructive' : 'secondary'}
+                                  className="text-[10px] font-bold px-2 py-0.5"
+                                >
+                                  {mode === 'replace_all'
+                                    ? t('aiProposalReplaceAll')
+                                    : mode === 'prepend'
+                                    ? t('aiProposalPrepend')
+                                    : mode === 'replace_selection'
+                                    ? t('aiProposalReplaceSelection')
+                                    : t('aiProposalAppend')}
+                                </Badge>
+                              </div>
+
+                              {/* Critical Warning if Replace All */}
+                              {isReplaceAll && (
+                                <div className="rounded-lg border border-red-200 dark:border-red-800/80 bg-red-100/60 dark:bg-red-950/50 p-2 text-[11px] text-red-800 dark:text-red-300 leading-relaxed font-medium">
+                                  {t('aiProposalReplaceWarning')}
+                                </div>
+                              )}
+
+                              {/* Content Preview */}
+                              <div className="space-y-1">
+                                <span className="text-[11px] font-semibold text-muted-foreground">
+                                  {isAr ? 'معاينة النص المقترح:' : 'Proposed Content Preview:'}
+                                </span>
+                                <div className="max-h-40 overflow-y-auto rounded-lg border border-border/80 bg-background/80 p-2 font-mono text-[11px] whitespace-pre-wrap text-foreground">
+                                  {content.length > 800 ? content.slice(0, 800) + '...' : content}
+                                </div>
+                              </div>
+
+                              {/* Status & Action Buttons */}
+                              {status?.applied && !status?.reverted ? (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-emerald-100/80 dark:bg-emerald-950/60 p-2 text-xs font-bold text-emerald-900 dark:text-emerald-200">
+                                  <span className="flex items-center gap-1.5">
+                                    <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                                    <span>{t('aiModificationApplied')}</span>
+                                  </span>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRevertContentUpdate(updateKey)}
+                                    className="flex items-center gap-1.5 text-xs text-rose-700 dark:text-rose-300 hover:text-rose-900 dark:hover:text-rose-100 font-bold bg-white/80 dark:bg-black/40 hover:bg-white dark:hover:bg-black/60 px-2.5 py-1 rounded-md border border-rose-300 dark:border-rose-800 transition-all shadow-2xs cursor-pointer"
+                                    title={t('aiUndoModification')}
+                                  >
+                                    <RotateCcw className="h-3.5 w-3.5" />
+                                    <span>{t('aiUndoModification')}</span>
+                                  </button>
+                                </div>
+                              ) : status?.reverted ? (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-amber-100/80 dark:bg-amber-950/60 p-2 text-xs font-bold text-amber-900 dark:text-amber-200">
+                                  <span className="flex items-center gap-1.5">
+                                    <RotateCcw className="h-4 w-4 text-amber-600 shrink-0" />
+                                    <span>{t('aiModificationUndone')}</span>
+                                  </span>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplyContentUpdate(updateKey, tool.parameters)}
+                                    className="flex items-center gap-1 text-xs text-primary font-bold hover:underline"
+                                  >
+                                    <span>{t('aiApplyProposal')}</span>
+                                  </button>
+                                </div>
+                              ) : (
+                                <div className="flex items-center justify-end gap-2 pt-1 border-t border-border/40">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDismissedContentUpdates((prev) => ({ ...prev, [updateKey]: true }))}
+                                    className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground hover:bg-muted transition-colors cursor-pointer"
+                                  >
+                                    {t('aiDismissProposal')}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplyContentUpdate(updateKey, tool.parameters)}
+                                    className={cn(
+                                      'flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-bold text-white shadow-2xs transition-colors cursor-pointer',
+                                      isReplaceAll
+                                        ? 'bg-red-700 hover:bg-red-800'
+                                        : 'bg-[#2E4034] hover:bg-[#24382F]'
+                                    )}
+                                  >
+                                    <ShieldCheck className="h-3.5 w-3.5" />
+                                    <span>{t('aiApplyProposal')}</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        if (tool.name === 'create_new_report') {
+                          return (
+                            <div key={idx} className="flex items-center justify-between rounded-lg border border-border bg-card/60 p-2.5 text-xs">
+                              <div className="flex items-center gap-2 truncate">
+                                <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                                <span className="font-semibold text-foreground truncate">
+                                  {isAr ? 'تم إنشاء تقرير جديد:' : 'Report created:'} {tool.parameters?.title}
+                                </span>
+                              </div>
+                              {repId && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onClose();
+                                    router.push(`/reports/${repId}`);
+                                  }}
+                                  className="flex items-center gap-1 text-xs text-primary font-bold hover:underline shrink-0"
+                                >
+                                  <span>{isAr ? 'عرض' : 'View'}</span>
+                                  <ExternalLink className="h-3 w-3" />
+                                </button>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        if (tool.name === 'create_kanban_issue') {
+                          return (
+                            <div key={idx} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-card/60 p-2.5 text-xs">
+                              <div className="flex items-center gap-2 truncate">
+                                <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                                <span className="font-semibold text-foreground truncate">
+                                  [تم رصد مشكلة: {tool.parameters?.title} - تصنيف: {tool.parameters?.severity}]
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <Badge variant={getSeverityBadgeVariant(tool.parameters?.severity)}>
+                                  {tool.parameters?.severity}
+                                </Badge>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    onClose();
+                                    router.push('/dashboard');
+                                  }}
+                                  className="text-[11px] text-muted-foreground hover:text-foreground hover:underline flex items-center gap-0.5"
+                                >
+                                  <span>{isAr ? 'اللوحة' : 'Board'}</span>
+                                  <ExternalLink className="h-3 w-3" />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        }
+
+                        if (tool.name === 'query_system_data') {
+                          return (
+                            <div key={idx} className="flex items-center gap-2 rounded-lg border border-border bg-card/60 p-2 text-xs text-muted-foreground">
+                              <Database className="h-4 w-4 text-primary shrink-0" />
+                              <span>
+                                {isAr ? 'تم استعلام بيانات النظام:' : 'System query executed:'} {tool.parameters?.target}
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        return null;
+                      })}
                     </div>
                   )}
                 </div>

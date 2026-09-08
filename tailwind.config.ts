@@ -43,8 +43,10 @@ const config: Config = {
           900: '#26342B',
           950: '#151D18',
         },
-        // Legacy primary mapped to tasteful olive/teal tone
+        // Semantic primary and palette
         primary: {
+          DEFAULT: 'hsl(var(--primary))',
+          foreground: 'hsl(var(--primary-foreground))',
           50: '#F4F6F4',
           100: '#E7ECE8',
           200: '#D1DBD3',
@@ -55,6 +57,10 @@ const config: Config = {
           700: '#2E4034',
           800: '#26342B',
           900: '#1D2721',
+        },
+        secondary: {
+          DEFAULT: 'hsl(var(--secondary))',
+          foreground: 'hsl(var(--secondary-foreground))',
         },
         // Semantic shadcn design tokens
         border: 'hsl(var(--border))',

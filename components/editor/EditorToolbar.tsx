@@ -41,6 +41,10 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { TableEntity } from '@/lib/types';
+import { saveTable } from '@/lib/db';
+import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
 const TEXT_COLORS = [
@@ -63,17 +67,71 @@ const HIGHLIGHT_COLORS = [
 
 interface EditorToolbarProps {
   editor: Editor | null;
+  reportId?: string;
   onImageUpload: (file: File) => void;
   uploadingImage?: boolean;
 }
 
-export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorToolbarProps) {
+export function EditorToolbar({
+  editor,
+  reportId,
+  onImageUpload,
+  uploadingImage,
+}: EditorToolbarProps) {
   const { t, isRtl, lang } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
   const [showLinkPopover, setShowLinkPopover] = useState(false);
   const [linkUrlInput, setLinkUrlInput] = useState('');
+
+  const handleInsertSmartTable = async () => {
+    if (!editor) return;
+    const newTableId = `tbl_${reportId || 'rep'}_${Date.now().toString(36)}`;
+    const defaultTable: TableEntity = {
+      id: newTableId,
+      report_id: reportId || '',
+      name: lang === 'ar' ? 'جدول' : 'Table',
+      direction: lang === 'ar' ? 'rtl' : 'ltr',
+      cell_formats: {},
+      merged_cells: [],
+      columns_data: [
+        { id: 'A', name: lang === 'ar' ? 'البند' : 'Item', type: 'text', width: 200 },
+        { id: 'B', name: lang === 'ar' ? 'الوصف' : 'Description', type: 'text', width: 260 },
+        { id: 'C', name: lang === 'ar' ? 'العدد' : 'Count', type: 'number', width: 110 },
+      ],
+      rows_data: [
+        { A: '', B: '', C: '' },
+        { A: '', B: '', C: '' },
+        { A: '', B: '', C: '' },
+      ],
+      version: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    await saveTable(defaultTable);
+    (editor.chain().focus() as any)
+      .insertSmartTable({
+        tableId: newTableId,
+        reportId: reportId || '',
+        displayMode: 'embedded-edit',
+      })
+      .run();
+    toast.success(lang === 'ar' ? 'تم إدراج الجدول في التقرير' : 'Table inserted into report');
+  };
+
+  // Context menu dispatches 'editor-insert-table-request' so there is exactly
+  // ONE insertion path for tables across the whole editor UI.
+  const insertTableRef = useRef(handleInsertSmartTable);
+  insertTableRef.current = handleInsertSmartTable;
+  React.useEffect(() => {
+    const handler = () => {
+      insertTableRef.current();
+    };
+    window.addEventListener('editor-insert-table-request', handler);
+    return () => window.removeEventListener('editor-insert-table-request', handler);
+  }, []);
 
   if (!editor) return null;
 
@@ -121,8 +179,8 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
 
   return (
     <div className="flex flex-col bg-card/60 backdrop-blur-sm w-full max-w-full">
-      {/* Primary Toolbar */}
-      <div className="flex flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto">
+      {/* Primary Toolbar - Smooth horizontal scroll on mobile, wrap on desktop */}
+      <div className="toolbar-container flex flex-nowrap sm:flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto sm:overflow-visible scroll-smooth relative z-30">
         {/* Hidden file input */}
         <input
           type="file"
@@ -258,42 +316,90 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
           </Button>
 
           {/* Link Button and Popover */}
-          <div className="relative">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                const prev = editor.getAttributes('link').href || '';
-                setLinkUrlInput(prev);
-                setShowLinkPopover(!showLinkPopover);
-                setShowColorPicker(false);
-                setShowHighlightPicker(false);
-              }}
-              className={cn(
-                "h-8 w-8 rounded-lg",
-                editor.isActive('link')
-                  ? "bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-200 font-bold"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-              title={editor.isActive('link') ? (lang === 'ar' ? 'تعديل الرابط' : 'Edit Link') : (lang === 'ar' ? 'إدراج رابط' : 'Insert Link')}
+          <Popover open={showLinkPopover} onOpenChange={setShowLinkPopover}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  const prev = editor.getAttributes('link').href || '';
+                  setLinkUrlInput(prev);
+                }}
+                className={cn(
+                  "h-8 w-8 rounded-lg",
+                  editor.isActive('link')
+                    ? "bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-200 font-bold"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title={editor.isActive('link') ? (lang === 'ar' ? 'تعديل الرابط' : 'Edit Link') : (lang === 'ar' ? 'إدراج رابط' : 'Insert Link')}
+              >
+                <LinkIcon className="h-4 w-4" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="center"
+              sideOffset={8}
+              className="z-50 w-64 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl"
             >
-              <LinkIcon className="h-4 w-4" />
-            </Button>
+              <div className="text-[11px] font-semibold text-foreground mb-1.5">
+                {lang === 'ar' ? 'إدراج أو تعديل الرابط:' : 'Insert or Edit Link:'}
+              </div>
+              <input
+                type="url"
+                autoFocus
+                value={linkUrlInput}
+                onChange={(e) => setLinkUrlInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    let cleanUrl = linkUrlInput.trim();
+                    if (!cleanUrl) {
+                      editor.chain().focus().unsetLink().run();
+                    } else {
+                      if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('mailto:')) {
+                        cleanUrl = 'https://' + cleanUrl;
+                      }
+                      editor.chain().focus().extendMarkRange('link').setLink({ href: cleanUrl }).run();
+                    }
+                    setShowLinkPopover(false);
+                  }
+                }}
+                placeholder="https://example.com"
+                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-[#2E4034] focus:ring-1 focus:ring-[#2E4034] mb-2 text-foreground"
+              />
+              <div className="flex items-center justify-between gap-1.5">
+                {editor.isActive('link') ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      editor.chain().focus().unsetLink().run();
+                      setShowLinkPopover(false);
+                    }}
+                    className="h-7 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
+                  >
+                    <Unlink className="h-3 w-3 me-1" />
+                    <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
+                  </Button>
+                ) : <div />}
 
-            {showLinkPopover && (
-              <div className="absolute top-full start-0 z-50 mt-1.5 w-64 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl backdrop-blur-md">
-                <div className="text-[11px] font-semibold text-foreground mb-1.5">
-                  {lang === 'ar' ? 'إدراج أو تعديل الرابط:' : 'Insert or Edit Link:'}
-                </div>
-                <input
-                  type="url"
-                  autoFocus
-                  value={linkUrlInput}
-                  onChange={(e) => setLinkUrlInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowLinkPopover(false)}
+                    className="h-7 px-2 text-[11px] text-muted-foreground rounded-md"
+                  >
+                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
                       let cleanUrl = linkUrlInput.trim();
                       if (!cleanUrl) {
                         editor.chain().focus().unsetLink().run();
@@ -304,169 +410,122 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
                         editor.chain().focus().extendMarkRange('link').setLink({ href: cleanUrl }).run();
                       }
                       setShowLinkPopover(false);
-                    }
-                  }}
-                  placeholder="https://example.com"
-                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-[#2E4034] focus:ring-1 focus:ring-[#2E4034] mb-2 text-foreground"
-                />
-                <div className="flex items-center justify-between gap-1.5">
-                  {editor.isActive('link') ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        editor.chain().focus().unsetLink().run();
-                        setShowLinkPopover(false);
-                      }}
-                      className="h-7 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
-                    >
-                      <Unlink className="h-3 w-3 me-1" />
-                      <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
-                    </Button>
-                  ) : <div />}
-
-                  <div className="flex items-center gap-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setShowLinkPopover(false)}
-                      className="h-7 px-2 text-[11px] text-muted-foreground rounded-md"
-                    >
-                      {lang === 'ar' ? 'إلغاء' : 'Cancel'}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => {
-                        let cleanUrl = linkUrlInput.trim();
-                        if (!cleanUrl) {
-                          editor.chain().focus().unsetLink().run();
-                        } else {
-                          if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://') && !cleanUrl.startsWith('mailto:')) {
-                            cleanUrl = 'https://' + cleanUrl;
-                          }
-                          editor.chain().focus().extendMarkRange('link').setLink({ href: cleanUrl }).run();
-                        }
-                        setShowLinkPopover(false);
-                      }}
-                      className="h-7 px-2.5 text-[11px] font-semibold bg-[#2E4034] hover:bg-[#24382F] text-white rounded-md shadow-2xs"
-                    >
-                      {lang === 'ar' ? 'تطبيق' : 'Apply'}
-                    </Button>
-                  </div>
+                    }}
+                    className="h-7 px-2.5 text-[11px] font-semibold bg-[#2E4034] hover:bg-[#24382F] text-white rounded-md shadow-2xs"
+                  >
+                    {lang === 'ar' ? 'تطبيق' : 'Apply'}
+                  </Button>
                 </div>
               </div>
-            )}
-          </div>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
 
         {/* Colors & Highlight Palette */}
-        <div className="relative flex items-center gap-0.5">
+        <div className="flex items-center gap-0.5">
           {/* Text Color Button */}
-          <div className="relative">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowColorPicker(!showColorPicker);
-                setShowHighlightPicker(false);
-              }}
-              className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
-              title={t('textColor')}
+          <Popover open={showColorPicker} onOpenChange={setShowColorPicker}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
+                title={t('textColor')}
+              >
+                <Baseline className="h-4 w-4" />
+                <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="center"
+              sideOffset={8}
+              className="z-50 w-auto p-2.5 bg-card border border-border shadow-xl rounded-xl"
             >
-              <Baseline className="h-4 w-4" />
-              <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-            </Button>
-
-            {showColorPicker && (
-              <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
-                <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1">
-                  {t('textColor')}
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 w-32">
-                  {TEXT_COLORS.map((c) => (
-                    <button
-                      key={c.hex}
-                      type="button"
-                      onClick={() => {
-                        (editor.chain().focus() as any).setTextColor(c.hex).run();
-                        setShowColorPicker(false);
-                      }}
-                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
-                      style={{ backgroundColor: c.hex }}
-                      title={lang === 'ar' ? c.labelAr : c.labelEn}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    (editor.chain().focus() as any).unsetTextColor().run();
-                    setShowColorPicker(false);
-                  }}
-                  className="mt-1 rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
-                >
-                  {t('removeColor')}
-                </button>
+              <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1.5">
+                {t('textColor')}
               </div>
-            )}
-          </div>
+              <div className="grid grid-cols-3 gap-1.5 w-32">
+                {TEXT_COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    onClick={() => {
+                      (editor.chain().focus() as any).setTextColor(c.hex).run();
+                      setShowColorPicker(false);
+                    }}
+                    className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
+                    style={{ backgroundColor: c.hex }}
+                    title={lang === 'ar' ? c.labelAr : c.labelEn}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  (editor.chain().focus() as any).unsetTextColor().run();
+                  setShowColorPicker(false);
+                }}
+                className="mt-2 w-full rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
+              >
+                {t('removeColor')}
+              </button>
+            </PopoverContent>
+          </Popover>
 
           {/* Text Highlight Button */}
-          <div className="relative">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setShowHighlightPicker(!showHighlightPicker);
-                setShowColorPicker(false);
-              }}
-              className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
-              title={t('highlightColor')}
+          <Popover open={showHighlightPicker} onOpenChange={setShowHighlightPicker}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-1.5 rounded-lg text-muted-foreground hover:text-foreground gap-0.5"
+                title={t('highlightColor')}
+              >
+                <Highlighter className="h-4 w-4" />
+                <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="top"
+              align="center"
+              sideOffset={8}
+              className="z-50 w-auto p-2.5 bg-card border border-border shadow-xl rounded-xl"
             >
-              <Highlighter className="h-4 w-4" />
-              <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-            </Button>
-
-            {showHighlightPicker && (
-              <div className="absolute top-full start-0 z-50 mt-1 flex flex-col gap-1 rounded-xl border border-border bg-card p-2 shadow-xl">
-                <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1">
-                  {t('highlightColor')}
-                </div>
-                <div className="grid grid-cols-3 gap-1.5 w-32">
-                  {HIGHLIGHT_COLORS.map((c) => (
-                    <button
-                      key={c.hex}
-                      type="button"
-                      onClick={() => {
-                        (editor.chain().focus() as any).setTextHighlight(c.hex).run();
-                        setShowHighlightPicker(false);
-                      }}
-                      className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
-                      style={{ backgroundColor: c.hex }}
-                      title={lang === 'ar' ? c.labelAr : c.labelEn}
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    (editor.chain().focus() as any).unsetTextHighlight().run();
-                    setShowHighlightPicker(false);
-                  }}
-                  className="mt-1 rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
-                >
-                  {t('removeColor')}
-                </button>
+              <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1.5">
+                {t('highlightColor')}
               </div>
-            )}
-          </div>
+              <div className="grid grid-cols-3 gap-1.5 w-32">
+                {HIGHLIGHT_COLORS.map((c) => (
+                  <button
+                    key={c.hex}
+                    type="button"
+                    onClick={() => {
+                      (editor.chain().focus() as any).setTextHighlight(c.hex).run();
+                      setShowHighlightPicker(false);
+                    }}
+                    className="h-6 w-full rounded-md border border-border/60 hover:scale-105 transition-transform cursor-pointer"
+                    style={{ backgroundColor: c.hex }}
+                    title={lang === 'ar' ? c.labelAr : c.labelEn}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  (editor.chain().focus() as any).unsetTextHighlight().run();
+                  setShowHighlightPicker(false);
+                }}
+                className="mt-2 w-full rounded-md border border-border/80 px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-muted text-center cursor-pointer"
+              >
+                {t('removeColor')}
+              </button>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
@@ -630,23 +689,22 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
 
         <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
 
-        {/* Table Insert Button */}
+        {/* Table Insert Button (single entry point: unified hybrid table) */}
         <div>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            onClick={() =>
-              editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()
-            }
+            onClick={handleInsertSmartTable}
             className={cn(
               "h-8 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs",
-              isTableActive && "border-olive-600 bg-olive-50 dark:bg-olive-950/40 text-olive-800 dark:text-olive-300"
+              (isTableActive || editor.isActive('smartTable')) && "border-olive-600 bg-olive-50 dark:bg-olive-950/40 text-olive-800 dark:text-olive-300"
             )}
-            title={t('insertTable')}
+            title={lang === 'ar' ? 'إدراج جدول (تحرير نصوص أو معادلات حسابية)' : 'Insert Table (text editing or formulas)'}
+            aria-label={lang === 'ar' ? 'إدراج جدول جديد في التقرير' : 'Insert a new table into the report'}
           >
             <TableIcon className="h-3.5 w-3.5" />
-            <span>{t('insertTable')}</span>
+            <span>{lang === 'ar' ? 'إدراج جدول' : 'Insert Table'}</span>
           </Button>
         </div>
 
@@ -669,7 +727,7 @@ export function EditorToolbar({ editor, onImageUpload, uploadingImage }: EditorT
 
       {/* Contextual Table Management Sub-Toolbar (active when cursor is in table) */}
       {isTableActive && (
-        <div className="flex flex-wrap items-center gap-1.5 border-t border-border/70 bg-muted/40 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto">
+        <div className="flex flex-nowrap sm:flex-wrap items-center gap-1.5 border-t border-border/70 bg-muted/40 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto scroll-smooth">
           {/* Table Tools Label Badge */}
           <div className="flex items-center gap-1 text-[11px] font-bold text-olive-800 dark:text-olive-300 me-1">
             <TableIcon className="h-3.5 w-3.5" />

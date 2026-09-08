@@ -19,11 +19,18 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   const [resendSuccess, setResendSuccess] = useState(false);
   const [cooldown, setCooldown] = useState(0);
 
+  const isPublicPage =
+    pathname === '/login' ||
+    pathname.startsWith('/share/') ||
+    pathname.startsWith('/api-guide') ||
+    pathname.startsWith('/api/docs') ||
+    pathname.startsWith('/api/');
+
   useEffect(() => {
-    if (!loading && !user && pathname !== '/login') {
+    if (!loading && !user && !isPublicPage) {
       router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
     }
-  }, [user, loading, pathname, router]);
+  }, [user, loading, pathname, router, isPublicPage]);
 
   useEffect(() => {
     if (cooldown > 0) {
@@ -59,6 +66,9 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
   };
 
   if (loading) {
+    if (isPublicPage) {
+      return <>{children}</>;
+    }
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">
@@ -69,12 +79,15 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!user && pathname !== '/login') {
+  if (!user) {
+    if (isPublicPage) {
+      return <>{children}</>;
+    }
     return null;
   }
 
   // Email verification required for non-guest users with unverified email
-  if (user && !user.emailVerified && !isGuest && pathname !== '/login') {
+  if (user && !user.emailVerified && !isGuest && !isPublicPage) {
     return (
       <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center p-4 sm:p-6 bg-[#FAFAF8] dark:bg-[#161615]">
         <div

@@ -12,12 +12,15 @@ import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
 import TextDirection from './TextDirectionExtension';
 import { ReportImage } from './ReportImageNode';
+import { SmartTableNode } from './SmartTableNode';
 import { TextColor, TextHighlight } from './CustomColorMarks';
 import { FontSize } from './FontSizeMark';
 import { EditorToolbar } from './EditorToolbar';
 import { EditorContextMenu } from './EditorContextMenu';
 import { TableFillHandle } from './TableFillHandle';
 import { uploadReportImage } from '@/lib/db';
+import { imageStore } from '@/lib/images-store';
+import type { ReportImage as IReportImage } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
@@ -29,6 +32,57 @@ import {
 import { Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { toast } from '@/components/ui/toast';
+
+function parseTextToTipTapContent(rawContent: string): any {
+  if (!rawContent || typeof rawContent !== 'string') return rawContent;
+  if (rawContent.trim().startsWith('<') && rawContent.trim().endsWith('>')) {
+    return rawContent;
+  }
+  const lines = rawContent.split('\n');
+  const contentNodes: any[] = [];
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('# ')) {
+      contentNodes.push({
+        type: 'heading',
+        attrs: { level: 1 },
+        content: [{ type: 'text', text: trimmed.slice(2).trim() }],
+      });
+    } else if (trimmed.startsWith('## ')) {
+      contentNodes.push({
+        type: 'heading',
+        attrs: { level: 2 },
+        content: [{ type: 'text', text: trimmed.slice(3).trim() }],
+      });
+    } else if (trimmed.startsWith('### ')) {
+      contentNodes.push({
+        type: 'heading',
+        attrs: { level: 3 },
+        content: [{ type: 'text', text: trimmed.slice(4).trim() }],
+      });
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      contentNodes.push({
+        type: 'paragraph',
+        content: [{ type: 'text', text: '• ' + trimmed.slice(2).trim() }],
+      });
+    } else {
+      contentNodes.push({
+        type: 'paragraph',
+        content: [{ type: 'text', text: trimmed }],
+      });
+    }
+  });
+
+  return {
+    type: 'doc',
+    content:
+      contentNodes.length > 0
+        ? contentNodes
+        : [{ type: 'paragraph', content: [{ type: 'text', text: rawContent }] }],
+  };
+}
 
 interface TipTapEditorProps {
   reportId: string;
@@ -37,6 +91,7 @@ interface TipTapEditorProps {
   onSave: (contentJson: any) => Promise<void>;
   onContentChange?: (contentJson: any) => void;
   onSaveImmediately?: () => Promise<void>;
+  onEditorReady?: (editor: any) => void;
   themeColor?: string;
   backgroundColor?: string;
 }
@@ -48,10 +103,11 @@ export function TipTapEditor({
   onSave,
   onContentChange,
   onSaveImmediately,
+  onEditorReady,
   themeColor = 'olive',
   backgroundColor = 'white',
 }: TipTapEditorProps) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [isSticky, setIsSticky] = useState(false);
@@ -137,12 +193,20 @@ export function TipTapEditor({
   const uploadQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingMaxSeqRef = useRef<number>(0);
 
-  const processImageUpload = async (file: File) => {
+  // Ensure image sequence numbering resets cleanly whenever active reportId changes
+  useEffect(() => {
+    pendingMaxSeqRef.current = 0;
+  }, [reportId]);
+
+  const processImageUpload = async (file: File, targetBlockIndex?: number) => {
     if (!file || !file.type.startsWith('image/')) return;
     try {
       setUploadingImage(true);
       const ed = editorRef.current;
       let docMax = 0;
+      let totalImagesInDoc = 0;
+      let calculatedIndex = targetBlockIndex;
+
       if (ed) {
         ed.state.doc.descendants((node: any) => {
           if (node.type.name === 'reportImage') {
@@ -150,13 +214,52 @@ export function TipTapEditor({
             if (!isNaN(seq) && seq > docMax) {
               docMax = seq;
             }
+            totalImagesInDoc++;
           }
         });
+
+        if (typeof calculatedIndex !== 'number') {
+          let precedingImages = 0;
+          const currentPos = ed.state.selection.$from.pos;
+          ed.state.doc.descendants((node: any, pos: number) => {
+            if (node.type.name === 'reportImage' && pos <= currentPos) {
+              precedingImages++;
+            }
+          });
+          calculatedIndex = precedingImages;
+        }
       }
+
+      const deterministicIndex = typeof calculatedIndex === 'number' ? calculatedIndex : totalImagesInDoc;
       const targetSeq = Math.max(docMax, pendingMaxSeqRef.current) + 1;
       pendingMaxSeqRef.current = targetSeq;
 
-      const uploadedItem = await uploadReportImage(reportId, file, '', reportLanguage, targetSeq);
+      const imageId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+      const systemTimestamp = new Date().toISOString();
+
+      const uploadedItem = await uploadReportImage(
+        reportId,
+        file,
+        '',
+        reportLanguage,
+        targetSeq,
+        imageId,
+        deterministicIndex
+      );
+
+      // Store in normalized state/store (imagesById)
+      const normalizedImage: IReportImage = {
+        id: imageId,
+        reportId,
+        index: deterministicIndex,
+        url: uploadedItem.downloadUrl,
+        caption: uploadedItem.caption || '',
+        createdAt: systemTimestamp,
+      };
+      imageStore.upsertImage(normalizedImage);
 
       // Measure natural dimensions for instant zero-shift layout
       let naturalWidth: number | undefined;
@@ -184,8 +287,10 @@ export function TipTapEditor({
           .focus()
           .setReportImage({
             src: uploadedItem.downloadUrl,
+            url: uploadedItem.downloadUrl,
             storagePath: uploadedItem.storagePath,
             sequenceNumber: uploadedItem.sequenceNumber,
+            index: deterministicIndex,
             fileName: uploadedItem.fileName,
             caption: uploadedItem.caption,
             reportId,
@@ -213,9 +318,9 @@ export function TipTapEditor({
     }
   };
 
-  const handleImageFile = (file: File) => {
+  const handleImageFile = (file: File, targetBlockIndex?: number) => {
     uploadQueueRef.current = uploadQueueRef.current
-      .then(() => processImageUpload(file))
+      .then(() => processImageUpload(file, targetBlockIndex))
       .catch((err) => {
         console.error('Queue upload error', err);
       });
@@ -247,6 +352,7 @@ export function TipTapEditor({
         },
       }),
       ReportImage,
+      SmartTableNode,
       TextColor,
       TextHighlight,
       FontSize,
@@ -271,7 +377,15 @@ export function TipTapEditor({
           }
         }
         if (imageFiles.length > 0) {
-          imageFiles.forEach((file) => handleImageFile(file));
+          // Compute deterministic position index based on existing report images in this document
+          const currentPos = view.state.selection.$from.pos;
+          let imageCountBefore = 0;
+          view.state.doc.descendants((node, pos) => {
+            if (node.type.name === 'reportImage' && pos <= currentPos) {
+              imageCountBefore++;
+            }
+          });
+          imageFiles.forEach((file, fileIdx) => handleImageFile(file, imageCountBefore + fileIdx));
           return true; // Handled
         }
         return false;
@@ -286,7 +400,14 @@ export function TipTapEditor({
           }
         }
         if (imageFiles.length > 0) {
-          imageFiles.forEach((file) => handleImageFile(file));
+          const currentPos = view.state.selection.$from.pos;
+          let imageCountBefore = 0;
+          view.state.doc.descendants((node, pos) => {
+            if (node.type.name === 'reportImage' && pos <= currentPos) {
+              imageCountBefore++;
+            }
+          });
+          imageFiles.forEach((file, fileIdx) => handleImageFile(file, imageCountBefore + fileIdx));
           return true; // Handled
         }
         return false;
@@ -471,6 +592,17 @@ export function TipTapEditor({
         class: 'prose prose-slate max-w-none focus:outline-none p-3.5 sm:p-6 md:p-8 min-h-[500px] w-full',
       },
     },
+    onSelectionUpdate: ({ editor: ed }) => {
+      const { from, to, empty } = ed.state.selection;
+      const selection = empty ? '' : ed.state.doc.textBetween(from, to, ' ');
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('editor-selection-changed', {
+            detail: { selection, reportId },
+          })
+        );
+      }
+    },
     onUpdate: ({ editor: ed }) => {
       const json = ed.getJSON();
       if (onContentChange) {
@@ -478,9 +610,121 @@ export function TipTapEditor({
       }
       triggerAutosave(json);
     },
+    onBlur: ({ editor: ed }) => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+      const json = ed.getJSON();
+      saveContent(json);
+    },
   });
 
   editorRef.current = editor;
+
+  useEffect(() => {
+    if (editor && onEditorReady) {
+      onEditorReady(editor);
+    }
+  }, [editor, onEditorReady]);
+
+  // Listen for AI Agent report content mutation events and revert events
+  useEffect(() => {
+    const handleAiUpdateContent = (e: any) => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const detail = e.detail || {};
+      const mode = detail.mode || 'append';
+      const content = detail.content || '';
+
+      // Capture pre-mutation backup snapshot
+      const previousSnapshot = ed.getJSON();
+      if (reportId && typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(`report_ai_backup_${reportId}`, JSON.stringify(previousSnapshot));
+          localStorage.setItem(`report_ai_backup_timestamp_${reportId}`, Date.now().toString());
+          (window as any).__lastReportAiSnapshot = previousSnapshot;
+        } catch (_) {}
+      }
+
+      if (typeof detail.onSnapshotSaved === 'function') {
+        detail.onSnapshotSaved(previousSnapshot);
+      }
+
+      window.dispatchEvent(
+        new CustomEvent('ai-report-snapshot-saved', {
+          detail: { reportId, snapshot: previousSnapshot },
+        })
+      );
+
+      if (mode === 'replace_all') {
+        const parsed = typeof content === 'string' ? parseTextToTipTapContent(content) : content;
+        ed.commands.setContent(parsed || '');
+      } else if (mode === 'append') {
+        const endPos = ed.state.doc.content.size;
+        ed.chain().focus().insertContentAt(endPos, content).run();
+      } else if (mode === 'prepend') {
+        ed.chain().focus().insertContentAt(0, content).run();
+      } else if (mode === 'replace_selection') {
+        ed.chain().focus().insertContent(content).run();
+      }
+
+      const json = ed.getJSON();
+      if (onContentChange) {
+        onContentChange(json);
+      }
+      triggerAutosave(json);
+    };
+
+    const handleAiRevertContent = (e: any) => {
+      const ed = editorRef.current;
+      if (!ed) return;
+      const detail = e.detail || {};
+      let snapshot = detail.snapshot;
+      if (!snapshot && reportId && typeof window !== 'undefined') {
+        try {
+          const saved = localStorage.getItem(`report_ai_backup_${reportId}`);
+          if (saved) snapshot = JSON.parse(saved);
+        } catch (_) {}
+      }
+      if (snapshot) {
+        ed.commands.setContent(snapshot);
+        const json = ed.getJSON();
+        if (onContentChange) {
+          onContentChange(json);
+        }
+        triggerAutosave(json);
+        toast.success(
+          lang === 'ar'
+            ? 'تم استرجاع النسخة السابقة من التقرير بنجاح'
+            : 'Previous report content restored successfully'
+        );
+      }
+    };
+
+    window.addEventListener('ai-update-report-content', handleAiUpdateContent);
+    window.addEventListener('ai-revert-report-content', handleAiRevertContent);
+    return () => {
+      window.removeEventListener('ai-update-report-content', handleAiUpdateContent);
+      window.removeEventListener('ai-revert-report-content', handleAiRevertContent);
+    };
+  }, [reportId, onContentChange, triggerAutosave, lang]);
+
+  // Reset selection when switching reports or unmounting
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('editor-selection-changed', {
+            detail: { selection: '', reportId },
+          })
+        );
+      }
+    };
+  }, [reportId]);
+
+  const saveContentRef = useRef(saveContent);
+  saveContentRef.current = saveContent;
 
   // Window-level shortcuts listener for immediate saving or jumping between fields
   useEffect(() => {
@@ -512,13 +756,30 @@ export function TipTapEditor({
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [handleImmediateSave]);
 
-  // Clean up timer on unmount
+  // Flush pending save on unmount
   useEffect(() => {
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        if (editorRef.current) {
+          saveContentRef.current(editorRef.current.getJSON());
+        }
       }
     };
+  }, []);
+
+  // Flush pending save before page unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (debounceTimerRef.current && editorRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+        saveContentRef.current(editorRef.current.getJSON());
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
   // Dynamic scroll listener to elevate and stick toolbar right under Navbar (top-16 = 64px)
@@ -591,6 +852,7 @@ export function TipTapEditor({
         {/* Toolbar */}
         <EditorToolbar
           editor={editor}
+          reportId={reportId}
           onImageUpload={handleImageFile}
           uploadingImage={uploadingImage}
         />

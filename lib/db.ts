@@ -21,7 +21,8 @@ import {
   deleteObject,
 } from 'firebase/storage';
 import { db, storage, auth, isFirebaseConfigured } from './firebase';
-import { ReportItem, ReportImageItem, IssueItem, CommentItem, AuthorizedUser } from './types';
+import { ReportItem, ReportImageItem, IssueItem, CommentItem, AuthorizedUser, SeverityConfigItem, FolderItem, ApiKeyItem } from './types';
+import { normalizeSeverity } from './i18n/dictionary';
 import { t } from './i18n/dictionary';
 
 // Default authorized users whitelist for demo / bootstrap
@@ -40,6 +41,9 @@ const LOCAL_COMMENTS_KEY = 'review_app_mock_comments';
 const LOCAL_IMAGES_KEY = 'review_app_mock_images';
 const LOCAL_COUNTER_KEY = 'review_app_mock_counter';
 const LOCAL_WHITELIST_KEY = 'review_app_mock_whitelist';
+const LOCAL_SEVERITY_CONFIG_KEY = 'review_app_severity_config';
+const LOCAL_FOLDERS_KEY = 'review_app_mock_folders';
+const LOCAL_API_KEYS_KEY = 'review_app_api_keys';
 
 // Helper for localStorage
 function getLocal<T>(key: string, fallback: T): T {
@@ -89,12 +93,9 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
     }
   }
 
-  // Also auto-add to local whitelist
+  // Check local whitelist
   const localList = getLocal<string[]>(LOCAL_WHITELIST_KEY, DEFAULT_WHITELIST);
-  if (!localList.includes(normalized)) {
-    setLocal(LOCAL_WHITELIST_KEY, [...localList, normalized]);
-  }
-  return true;
+  return localList.includes(normalized);
 }
 
 /**
@@ -119,13 +120,23 @@ export async function addAuthorizedUser(email: string): Promise<void> {
 // REPORTS
 // ==========================================
 
-export async function getNextReportNumber(): Promise<number> {
+export async function getNextReportNumber(userUid?: string): Promise<number> {
   const allNumbers: number[] = [];
 
   // 1. Collect numbers from Firestore
   if (isFirebaseConfigured && db) {
     try {
-      const snap = await getDocs(collection(db, 'reports'));
+      let snap;
+      if (userUid) {
+        try {
+          const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
+          snap = await getDocs(q);
+        } catch {
+          snap = await getDocs(collection(db, 'reports'));
+        }
+      } else {
+        snap = await getDocs(collection(db, 'reports'));
+      }
       snap.docs.forEach((d) => {
         const num = d.data()?.reportNumber;
         const parsed = typeof num === 'number' ? num : parseInt(String(num), 10);
@@ -139,11 +150,23 @@ export async function getNextReportNumber(): Promise<number> {
   }
 
   // 2. Collect numbers from LocalStorage
+  if (userUid) {
+    const userReports = getLocal<ReportItem[]>(`${LOCAL_REPORTS_KEY}_${userUid}`, []);
+    userReports.forEach((r) => {
+      const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        allNumbers.push(parsed);
+      }
+    });
+  }
+
   const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
   globalReports.forEach((r) => {
-    const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
-    if (!isNaN(parsed) && parsed > 0) {
-      allNumbers.push(parsed);
+    if (!userUid || r.ownerUid === userUid) {
+      const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        allNumbers.push(parsed);
+      }
     }
   });
 
@@ -154,9 +177,11 @@ export async function getNextReportNumber(): Promise<number> {
         if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
           const uReports = getLocal<ReportItem[]>(key, []);
           uReports.forEach((r) => {
-            const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
-            if (!isNaN(parsed) && parsed > 0) {
-              allNumbers.push(parsed);
+            if (!userUid || r.ownerUid === userUid) {
+              const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
+              if (!isNaN(parsed) && parsed > 0) {
+                allNumbers.push(parsed);
+              }
             }
           });
         }
@@ -181,113 +206,147 @@ export async function getNextReportNumber(): Promise<number> {
 }
 
 /**
- * Sort reports oldest first (Report #1, #2, #3... or earliest createdAt)
+ * Sort reports newest first (Report #5, #4, #3... highest reportNumber / newest timestamp first)
  */
-function sortReportsOldestFirst(list: ReportItem[]): ReportItem[] {
-  return list.sort((a, b) => {
+export function sortReportsNewestFirst(list: ReportItem[]): ReportItem[] {
+  return [...list].sort((a, b) => {
     const numA = typeof a.reportNumber === 'number' ? a.reportNumber : parseInt(String(a.reportNumber), 10) || 0;
     const numB = typeof b.reportNumber === 'number' ? b.reportNumber : parseInt(String(b.reportNumber), 10) || 0;
     if (numA > 0 && numB > 0 && numA !== numB) {
-      return numA - numB;
+      return numB - numA; // Descending: latest report first
     }
-    const timeA = new Date(a.createdAt || a.updatedAt).getTime();
-    const timeB = new Date(b.createdAt || b.updatedAt).getTime();
-    return timeA - timeB;
+    const timeA = new Date(a.createdAt || a.updatedAt || 0).getTime();
+    const timeB = new Date(b.createdAt || b.updatedAt || 0).getTime();
+    return timeB - timeA; // Descending: latest creation first
   });
 }
 
 export async function getReports(userUid?: string): Promise<ReportItem[]> {
-  if (isFirebaseConfigured && db) {
+  // CRITICAL SECURITY FIX: Never return reports if userUid is missing!
+  // An unauthenticated request must ALWAYS return an empty list []!
+  if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
+    return [];
+  }
+
+  // Guest users are strictly local-storage isolated; never query or pollute Firestore!
+  const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
+  if (isGuest) {
+    const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
+    const reports = getLocal<ReportItem[]>(userReportsKey, []);
+    return sortReportsNewestFirst(reports.filter((r) => r.ownerUid === userUid));
+  }
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
-      let snap;
-      if (userUid) {
-        // Query user's reports and sort in memory to avoid requiring complex composite indexes in Firebase Console
-        const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
-        snap = await getDocs(q);
-      } else {
-        const q = query(collection(db, 'reports'));
-        snap = await getDocs(q);
-      }
+      // Query STRICTLY user's reports by ownerUid
+      const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
+      const snap = await getDocs(q);
       const list = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as ReportItem[];
-      return sortReportsOldestFirst(list);
+
+      // Merge with user-isolated local cache (if any created offline/recently)
+      const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
+      const localReports = getLocal<ReportItem[]>(userReportsKey, []);
+      const mergedMap = new Map<string, ReportItem>();
+      list.forEach((r) => mergedMap.set(r.id, r));
+      localReports.forEach((r) => {
+        if (r.ownerUid === userUid && !mergedMap.has(r.id)) {
+          mergedMap.set(r.id, r);
+        }
+      });
+
+      return sortReportsNewestFirst(Array.from(mergedMap.values()));
     } catch (e) {
-      console.warn('Firestore getReports failed, using local storage fallback', e);
+      console.warn('Firestore getReports failed, using isolated local storage fallback', e);
     }
   }
 
-  // Local storage isolated per user UID
-  const userReportsKey = userUid ? `${LOCAL_REPORTS_KEY}_${userUid}` : LOCAL_REPORTS_KEY;
-  let reports = getLocal<ReportItem[]>(userReportsKey, []);
-  
-  // If empty and userUid is provided, check if global reports contain matching ownerUid
-  if (reports.length === 0 && userUid) {
-    const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
-    const userMatches = globalReports.filter((r) => r.ownerUid === userUid);
-    if (userMatches.length > 0) {
-      reports = userMatches;
-      setLocal(userReportsKey, reports);
-    }
-  }
-
-  return sortReportsOldestFirst(reports);
+  // Isolated local storage strictly for this userUid
+  const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
+  const reports = getLocal<ReportItem[]>(userReportsKey, []);
+  return sortReportsNewestFirst(reports.filter((r) => r.ownerUid === userUid));
 }
 
-export async function getReportById(id: string): Promise<ReportItem | null> {
+export async function getReportById(id: string, userUid?: string): Promise<ReportItem | null> {
+  if (!id) return null;
+
   if (isFirebaseConfigured && db) {
     try {
       const snap = await getDoc(doc(db, 'reports', id));
       if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as ReportItem;
+        const data = { id: snap.id, ...snap.data() } as ReportItem;
+        // Check authorization: must be owned by userUid OR be a shared report (isShared: true)
+        if (data.isShared || (userUid && data.ownerUid === userUid)) {
+          return data;
+        }
+        // If neither shared nor owned by userUid, forbid access!
+        if (userUid && data.ownerUid && data.ownerUid !== userUid) {
+          console.warn(`Access denied: Report ${id} owned by ${data.ownerUid} requested by ${userUid}`);
+          return null;
+        }
+        if (!userUid && !data.isShared) {
+          // Unauthenticated request for a private non-shared report
+          return null;
+        }
+        return data;
       }
     } catch (e) {
       console.warn('Firestore getReportById failed, using local storage fallback', e);
     }
   }
 
-  // Search across global and any user cache
+  // Search user isolated cache first
+  if (userUid) {
+    const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
+    const uReports = getLocal<ReportItem[]>(userReportsKey, []);
+    const uFound = uReports.find((r) => r.id === id);
+    if (uFound && (uFound.ownerUid === userUid || uFound.isShared)) return uFound;
+  }
+
+  // Search global fallback strictly checking ownership or sharing
   const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
   const found = reports.find((r) => r.id === id);
-  if (found) return found;
-
-  if (typeof window !== 'undefined') {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
-          const uReports = getLocal<ReportItem[]>(key, []);
-          const uFound = uReports.find((r) => r.id === id);
-          if (uFound) return uFound;
-        }
-      }
-    } catch {}
+  if (found) {
+    if (found.isShared || (userUid && found.ownerUid === userUid)) {
+      return found;
+    }
+    return null;
   }
+
   return null;
 }
 
 export async function createReport(
   reportData: Omit<ReportItem, 'id' | 'reportNumber' | 'createdAt' | 'updatedAt'>
 ): Promise<ReportItem> {
-  const reportNumber = await getNextReportNumber();
+  const reportNumber = await getNextReportNumber(reportData.ownerUid);
   const now = new Date().toISOString();
 
-  if (isFirebaseConfigured && db) {
+  // Strip undefined values so Firestore addDoc never throws an invalid argument error
+  const sanitizedData: any = {
+    ...reportData,
+    folderId: reportData.folderId || null,
+    reportNumber,
+    createdAt: now,
+    updatedAt: now,
+  };
+  Object.keys(sanitizedData).forEach((key) => {
+    if (sanitizedData[key] === undefined) {
+      delete sanitizedData[key];
+    }
+  });
+
+  const isGuest = !reportData.ownerUid || reportData.ownerUid.startsWith('guest_') || reportData.ownerUid === 'guest_user_session';
+
+  if (isFirebaseConfigured && db && !isGuest && auth?.currentUser) {
     try {
       const colRef = collection(db, 'reports');
-      const docRef = await addDoc(colRef, {
-        ...reportData,
-        reportNumber,
-        createdAt: now,
-        updatedAt: now,
-      });
+      const docRef = await addDoc(colRef, sanitizedData);
       const createdItem: ReportItem = {
         id: docRef.id,
-        ...reportData,
-        reportNumber,
-        createdAt: now,
-        updatedAt: now,
+        ...sanitizedData,
       };
 
       // Also cache in user-scoped local storage
@@ -304,35 +363,54 @@ export async function createReport(
 
   const newReport: ReportItem = {
     id: 'rep_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-    ...reportData,
-    reportNumber,
-    createdAt: now,
-    updatedAt: now,
+    ...sanitizedData,
   };
 
   // Save to user isolated storage
   if (reportData.ownerUid) {
     const userReportsKey = `${LOCAL_REPORTS_KEY}_${reportData.ownerUid}`;
     const userReports = getLocal<ReportItem[]>(userReportsKey, []);
-    setLocal(userReportsKey, [newReport, ...userReports]);
+    setLocal(userReportsKey, [newReport, ...userReports.filter((r) => r.id !== newReport.id)]);
   }
-  const reports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
-  setLocal(LOCAL_REPORTS_KEY, [newReport, ...reports]);
   return newReport;
 }
 
 export async function updateReport(id: string, partial: Partial<ReportItem>): Promise<void> {
   const now = new Date().toISOString();
-  if (isFirebaseConfigured && db) {
+  const sanitizedPartial: any = {
+    ...partial,
+    updatedAt: now,
+  };
+  Object.keys(sanitizedPartial).forEach((key) => {
+    if (sanitizedPartial[key] === undefined) {
+      delete sanitizedPartial[key];
+    }
+  });
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const docRef = doc(db, 'reports', id);
-      await updateDoc(docRef, {
-        ...partial,
-        updatedAt: now,
-      });
+      await updateDoc(docRef, sanitizedPartial);
     } catch (e) {
       console.error('Failed to update report in Firestore', e);
     }
+  }
+
+  // Update in user isolated storage
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+          const list = getLocal<ReportItem[]>(key, []);
+          const idx = list.findIndex((r) => r.id === id);
+          if (idx !== -1) {
+            list[idx] = { ...list[idx], ...sanitizedPartial };
+            setLocal(key, list);
+          }
+        }
+      }
+    } catch {}
   }
 
   // Update in global and user-specific stores
@@ -341,11 +419,11 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
   let ownerUid = partial.ownerUid;
   if (index !== -1) {
     ownerUid = ownerUid || reports[index].ownerUid;
-    reports[index] = { ...reports[index], ...partial, updatedAt: now };
+    reports[index] = { ...reports[index], ...sanitizedPartial, updatedAt: now };
     setLocal(LOCAL_REPORTS_KEY, reports);
   }
 
-  // Directly update user-specific store without scanning entire localStorage on every save
+  // Directly update user-specific store
   if (typeof window !== 'undefined') {
     const targetUid = ownerUid || auth?.currentUser?.uid;
     if (targetUid) {
@@ -353,7 +431,7 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
       const uReports = getLocal<ReportItem[]>(userKey, []);
       const uIdx = uReports.findIndex((r) => r.id === id);
       if (uIdx !== -1) {
-        uReports[uIdx] = { ...uReports[uIdx], ...partial, updatedAt: now };
+        uReports[uIdx] = { ...uReports[uIdx], ...sanitizedPartial, updatedAt: now };
         setLocal(userKey, uReports);
       }
     }
@@ -375,7 +453,7 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
     };
   }
 
-  if (isFirebaseConfigured && db) {
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       await deleteDoc(doc(db, 'reports', id));
     } catch (e: any) {
@@ -403,6 +481,16 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
       }
     } catch {}
   }
+
+  // Clean up every table entity (values, formulas, formats, merges) owned by
+  // this report so no orphan metadata is left behind.
+  try {
+    const { deleteTablesByReportId } = await import('./db-intelligence');
+    await deleteTablesByReportId(id);
+  } catch (e) {
+    console.warn('Table metadata cleanup failed for report', id, e);
+  }
+
   return { success: true };
 }
 
@@ -507,7 +595,9 @@ export async function uploadReportImage(
   file: File | Blob,
   caption: string = '',
   reportLanguage: 'ar' | 'en' = 'ar',
-  forcedSequenceNumber?: number
+  forcedSequenceNumber?: number,
+  forcedId?: string,
+  index?: number
 ): Promise<ReportImageItem> {
   // 1. Calculate next sequenceNumber for this report
   const existingImages = await getReportImages(reportId);
@@ -521,6 +611,7 @@ export async function uploadReportImage(
   const fileName = `${prefix}${nextSeq}.png`;
   const storagePath = `reports/${reportId}/images/${fileName}`;
   const now = new Date().toISOString();
+  const effectiveId = forcedId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : ('img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9)));
 
   let downloadUrl = '';
 
@@ -540,6 +631,7 @@ export async function uploadReportImage(
       const docRef = await addDoc(imagesCol, {
         reportId,
         sequenceNumber: nextSeq,
+        index: typeof index === 'number' ? index : nextSeq - 1,
         fileName,
         storagePath,
         downloadUrl,
@@ -551,6 +643,7 @@ export async function uploadReportImage(
         id: docRef.id,
         reportId,
         sequenceNumber: nextSeq,
+        index: typeof index === 'number' ? index : nextSeq - 1,
         fileName,
         storagePath,
         downloadUrl,
@@ -572,9 +665,10 @@ export async function uploadReportImage(
   downloadUrl = await createOptimizedDataUrl(file);
 
   const newImage: ReportImageItem = {
-    id: 'img_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    id: effectiveId,
     reportId,
     sequenceNumber: nextSeq,
+    index: typeof index === 'number' ? index : nextSeq - 1,
     fileName,
     storagePath,
     downloadUrl,
@@ -615,12 +709,11 @@ export async function updateImageFileName(
   imageId: string,
   fileName: string
 ): Promise<void> {
-  const newStoragePath = `reports/${reportId}/images/${fileName}`;
-
   if (isFirebaseConfigured && db) {
     try {
       const imageDoc = doc(db, 'reports', reportId, 'images', imageId);
-      await updateDoc(imageDoc, { fileName, storagePath: newStoragePath });
+      // Keep storagePath stable and untouched to avoid breaking stored file references
+      await updateDoc(imageDoc, { fileName });
       return;
     } catch (e) {
       console.warn('Failed to update image fileName in Firestore', e);
@@ -631,7 +724,6 @@ export async function updateImageFileName(
   const idx = images.findIndex((img) => img.id === imageId);
   if (idx !== -1) {
     images[idx].fileName = fileName;
-    images[idx].storagePath = newStoragePath;
     setLocal(LOCAL_IMAGES_KEY, images);
   }
 }
@@ -658,15 +750,60 @@ export async function deleteReportImage(
 // ISSUES & DEFECTS
 // ==========================================
 
-const SEVERITY_NUMERIC_RANK: Record<string, number> = {
-  critical: 1,
-  major: 2,
-  medium: 3,
-  normal: 4,
-  minor: 5,
-};
+export const DEFAULT_SEVERITY_CONFIG: SeverityConfigItem[] = [
+  { id: 'critical', order: 1, labelAr: 'حرجة جداً', labelEn: 'Critical' },
+  { id: 'major', order: 2, labelAr: 'كبيرة / مرتفعة', labelEn: 'Major' },
+  { id: 'medium', order: 3, labelAr: 'متوسطة الخطورة', labelEn: 'Medium' },
+  { id: 'normal', order: 4, labelAr: 'عادية', labelEn: 'Normal' },
+  { id: 'minor', order: 5, labelAr: 'طفيفة / منخفضة', labelEn: 'Minor' },
+];
 
-function sortIssuesByOrder(list: IssueItem[]): IssueItem[] {
+export function getSeverityConfig(userUid?: string): SeverityConfigItem[] {
+  const key = userUid ? `${LOCAL_SEVERITY_CONFIG_KEY}_${userUid}` : LOCAL_SEVERITY_CONFIG_KEY;
+  const stored = getLocal<SeverityConfigItem[]>(key, []);
+  if (stored && stored.length > 0) {
+    return [...stored].sort((a, b) => a.order - b.order);
+  }
+  return DEFAULT_SEVERITY_CONFIG;
+}
+
+export async function saveSeverityConfig(config: SeverityConfigItem[], userUid?: string): Promise<void> {
+  const sorted = config.map((item, idx) => ({
+    ...item,
+    order: idx + 1,
+  }));
+  const key = userUid ? `${LOCAL_SEVERITY_CONFIG_KEY}_${userUid}` : LOCAL_SEVERITY_CONFIG_KEY;
+  setLocal(key, sorted);
+  setLocal(LOCAL_SEVERITY_CONFIG_KEY, sorted);
+
+  if (isFirebaseConfigured && db && (userUid || auth?.currentUser?.uid)) {
+    try {
+      const uid = userUid || auth?.currentUser?.uid;
+      if (uid) {
+        const docRef = doc(db, 'user_settings', uid);
+        await setDoc(docRef, { severityConfig: sorted, updatedAt: new Date().toISOString() }, { merge: true });
+      }
+    } catch (e) {
+      console.warn('Failed to save severity config to Firestore', e);
+    }
+  }
+}
+
+export function normalizeSeverityId(s: string): string {
+  return normalizeSeverity(s);
+}
+
+export function getSeverityNumericRank(severity: string, userUid?: string): number {
+  const norm = normalizeSeverityId(severity);
+  const config = getSeverityConfig(userUid);
+  const found = config.find((c) => c.id === norm || c.id === severity);
+  return found ? found.order : 99;
+}
+
+function sortIssuesByOrder(list: IssueItem[], userUid?: string): IssueItem[] {
+  const config = getSeverityConfig(userUid);
+  const rankMap = new Map<string, number>(config.map((c) => [c.id, c.order]));
+
   return list.sort((a, b) => {
     // If explicit order index exists on both, sort by it
     if (typeof a.order === 'number' && typeof b.order === 'number') {
@@ -675,9 +812,11 @@ function sortIssuesByOrder(list: IssueItem[]): IssueItem[] {
     if (typeof a.order === 'number') return -1;
     if (typeof b.order === 'number') return 1;
 
-    // Otherwise default by severity rank (1 to 5)
-    const rankA = SEVERITY_NUMERIC_RANK[a.severity] ?? 99;
-    const rankB = SEVERITY_NUMERIC_RANK[b.severity] ?? 99;
+    // Otherwise default by severity numeric rank (1 to 5)
+    const normA = normalizeSeverityId(a.severity);
+    const normB = normalizeSeverityId(b.severity);
+    const rankA = rankMap.get(normA) ?? rankMap.get(a.severity) ?? 99;
+    const rankB = rankMap.get(normB) ?? rankMap.get(b.severity) ?? 99;
     if (rankA !== rankB) return rankA - rankB;
 
     return new Date(b.createdAt || b.updatedAt).getTime() - new Date(a.createdAt || a.updatedAt).getTime();
@@ -685,40 +824,37 @@ function sortIssuesByOrder(list: IssueItem[]): IssueItem[] {
 }
 
 export async function getIssues(userUid?: string): Promise<IssueItem[]> {
-  if (isFirebaseConfigured && db) {
+  // CRITICAL SECURITY FIX: Never return issues if userUid is missing!
+  if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
+    return [];
+  }
+
+  // Guest users are strictly local-storage isolated; never query or pollute Firestore!
+  const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
+  if (isGuest) {
+    const userIssuesKey = `${LOCAL_ISSUES_KEY}_${userUid}`;
+    const issues = getLocal<IssueItem[]>(userIssuesKey, []);
+    return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid), userUid);
+  }
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
-      let snap;
-      if (userUid) {
-        const q = query(collection(db, 'issues'), where('ownerUid', '==', userUid));
-        snap = await getDocs(q);
-      } else {
-        const q = query(collection(db, 'issues'));
-        snap = await getDocs(q);
-      }
+      const q = query(collection(db, 'issues'), where('ownerUid', '==', userUid));
+      const snap = await getDocs(q);
       const issues = snap.docs.map((d) => ({
         id: d.id,
         ...d.data(),
       })) as IssueItem[];
-      return sortIssuesByOrder(issues);
+      return sortIssuesByOrder(issues, userUid);
     } catch (e) {
       console.warn('Firestore getIssues failed, using local storage fallback', e);
     }
   }
 
-  // Local storage isolated per user UID
-  const userIssuesKey = userUid ? `${LOCAL_ISSUES_KEY}_${userUid}` : LOCAL_ISSUES_KEY;
-  let issues = getLocal<IssueItem[]>(userIssuesKey, []);
-
-  if (issues.length === 0 && userUid) {
-    const globalIssues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
-    const userMatches = globalIssues.filter((i) => i.ownerUid === userUid);
-    if (userMatches.length > 0) {
-      issues = userMatches;
-      setLocal(userIssuesKey, issues);
-    }
-  }
-
-  return sortIssuesByOrder(issues);
+  // Local storage strictly isolated per user UID
+  const userIssuesKey = `${LOCAL_ISSUES_KEY}_${userUid}`;
+  const issues = getLocal<IssueItem[]>(userIssuesKey, []);
+  return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid), userUid);
 }
 
 export async function reorderIssues(
@@ -726,7 +862,7 @@ export async function reorderIssues(
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  if (isFirebaseConfigured && db) {
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     const firestore = db;
     try {
       const batch = writeBatch(firestore);
@@ -794,62 +930,83 @@ export async function reorderIssues(
 
 export async function getIssuesByReportId(reportId: string, userUid?: string): Promise<IssueItem[]> {
   const all = await getIssues(userUid);
-  return all.filter((i) => i.linkedReportId === reportId);
+  return all.filter((i) => i.linkedReportId === reportId || i.reportId === reportId);
 }
 
 export async function createIssue(
   data: Omit<IssueItem, 'id' | 'createdAt' | 'updatedAt' | 'commentsCount'>
 ): Promise<IssueItem> {
   const now = new Date().toISOString();
+  const linkedReportId = data.linkedReportId || data.reportId || null;
+  const payloadData = {
+    ...data,
+    linkedReportId,
+    ...(data.reportId ? { reportId: data.reportId } : (linkedReportId ? { reportId: linkedReportId } : {})),
+  };
 
-  if (isFirebaseConfigured && db) {
+  let resultIssue: IssueItem | null = null;
+  const isGuest = !payloadData.ownerUid || payloadData.ownerUid.startsWith('guest_') || payloadData.ownerUid === 'guest_user_session';
+
+  if (isFirebaseConfigured && db && !isGuest && auth?.currentUser) {
     try {
       const docRef = await addDoc(collection(db, 'issues'), {
-        ...data,
+        ...payloadData,
         createdAt: now,
         updatedAt: now,
         commentsCount: 0,
       });
       const createdItem: IssueItem = {
         id: docRef.id,
-        ...data,
+        ...payloadData,
         createdAt: now,
         updatedAt: now,
         commentsCount: 0,
       };
 
-      if (data.ownerUid) {
-        const uKey = `${LOCAL_ISSUES_KEY}_${data.ownerUid}`;
+      if (payloadData.ownerUid) {
+        const uKey = `${LOCAL_ISSUES_KEY}_${payloadData.ownerUid}`;
         const uIssues = getLocal<IssueItem[]>(uKey, []);
         setLocal(uKey, [createdItem, ...uIssues.filter((i) => i.id !== createdItem.id)]);
       }
-      return createdItem;
+      resultIssue = createdItem;
     } catch (e) {
       console.error('Failed to create issue in Firestore', e);
     }
   }
 
-  const newIssue: IssueItem = {
-    id: 'iss_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
-    ...data,
-    createdAt: now,
-    updatedAt: now,
-    commentsCount: 0,
-  };
+  if (!resultIssue) {
+    const newIssue: IssueItem = {
+      id: 'iss_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      ...payloadData,
+      createdAt: now,
+      updatedAt: now,
+      commentsCount: 0,
+    };
 
-  if (data.ownerUid) {
-    const userIssuesKey = `${LOCAL_ISSUES_KEY}_${data.ownerUid}`;
-    const userIssues = getLocal<IssueItem[]>(userIssuesKey, []);
-    setLocal(userIssuesKey, [newIssue, ...userIssues]);
+    if (payloadData.ownerUid) {
+      const userIssuesKey = `${LOCAL_ISSUES_KEY}_${payloadData.ownerUid}`;
+      const userIssues = getLocal<IssueItem[]>(userIssuesKey, []);
+      setLocal(userIssuesKey, [newIssue, ...userIssues]);
+    }
+    const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+    setLocal(LOCAL_ISSUES_KEY, [newIssue, ...issues]);
+    resultIssue = newIssue;
   }
-  const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
-  setLocal(LOCAL_ISSUES_KEY, [newIssue, ...issues]);
-  return newIssue;
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('issue-created', {
+        detail: { count: 1, issue: resultIssue },
+      })
+    );
+  }
+
+  return resultIssue;
 }
 
 export async function updateIssue(id: string, partial: Partial<IssueItem>): Promise<void> {
   const now = new Date().toISOString();
-  if (isFirebaseConfigured && db) {
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const docRef = doc(db, 'issues', id);
       await updateDoc(docRef, {
@@ -886,7 +1043,7 @@ export async function updateIssue(id: string, partial: Partial<IssueItem>): Prom
 }
 
 export async function deleteIssue(id: string): Promise<void> {
-  if (isFirebaseConfigured && db) {
+  if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       await deleteDoc(doc(db, 'issues', id));
     } catch (e) {
@@ -996,3 +1153,598 @@ export async function addComment(
 
   return newComment;
 }
+
+// ==========================================
+// REPORT SHARING (PUBLIC READ-ONLY LINKS)
+// ==========================================
+
+export async function createOrUpdateShareToken(reportId: string): Promise<string> {
+  const rand1 = Math.random().toString(36).substring(2, 12);
+  const rand2 = Math.random().toString(36).substring(2, 12);
+  const time = Date.now().toString(36);
+  const token = `sh_${rand1}${rand2}${time}`;
+  const now = new Date().toISOString();
+
+  await updateReport(reportId, {
+    shareToken: token,
+    isShared: true,
+    sharedAt: now,
+  });
+
+  return token;
+}
+
+export async function revokeShareToken(reportId: string): Promise<void> {
+  await updateReport(reportId, {
+    shareToken: null,
+    isShared: false,
+    sharedAt: null,
+  });
+}
+
+export async function getReportByShareToken(
+  token: string
+): Promise<{ report: ReportItem; images: ReportImageItem[] } | null> {
+  if (!token || typeof token !== 'string') return null;
+
+  // 1. Search in Firestore
+  if (isFirebaseConfigured && db) {
+    try {
+      const q = query(
+        collection(db, 'reports'),
+        where('shareToken', '==', token),
+        where('isShared', '==', true)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const docSnap = snap.docs[0];
+        const rep = { id: docSnap.id, ...docSnap.data() } as ReportItem;
+        if (rep.isShared === true && rep.shareToken === token) {
+          const images = await getReportImages(rep.id);
+          return { report: rep, images };
+        }
+      }
+    } catch (e) {
+      console.warn('Firestore getReportByShareToken query error', e);
+    }
+  }
+
+  // 2. Search in LocalStorage Fallback
+  const allReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
+  let found = allReports.find((r) => r.shareToken === token && r.isShared === true);
+
+  if (!found && typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+          const list = getLocal<ReportItem[]>(key, []);
+          const match = list.find((r) => r.shareToken === token && r.isShared === true);
+          if (match) {
+            found = match;
+            break;
+          }
+        }
+      }
+    } catch {}
+  }
+
+  if (found) {
+    const images = await getReportImages(found.id);
+    return { report: found, images };
+  }
+
+  return null;
+}
+
+// ==========================================
+// FOLDERS MANAGEMENT
+// ==========================================
+
+export async function getFolders(userUid?: string): Promise<FolderItem[]> {
+  // CRITICAL SECURITY FIX: Never return folders if userUid is missing!
+  if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
+    return [];
+  }
+
+  // Guest users are strictly local-storage isolated; never query or pollute Firestore!
+  const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
+  if (isGuest) {
+    const userKey = `${LOCAL_FOLDERS_KEY}_${userUid}`;
+    const folders = getLocal<FolderItem[]>(userKey, []);
+    return [...folders.filter((f) => f.ownerUid === userUid)].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  }
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
+    try {
+      const q = query(collection(db, 'folders'), where('ownerUid', '==', userUid));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as FolderItem[];
+      return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    } catch (e) {
+      console.warn('Firestore getFolders failed, using local storage fallback', e);
+    }
+  }
+
+  const userKey = `${LOCAL_FOLDERS_KEY}_${userUid}`;
+  const folders = getLocal<FolderItem[]>(userKey, []);
+  return [...folders.filter((f) => f.ownerUid === userUid)].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+}
+
+export async function getFolderById(id: string, userUid?: string): Promise<FolderItem | null> {
+  if (!id) return null;
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
+    try {
+      const snap = await getDoc(doc(db, 'folders', id));
+      if (snap.exists()) {
+        const data = { id: snap.id, ...snap.data() } as FolderItem;
+        if (userUid && data.ownerUid && data.ownerUid !== userUid) {
+          return null;
+        }
+        return data;
+      }
+    } catch (e) {
+      console.warn('Firestore getFolderById failed', e);
+    }
+  }
+
+  if (userUid) {
+    const folders = getLocal<FolderItem[]>(`${LOCAL_FOLDERS_KEY}_${userUid}`, []);
+    const found = folders.find((f) => f.id === id && f.ownerUid === userUid);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+export async function createFolder(data: {
+  name: string;
+  parentId: string | null;
+  color?: string;
+  ownerUid?: string;
+}): Promise<FolderItem> {
+  const now = new Date().toISOString();
+  const folderName = data.name.trim();
+  const isGuest = !data.ownerUid || data.ownerUid.startsWith('guest_') || data.ownerUid === 'guest_user_session';
+
+  if (isFirebaseConfigured && db && !isGuest && auth?.currentUser) {
+    try {
+      const colRef = collection(db, 'folders');
+      const docRef = await addDoc(colRef, {
+        name: folderName,
+        parentId: data.parentId || null,
+        color: data.color || null,
+        ownerUid: data.ownerUid || '',
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      const created: FolderItem = {
+        id: docRef.id,
+        name: folderName,
+        parentId: data.parentId || null,
+        color: data.color,
+        ownerUid: data.ownerUid || '',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      if (data.ownerUid) {
+        const uKey = `${LOCAL_FOLDERS_KEY}_${data.ownerUid}`;
+        const uFolders = getLocal<FolderItem[]>(uKey, []);
+        setLocal(uKey, [...uFolders, created]);
+      }
+
+      return created;
+    } catch (e) {
+      console.error('Failed to create folder in Firestore', e);
+    }
+  }
+
+  const newFolder: FolderItem = {
+    id: 'fld_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+    name: folderName,
+    parentId: data.parentId || null,
+    color: data.color,
+    ownerUid: data.ownerUid || '',
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  if (data.ownerUid) {
+    const uKey = `${LOCAL_FOLDERS_KEY}_${data.ownerUid}`;
+    const uFolders = getLocal<FolderItem[]>(uKey, []);
+    setLocal(uKey, [...uFolders, newFolder]);
+  }
+
+  return newFolder;
+}
+
+export async function updateFolder(id: string, partial: Partial<FolderItem>): Promise<void> {
+  const now = new Date().toISOString();
+
+  if (isFirebaseConfigured && db && auth?.currentUser) {
+    try {
+      const docRef = doc(db, 'folders', id);
+      await updateDoc(docRef, {
+        ...partial,
+        updatedAt: now,
+      });
+    } catch (e) {
+      console.error('Failed to update folder in Firestore', e);
+    }
+  }
+
+  const globalFolders = getLocal<FolderItem[]>(LOCAL_FOLDERS_KEY, []);
+  const idx = globalFolders.findIndex((f) => f.id === id);
+  if (idx !== -1) {
+    globalFolders[idx] = { ...globalFolders[idx], ...partial, updatedAt: now };
+    setLocal(LOCAL_FOLDERS_KEY, globalFolders);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_FOLDERS_KEY)) {
+          const uFolders = getLocal<FolderItem[]>(key, []);
+          const uIdx = uFolders.findIndex((f) => f.id === id);
+          if (uIdx !== -1) {
+            uFolders[uIdx] = { ...uFolders[uIdx], ...partial, updatedAt: now };
+            setLocal(key, uFolders);
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+/**
+ * Checks whether moving folderId into targetParentId would create a circular reference.
+ * Returns TRUE if a cycle would be created (ILLEGAL MOVE), FALSE if safe.
+ */
+export function wouldCreateFolderCycle(
+  folderId: string,
+  targetParentId: string | null,
+  allFolders: FolderItem[]
+): boolean {
+  if (!targetParentId) return false; // Moving to root is always safe
+  if (folderId === targetParentId) return true; // Cannot be parent of itself
+
+  const folderMap = new Map<string, FolderItem>();
+  allFolders.forEach((f) => folderMap.set(f.id, f));
+
+  let currentId: string | null = targetParentId;
+  const visited = new Set<string>();
+
+  while (currentId) {
+    if (currentId === folderId) {
+      return true; // Target parent is a descendant of folderId!
+    }
+    if (visited.has(currentId)) {
+      return true; // Existing loop detected
+    }
+    visited.add(currentId);
+    const parentFolder = folderMap.get(currentId);
+    currentId = parentFolder?.parentId || null;
+  }
+
+  return false;
+}
+
+/**
+ * Safely delete a folder:
+ * Any reports or subfolders in this folder are reparented to this folder's parent (or root),
+ * ensuring NO data is deleted or orphaned.
+ */
+export async function deleteFolderSafe(
+  id: string,
+  userUid?: string
+): Promise<{ success: boolean; movedReportsCount: number; movedFoldersCount: number }> {
+  const allFolders = await getFolders(userUid);
+  const targetFolder = allFolders.find((f) => f.id === id);
+  const newParentId = targetFolder?.parentId || null;
+
+  // 1. Reparent reports
+  const allReports = await getReports(userUid);
+  const affectedReports = allReports.filter((r) => r.folderId === id);
+  for (const rep of affectedReports) {
+    await updateReport(rep.id, { folderId: newParentId });
+  }
+
+  // 2. Reparent child folders
+  const affectedSubfolders = allFolders.filter((f) => f.parentId === id);
+  for (const sub of affectedSubfolders) {
+    await updateFolder(sub.id, { parentId: newParentId });
+  }
+
+  // 3. Delete the folder itself
+  if (isFirebaseConfigured && db && auth?.currentUser) {
+    try {
+      await deleteDoc(doc(db, 'folders', id));
+    } catch (e) {
+      console.warn('Firestore deleteFolder failed', e);
+    }
+  }
+
+  const globalFolders = getLocal<FolderItem[]>(LOCAL_FOLDERS_KEY, []);
+  setLocal(
+    LOCAL_FOLDERS_KEY,
+    globalFolders.filter((f) => f.id !== id)
+  );
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_FOLDERS_KEY)) {
+          const uFolders = getLocal<FolderItem[]>(key, []);
+          setLocal(
+            key,
+            uFolders.filter((f) => f.id !== id)
+          );
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    success: true,
+    movedReportsCount: affectedReports.length,
+    movedFoldersCount: affectedSubfolders.length,
+  };
+}
+
+export async function moveReportToFolder(
+  reportId: string,
+  folderId: string | null
+): Promise<void> {
+  await updateReport(reportId, { folderId: folderId || null });
+}
+
+/**
+ * Returns or creates the default dedicated folder for AI Agent reports.
+ */
+export async function getOrCreateAiReportsFolder(userUid?: string): Promise<FolderItem> {
+  const folders = await getFolders(userUid);
+  const existing = folders.find(
+    (f) =>
+      f.parentId === null &&
+      (f.name.trim() === 'تقارير الوكيل الذكي' ||
+        f.name.trim().toLowerCase() === 'ai agent reports')
+  );
+
+  if (existing) return existing;
+
+  return await createFolder({
+    name: 'تقارير الوكيل الذكي',
+    parentId: null,
+    ownerUid: userUid,
+  });
+}
+
+// ==========================================
+// API KEYS MANAGEMENT (FOR AI AGENT REST API)
+// ==========================================
+
+export async function getApiKeys(userUid?: string): Promise<ApiKeyItem[]> {
+  if (isFirebaseConfigured && db) {
+    try {
+      let snap;
+      if (userUid) {
+        const q = query(collection(db, 'api_keys'), where('ownerUid', '==', userUid));
+        snap = await getDocs(q);
+      } else {
+        snap = await getDocs(collection(db, 'api_keys'));
+      }
+      return snap.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+      })) as ApiKeyItem[];
+    } catch (e) {
+      console.warn('Firestore getApiKeys failed', e);
+    }
+  }
+
+  const userKey = userUid ? `${LOCAL_API_KEYS_KEY}_${userUid}` : LOCAL_API_KEYS_KEY;
+  let keys = getLocal<ApiKeyItem[]>(userKey, []);
+
+  if (keys.length === 0 && userUid) {
+    const globalKeys = getLocal<ApiKeyItem[]>(LOCAL_API_KEYS_KEY, []);
+    const userMatches = globalKeys.filter((k) => k.ownerUid === userUid);
+    if (userMatches.length > 0) {
+      keys = userMatches;
+      setLocal(userKey, keys);
+    }
+  }
+
+  return keys;
+}
+
+export async function saveApiKeyRecord(keyItem: ApiKeyItem): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      await setDoc(doc(db, 'api_keys', keyItem.id), keyItem);
+    } catch (e) {
+      console.warn('Firestore saveApiKeyRecord failed', e);
+    }
+  }
+
+  if (keyItem.ownerUid) {
+    const uKey = `${LOCAL_API_KEYS_KEY}_${keyItem.ownerUid}`;
+    const uKeys = getLocal<ApiKeyItem[]>(uKey, []);
+    setLocal(uKey, [keyItem, ...uKeys.filter((k) => k.id !== keyItem.id)]);
+  }
+
+  const globalKeys = getLocal<ApiKeyItem[]>(LOCAL_API_KEYS_KEY, []);
+  setLocal(LOCAL_API_KEYS_KEY, [keyItem, ...globalKeys.filter((k) => k.id !== keyItem.id)]);
+}
+
+export async function revokeApiKeyRecord(id: string, userUid?: string): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, 'api_keys', id), {
+        status: 'revoked',
+        revokedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Firestore revokeApiKeyRecord failed', e);
+    }
+  }
+
+  const globalKeys = getLocal<ApiKeyItem[]>(LOCAL_API_KEYS_KEY, []);
+  const idx = globalKeys.findIndex((k) => k.id === id);
+  if (idx !== -1) {
+    globalKeys[idx].status = 'revoked';
+    setLocal(LOCAL_API_KEYS_KEY, globalKeys);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_API_KEYS_KEY)) {
+          const list = getLocal<ApiKeyItem[]>(key, []);
+          const uIdx = list.findIndex((k) => k.id === id);
+          if (uIdx !== -1) {
+            list[uIdx].status = 'revoked';
+            setLocal(key, list);
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+export async function toggleApiKeyStatusRecord(
+  id: string,
+  newStatus: 'active' | 'paused',
+  userUid?: string
+): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      await updateDoc(doc(db, 'api_keys', id), {
+        status: newStatus,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.warn('Firestore toggleApiKeyStatusRecord failed', e);
+    }
+  }
+
+  const globalKeys = getLocal<ApiKeyItem[]>(LOCAL_API_KEYS_KEY, []);
+  const idx = globalKeys.findIndex((k) => k.id === id);
+  if (idx !== -1) {
+    globalKeys[idx].status = newStatus;
+    setLocal(LOCAL_API_KEYS_KEY, globalKeys);
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_API_KEYS_KEY)) {
+          const list = getLocal<ApiKeyItem[]>(key, []);
+          const uIdx = list.findIndex((k) => k.id === id);
+          if (uIdx !== -1) {
+            list[uIdx].status = newStatus;
+            setLocal(key, list);
+          }
+        }
+      }
+    } catch {}
+  }
+}
+
+export const AGENT_API_ENABLED_KEY = 'agent_api_enabled';
+
+export async function getAgentApiMasterStatus(userUid?: string): Promise<boolean> {
+  if (isFirebaseConfigured && db) {
+    try {
+      if (userUid) {
+        const userDoc = await getDoc(doc(db, 'user_settings', userUid));
+        if (userDoc.exists() && typeof userDoc.data()?.agentApiEnabled === 'boolean') {
+          return userDoc.data().agentApiEnabled;
+        }
+      }
+      const sysDoc = await getDoc(doc(db, 'system_settings', 'agent_api'));
+      if (sysDoc.exists() && typeof sysDoc.data()?.enabled === 'boolean') {
+        return sysDoc.data().enabled;
+      }
+    } catch (e) {
+      console.warn('Firestore getAgentApiMasterStatus failed', e);
+    }
+  }
+
+  const uKey = userUid ? `${AGENT_API_ENABLED_KEY}_${userUid}` : AGENT_API_ENABLED_KEY;
+  const localVal = getLocal<boolean | null>(uKey, null);
+  if (localVal !== null) return localVal;
+
+  const globalVal = getLocal<boolean | null>(AGENT_API_ENABLED_KEY, null);
+  if (globalVal !== null) return globalVal;
+
+  return true;
+}
+
+export async function setAgentApiMasterStatus(enabled: boolean, userUid?: string): Promise<void> {
+  if (isFirebaseConfigured && db) {
+    try {
+      if (userUid) {
+        await setDoc(doc(db, 'user_settings', userUid), { agentApiEnabled: enabled }, { merge: true });
+      }
+      await setDoc(doc(db, 'system_settings', 'agent_api'), { enabled, updatedAt: new Date().toISOString() }, { merge: true });
+    } catch (e) {
+      console.warn('Firestore setAgentApiMasterStatus failed', e);
+    }
+  }
+
+  if (userUid) {
+    setLocal(`${AGENT_API_ENABLED_KEY}_${userUid}`, enabled);
+  }
+  setLocal(AGENT_API_ENABLED_KEY, enabled);
+}
+
+export async function findApiKeyByHash(keyHash: string): Promise<ApiKeyItem | null> {
+  if (isFirebaseConfigured && db) {
+    try {
+      const q = query(
+        collection(db, 'api_keys'),
+        where('keyHash', '==', keyHash)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        return { id: snap.docs[0].id, ...snap.docs[0].data() } as ApiKeyItem;
+      }
+    } catch (e) {
+      console.warn('Firestore findApiKeyByHash failed', e);
+    }
+  }
+
+  const globalKeys = getLocal<ApiKeyItem[]>(LOCAL_API_KEYS_KEY, []);
+  const found = globalKeys.find((k) => k.keyHash === keyHash);
+  if (found) return found;
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_API_KEYS_KEY)) {
+          const list = getLocal<ApiKeyItem[]>(key, []);
+          const m = list.find((k) => k.keyHash === keyHash);
+          if (m) return m;
+        }
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+// ==========================================
+// UNIFIED INTELLIGENCE ENTITIES & RELATIONS
+// ==========================================
+export * from './db-intelligence';

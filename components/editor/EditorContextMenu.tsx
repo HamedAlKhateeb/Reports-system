@@ -499,17 +499,19 @@ export function EditorContextMenu({
 
           <div className="my-1 border-t border-border/60" />
 
-          {/* Quick Table Insert */}
+          {/* Unified Table Insert (single entry point) */}
           <button
             type="button"
             onClick={() => {
-              editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+              document.dispatchEvent(
+                new CustomEvent('editor-insert-table-request')
+              );
               onClose();
             }}
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950 transition-colors"
           >
             <TableIcon className="h-3.5 w-3.5 text-olive-600" />
-            <span>{isAr ? 'إدراج جدول 3×3' : 'Insert 3×3 Table'}</span>
+            <span>{isAr ? 'إدراج جدول' : 'Insert Table'}</span>
           </button>
         </>
       )}

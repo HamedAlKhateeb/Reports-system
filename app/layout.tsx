@@ -3,10 +3,12 @@ import './globals.css';
 import { LanguageProvider } from '@/lib/i18n/LanguageContext';
 import { ThemeProvider } from '@/lib/theme-context';
 import { AuthProvider } from '@/lib/auth-context';
+import { AIContextProvider } from '@/lib/ai-context';
 import { Navbar } from '@/components/layout/Navbar';
 import { AuthGuard } from '@/components/layout/AuthGuard';
 import { PwaInstallPrompt } from '@/components/pwa/PwaInstallPrompt';
 import { AiFloatingTrigger } from '@/components/ai/AiFloatingTrigger';
+import { Toaster } from '@/components/ui/toast';
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -53,12 +55,15 @@ export default function RootLayout({
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>
-              <Navbar />
-              <AuthGuard>
-                <main className="min-h-[calc(100vh-4rem)]">{children}</main>
-              </AuthGuard>
-              <PwaInstallPrompt />
-              <AiFloatingTrigger />
+              <AIContextProvider>
+                <Navbar />
+                <AuthGuard>
+                  <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+                </AuthGuard>
+                <PwaInstallPrompt />
+                <AiFloatingTrigger />
+                <Toaster />
+              </AIContextProvider>
             </AuthProvider>
           </LanguageProvider>
         </ThemeProvider>

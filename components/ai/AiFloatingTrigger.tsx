@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Sparkles, Bot, X } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { getAiAssistantVisible } from '@/lib/ai-config';
 import { AiAssistantModal } from './AiAssistantModal';
 
 export function AiFloatingTrigger() {
@@ -13,9 +14,27 @@ export function AiFloatingTrigger() {
   const { user } = useAuth();
   const { lang } = useLanguage();
   const isAr = lang === 'ar';
+  const [isVisible, setIsVisible] = useState<boolean>(() => getAiAssistantVisible(user?.uid));
 
-  // Keyboard shortcut listener: Alt + A to toggle AI Assistant
+  // Sync visibility with global settings and events
   useEffect(() => {
+    setIsVisible(getAiAssistantVisible(user?.uid));
+  }, [user?.uid]);
+
+  useEffect(() => {
+    const handleVisChange = (e: any) => {
+      if (typeof e.detail?.visible === 'boolean') {
+        setIsVisible(e.detail.visible);
+      }
+    };
+    window.addEventListener('ai-assistant-visibility-changed', handleVisChange);
+    return () => window.removeEventListener('ai-assistant-visibility-changed', handleVisChange);
+  }, []);
+
+  // Keyboard shortcut listener: Alt + A to toggle AI Assistant (only active if visible)
+  useEffect(() => {
+    if (!isVisible) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === 'a' || e.key === 'A' || e.key === 'ش')) {
         e.preventDefault();
@@ -27,10 +46,10 @@ export function AiFloatingTrigger() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen]);
+  }, [isOpen, isVisible]);
 
-  // Do not render on login page or if user is not authenticated
-  if (pathname === '/login' || !user) {
+  // Do not render if disabled by user, or on login page, or if user is not authenticated, or on shared public reports
+  if (!isVisible || pathname === '/login' || !user || pathname.startsWith('/share/')) {
     return null;
   }
 
@@ -39,12 +58,17 @@ export function AiFloatingTrigger() {
       {/* Floating Side Action Button on the RIGHT of the page */}
       <aside
         aria-label={isAr ? 'زر المساعد الذكي' : 'AI Assistant Button'}
-        className="fixed right-4 bottom-6 z-40 no-print flex items-center gap-2 group"
+        className="fixed right-3 bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] sm:right-6 sm:bottom-6 z-40 no-print flex items-center gap-2 group"
       >
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className={`relative flex items-center gap-2.5 rounded-full px-4 py-3 text-white shadow-xl transition-all duration-300 ease-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2E4034] ${
+          aria-label={
+            isOpen
+              ? isAr ? 'إغلاق المساعد الذكي' : 'Close AI Copilot'
+              : isAr ? 'المساعد الذكي (Alt+A)' : 'AI Copilot (Alt+A)'
+          }
+          className={`relative flex items-center justify-center gap-2.5 rounded-full size-11 sm:size-auto sm:px-4 sm:py-3 text-white shadow-xl transition-all duration-300 ease-out focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#2E4034] ${
             isOpen
               ? 'bg-[#1D2B22] shadow-2xl scale-95'
               : 'bg-gradient-to-r from-[#2E4034] to-[#3B5444] hover:from-[#24382F] hover:to-[#2E4034] hover:scale-105 hover:shadow-2xl'
@@ -55,11 +79,6 @@ export function AiFloatingTrigger() {
               : isAr ? 'المساعد الذكي (Alt+A)' : 'AI Copilot (Alt+A)'
           }
         >
-          {/* Animated Glow Pill */}
-          <span className="relative flex h-3 w-3">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
-          </span>
 
           <div className="flex items-center gap-1.5">
             {isOpen ? (
@@ -67,7 +86,7 @@ export function AiFloatingTrigger() {
             ) : (
               <Sparkles className="h-5 w-5 text-olive-200 transition-transform duration-200 group-hover:rotate-12" />
             )}
-            <span className="text-xs font-bold tracking-tight select-none">
+            <span className="text-xs font-bold tracking-tight select-none hidden sm:inline-block">
               {isAr ? 'المساعد الذكي' : 'AI Copilot'}
             </span>
           </div>

@@ -10,10 +10,12 @@ declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     reportImage: {
       setReportImage: (options: {
-        src: string;
+        src?: string;
+        url?: string;
         storagePath?: string;
-        sequenceNumber: number;
-        fileName: string;
+        sequenceNumber?: number;
+        index?: number;
+        fileName?: string;
         caption?: string;
         reportId: string;
         imageId?: string;
@@ -44,11 +46,17 @@ export const ReportImage = Node.create<ReportImageOptions>({
       src: {
         default: null,
       },
+      url: {
+        default: null,
+      },
       storagePath: {
         default: '',
       },
       sequenceNumber: {
         default: 1,
+      },
+      index: {
+        default: 0,
       },
       fileName: {
         default: '',
@@ -86,10 +94,13 @@ export const ReportImage = Node.create<ReportImageOptions>({
         tag: 'figure[data-type="report-image"]',
         getAttrs: (dom) => {
           const el = dom as HTMLElement;
+          const src = el.getAttribute('data-src') || el.getAttribute('data-url');
           return {
-            src: el.getAttribute('data-src'),
+            src,
+            url: src,
             storagePath: el.getAttribute('data-storage-path') || '',
             sequenceNumber: Number(el.getAttribute('data-sequence-number')) || 1,
+            index: Number(el.getAttribute('data-index')) || 0,
             fileName: el.getAttribute('data-file-name') || '',
             caption: el.getAttribute('data-caption') || '',
             reportId: el.getAttribute('data-report-id') || '',
@@ -106,13 +117,16 @@ export const ReportImage = Node.create<ReportImageOptions>({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const effectiveSrc = HTMLAttributes.url || HTMLAttributes.src;
     return [
       'figure',
       mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
         'data-type': 'report-image',
-        'data-src': HTMLAttributes.src,
+        'data-src': effectiveSrc,
+        'data-url': effectiveSrc,
         'data-storage-path': HTMLAttributes.storagePath,
         'data-sequence-number': HTMLAttributes.sequenceNumber,
+        'data-index': HTMLAttributes.index ?? HTMLAttributes.sequenceNumber ?? 0,
         'data-file-name': HTMLAttributes.fileName,
         'data-caption': HTMLAttributes.caption,
         'data-report-id': HTMLAttributes.reportId,
@@ -123,7 +137,7 @@ export const ReportImage = Node.create<ReportImageOptions>({
         'data-natural-height': HTMLAttributes.naturalHeight || '',
         'data-alignment': HTMLAttributes.alignment || 'center',
       }),
-      ['img', { src: HTMLAttributes.src, alt: HTMLAttributes.caption || HTMLAttributes.fileName, style: `width: ${HTMLAttributes.width || '100%'};` }],
+      ['img', { src: effectiveSrc, alt: HTMLAttributes.caption || HTMLAttributes.fileName, style: `width: ${HTMLAttributes.width || '100%'};` }],
       ['figcaption', {}, HTMLAttributes.caption || ''],
     ];
   },

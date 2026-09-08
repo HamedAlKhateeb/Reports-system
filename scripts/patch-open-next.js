@@ -40,14 +40,18 @@ for (const file of filesToPatch) {
       }
 
       // 2. Protobufjs codegen bypass for Cloudflare Workers eval security
-      if (content.includes('return Function(t2)();')) {
-        content = content.replace(
-          'return a[A] = t2, Function.apply(null, a).apply(null, l);',
-          'try { return a[A] = t2, Function.apply(null, a).apply(null, l); } catch (_) { return function() {}; }'
-        );
-        content = content.replace(
+      if (content.includes('Function(t2)();') || content.includes('Function.apply')) {
+        content = content.replaceAll(
           'return Function(t2)();',
           'try { return Function(t2)(); } catch (_) { return function() {}; }'
+        );
+        content = content.replaceAll(
+          /return\s+[a-zA-Z0-9_\[\]]+\s*=\s*t2,\s*Function\.apply\(null,\s*[a-zA-Z0-9_]+\)\.apply\(null,\s*[a-zA-Z0-9_]+\);/g,
+          'try { return Function.apply(null, a).apply(null, l); } catch (_) { return function() {}; }'
+        );
+        content = content.replaceAll(
+          'Function("return this")()',
+          '(typeof globalThis !== "undefined" ? globalThis : typeof self !== "undefined" ? self : {})'
         );
         modified = true;
       }
