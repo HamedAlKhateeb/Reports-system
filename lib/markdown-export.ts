@@ -215,6 +215,17 @@ export function tipTapJsonToMarkdown(
         return `${mdTableRows.join('\n')}\n\n`;
       }
 
+      case 'reportChart': {
+        const title = node.attrs?.title || 'Chart';
+        const type = node.attrs?.type || 'bar';
+        return `> 📊 **${title}** (${type})\n\n`;
+      }
+
+      case 'latexInline': {
+        const latex = node.attrs?.latex || '';
+        return latex ? `$${latex}$` : '';
+      }
+
       default:
         if (node.content) {
           return node.content.map(processNode).join('');

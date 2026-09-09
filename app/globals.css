@@ -410,16 +410,116 @@ html {
 
 .smart-table-frame {
   max-width: 100%;
-  overflow-x: auto;
-  overflow-y: visible;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  overflow: visible;
 }
 
 .smart-table-grid {
   border-collapse: separate;
   border-spacing: 0;
-  width: max-content;
-  min-width: 100%;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Smart Table — same visual language as the normal TipTap table */
+.smart-table-wrapper {
+  border: 1px solid #E7E6E2;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.dark .smart-table-wrapper {
+  border-color: #2B2B29;
+}
+.smart-table-header-cell {
+  background-color: var(--editor-th-bg, #26342B);
+  color: var(--editor-th-text, #F4F6F4);
+  font-weight: 600;
+  border: 1px solid #E7E6E2;
+  padding: 10px 14px;
+  line-height: 1.6;
+}
+.dark .smart-table-header-cell {
+  border-color: #2B2B29;
+}
+.smart-table-header-cell input {
+  color: inherit;
+}
+.smart-table-header-cell input::placeholder {
+  color: inherit;
+  opacity: 0.6;
+}
+.smart-table-corner-cell {
+  background-color: var(--editor-th-bg, #26342B);
+  color: var(--editor-th-text, #F4F6F4);
+  font-weight: 600;
+  border: 1px solid #E7E6E2;
+}
+.dark .smart-table-corner-cell {
+  border-color: #2B2B29;
+}
+.smart-table-rowheader {
+  border: 1px solid #E7E6E2;
+  vertical-align: top;
+}
+.dark .smart-table-rowheader {
+  border-color: #2B2B29;
+}
+.smart-table-cell {
+  border: 1px solid #E7E6E2;
+  padding: 0;
+  vertical-align: top;
+  line-height: 1.6;
+}
+.dark .smart-table-cell {
+  border-color: #2B2B29;
+}
+.smart-table-cell-content {
+  padding: 10px 14px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: normal;
+  white-space: pre-wrap;
+}
+.smart-table-cell-selected {
+  position: relative;
+  outline: 2px solid var(--editor-accent, #486450);
+  outline-offset: -2px;
+  background: rgba(72, 100, 80, 0.15);
+}
+
+/* Formula bar: strictly LTR, isolated from surrounding RTL context */
+.formula-bar-ltr {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.formula-bar-ltr input {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/* Inline LaTeX (KaTeX) — RTL-safe: LTR isolate, stable baseline/line-height */
+.latex-inline {
+  display: inline-block;
+  direction: ltr;
+  unicode-bidi: isolate;
+  vertical-align: baseline;
+  line-height: 1.25;
+  margin: 0 2px;
+  white-space: nowrap;
+}
+.latex-inline .katex {
+  font-size: 1em;
+  line-height: 1.2;
+}
+.latex-inline .katex-display {
+  margin: 0;
+}
+.latex-error {
+  font-family: monospace;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 0 4px;
 }
 

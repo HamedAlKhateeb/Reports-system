@@ -44,8 +44,6 @@ interface OverviewTabProps {
   project?: ProjectItem | null;
   issues: IssueItem[];
   onNavigateTab: (tabKey: string, meta?: any) => void;
-  onOpenScanner: () => void;
-  onOpenInspector: () => void;
   onReportUpdate?: (updatedReport: ReportItem) => void;
   userUid?: string;
   loadingIssues?: boolean;
@@ -58,8 +56,6 @@ export function OverviewTab({
   project,
   issues,
   onNavigateTab,
-  onOpenScanner,
-  onOpenInspector,
   onReportUpdate,
   userUid,
   loadingIssues = false,
@@ -799,12 +795,14 @@ export function OverviewTab({
         )}
       </section>
 
-      {/* 3. QUICK OPERATIONS & INTEGRATIONS */}
-      <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+      {/* QUICK OPERATIONS — single shortcut to the unified Action Center.
+          Scan / inspect controls live ONLY in the "المشاكل والمطابقة" tab
+          (no duplicated copies here). */}
+      <section className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Button
           type="button"
           variant="outline"
-          onClick={onOpenScanner}
+          onClick={() => onNavigateTab('issues')}
           className="h-14 justify-start p-3 bg-card border-border/80 hover:bg-olive-50 dark:hover:bg-olive-950/40 text-left shadow-2xs"
         >
           <div className="flex items-center gap-3 w-full">
@@ -813,31 +811,10 @@ export function OverviewTab({
             </div>
             <div className="overflow-hidden">
               <span className="font-bold text-xs text-foreground block truncate">
-                {isAr ? 'فحص المرشحين' : 'Scan Candidates'}
+                {isAr ? 'المشاكل والمطابقة' : 'Issues & Matching'}
               </span>
               <span className="text-[11px] text-muted-foreground block truncate">
-                {isAr ? 'اكتشاف وتحديث مشاكل الجداول' : 'Detect table issues'}
-              </span>
-            </div>
-          </div>
-        </Button>
-
-        <Button
-          type="button"
-          variant="outline"
-          onClick={onOpenInspector}
-          className="h-14 justify-start p-3 bg-card border-border/80 hover:bg-blue-50 dark:hover:bg-blue-950/40 text-left shadow-2xs"
-        >
-          <div className="flex items-center gap-3 w-full">
-            <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 shrink-0">
-              <CheckCircle2 className="h-4 w-4" />
-            </div>
-            <div className="overflow-hidden">
-              <span className="font-bold text-xs text-foreground block truncate">
-                {isAr ? 'فاحص العدادات' : 'Inspect Truth'}
-              </span>
-              <span className="text-[11px] text-muted-foreground block truncate">
-                {isAr ? 'التحقق من اتساق الأرقام' : 'Verify counter integrity'}
+                {isAr ? 'الفحص والمزامنة وإدارة المشاكل من مكان واحد' : 'Scan, sync and manage issues in one place'}
               </span>
             </div>
           </div>

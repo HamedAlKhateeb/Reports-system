@@ -20,6 +20,9 @@ import {
   Copy,
   Check,
   HelpCircle,
+  BarChart3,
+  Sigma,
+  ScanSearch,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -294,6 +297,152 @@ export default function InstructionsPage() {
                 <strong>Small-Screen Friendly:</strong> On mobile the table scrolls inside its own isolated horizontal container without breaking the page layout.
               </li>
             </ul>
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'charts',
+      icon: BarChart3,
+      badgeAr: 'الرسوم البيانية',
+      badgeEn: 'Charts',
+      titleAr: 'الرسوم البيانية: من الجدول إلى الرسم بخطوات',
+      titleEn: 'Charts: From Table to Chart in Steps',
+      summaryAr: 'حوّل أي جدول (عادي أو ذكي) إلى رسم بياني تفاعلي مستقل يبقى مرتبطاً بمصدر بياناته ويتحدث تلقائياً.',
+      summaryEn: 'Turn any table (normal or smart) into an independent interactive chart linked to its data source with live updates.',
+      contentAr: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <ol className="space-y-2 text-xs text-muted-foreground list-decimal ps-5">
+            <li>اضغط زر <strong>الرسم البياني (Chart)</strong> من شريط الأدوات العلوي في المحرر.</li>
+            <li>إذا كان المؤشر داخل جدول، سيستخدم النظام ذلك الجدول تلقائياً دون سؤال إضافي.</li>
+            <li>إذا لم يكن هناك جدول محدد، ستدخل في وضع اختيار مؤقت: حدد جدولاً من التقرير (يظهر ✓ على المحدد) ثم اضغط <strong>متابعة</strong>، ويمكن الإلغاء في أي وقت.</li>
+            <li>اختر نوع الرسم: عمودي، شريطي أفقي، خطي، مساحي، دائري، دونات، مبعثر، مكدّس، أو مجمّع.</li>
+            <li>راجع مصدر البيانات الذي اكتشفه النظام تلقائياً (عمود الفئة X والأعمدة الرقمية) وعدّله يدوياً عند الحاجة.</li>
+            <li>اضغط <strong>إنشاء Chart</strong> — سيظهر الرسم <strong>خارج الجدول</strong> كعنصر مستقل في التخطيط.</li>
+            <li>يمكن تحديد الرسم وتحريكه بالسحب وتغيير حجمه من مقبض الزاوية؛ سحب الرسم لا يحرك الجدول أبداً.</li>
+            <li>الرسم مستقل عن الجدول في التخطيط لكنه يستخدمه كمصدر للبيانات (مرجع فقط، بلا نسخ).</li>
+            <li>عند تغيير بيانات الجدول يتم تحديث الرسم تلقائياً. إذا حُذف عمود مستخدم، يظهر تنبيه بأن المصدر يحتاج مراجعة وإصلاحاً دون كسر التقرير.</li>
+          </ol>
+          <div className="rounded-lg border p-3.5 bg-muted/20 text-xs text-muted-foreground">
+            أنواع الرسوم المدعومة: Column / Bar / Line / Area / Pie / Donut / Scatter / Stacked Bar / Grouped Bar — وتُحفظ مع التقرير (النوع، الموقع، الحجم، الإعدادات، مصدر البيانات) وتعود كما هي بعد إعادة الفتح.
+          </div>
+        </div>
+      ),
+      contentEn: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <ol className="space-y-2 text-xs text-muted-foreground list-decimal ps-5">
+            <li>Press the <strong>Chart</strong> button in the editor top toolbar.</li>
+            <li>If the cursor is inside a table, that table is used automatically with no extra prompt.</li>
+            <li>Otherwise a temporary pick mode opens: select a table from the report (✓ marks the selection), then press <strong>Continue</strong>; Cancel is always available.</li>
+            <li>Pick a chart type: Column, Bar, Line, Area, Pie, Donut, Scatter, Stacked Bar, or Grouped Bar.</li>
+            <li>Review the auto-detected data source (X category column + numeric series) and adjust it manually if needed.</li>
+            <li>Press <strong>Create chart</strong> — the chart appears <strong>outside the table</strong> as an independent layout element.</li>
+            <li>Select the chart to drag it or resize it from the corner handle; dragging a chart never moves its table.</li>
+            <li>The chart is layout-independent but data-linked (reference only, never a copy).</li>
+            <li>Editing table data refreshes the chart automatically. Deleting a used column shows a repairable source warning without breaking the report.</li>
+          </ol>
+          <div className="rounded-lg border p-3.5 bg-muted/20 text-xs text-muted-foreground">
+            Type, position, size, settings, and data source are all saved with the report and restored on reload.
+          </div>
+        </div>
+      ),
+    },
+    {
+      id: 'latex',
+      icon: Sigma,
+      badgeAr: 'المعادلات الرياضية',
+      badgeEn: 'LaTeX Math',
+      titleAr: 'المعادلات الرياضية LaTeX داخل النصوص',
+      titleEn: 'LaTeX Math Equations Inside Text',
+      summaryAr: 'أدخل معادلات منسقة من زر ∑ أو اكتب $...$ مباشرة داخل Markdown — وتظهر بشكل صحيح في المحرر والعرض وPDF.',
+      summaryEn: 'Insert formatted equations via the ∑ button or type $...$ directly in Markdown — rendered correctly in editor, preview, and PDF.',
+      contentAr: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <ul className="space-y-2 text-xs text-muted-foreground list-disc ps-5">
+            <li>اضغط زر <strong>∑</strong> في شريط الأدوات العلوي، اكتب المعادلة (مثال: <code dir="ltr">x^2 + y^2 = z^2</code>) ثم اضغط إدراج — بلا حاجة لأي HTML.</li>
+            <li>يمكن أيضاً كتابة Inline LaTeX مباشرة داخل النص بصيغة <code dir="ltr">$...$</code> أو <code dir="ltr">\(...\)</code>، مثال: <code dir="ltr">$x^2 + y^2 = z^2$</code> — وتتحول تلقائياً إلى معادلة منسقة.</li>
+            <li>تعمل المعادلات داخل الفقرات العربية دون كسر الاتجاه: <code dir="ltr">إذا كان $x &gt; 0$ فإن الدالة متزايدة</code> — تُعرض المعادلة باتجاه LTR معزول مع الحفاظ على baseline وارتفاع السطر.</li>
+            <li>انقر المعادلة المحددة لتحريرها أو حذفها.</li>
+            <li>تظهر المعادلات منسقة (بدون delimiters ظاهرة) في المحرر، وصفحة المشاركة، وملف PDF — بما فيها الكسور (<code dir="ltr">{'$\\frac{a+b}{c}$'}</code>) والرموز اليونانية (<code dir="ltr">{'$\\alpha + \\beta = \\gamma$'}</code>).</li>
+          </ul>
+        </div>
+      ),
+      contentEn: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <ul className="space-y-2 text-xs text-muted-foreground list-disc ps-5">
+            <li>Press the <strong>∑</strong> toolbar button, type the equation (e.g. <code>x^2 + y^2 = z^2</code>), then Insert — no HTML needed.</li>
+            <li>You can also type inline LaTeX directly as <code>$...$</code> or <code>\(...\)</code>; it converts automatically into a formatted equation.</li>
+            <li>Equations inside Arabic paragraphs keep the text direction intact (LTR-isolated math, stable baseline and line-height).</li>
+            <li>Click a selected equation to edit or delete it.</li>
+            <li>Equations render cleanly (no visible delimiters) in the editor, shared pages, and PDF — including fractions (<code>{'$\\frac{a+b}{c}$'}</code>) and Greek symbols (<code>{'$\\alpha + \\beta = \\gamma$'}</code>).</li>
+          </ul>
+        </div>
+      ),
+    },
+    {
+      id: 'issues-tools',
+      icon: ScanSearch,
+      badgeAr: 'الفحص والمشاكل',
+      badgeEn: 'Scan & Issues',
+      titleAr: 'فحص المرشحين والمطابقة وإدارة المشاكل (الواجهة الموحدة)',
+      titleEn: 'Candidate Scan, Matching & Issue Management (Unified UI)',
+      summaryAr: 'كل عمليات الفحص والمشاكل تُدار من Action Center واحد داخل تبويب المشاكل والمطابقة، مع زر فحص سريع في الشريط العلوي.',
+      summaryEn: 'All scan and issue operations run from one Action Center inside the Issues & Matching tab, with a quick Scan shortcut up top.',
+      contentAr: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <div className="rounded-xl border p-4 bg-card space-y-2">
+            <h5 className="font-bold text-xs text-foreground">أين تجد كل أداة (بعد إعادة التنظيم):</h5>
+            <ul className="text-xs text-muted-foreground space-y-1.5 list-disc ps-5">
+              <li><strong>الشريط العلوي:</strong> زر واحد <strong>فحص</strong> يفتح قائمة صغيرة (فحص المرشحين / فحص المطابقة) للوصول السريع فقط.</li>
+              <li><strong>تبويب المشاكل والمطابقة:</strong> يحتوي <strong>Action Center</strong> ثابتاً أثناء التمرير، مقسماً إلى مجموعتين: <strong>الفحص</strong> (فحص المرشحين، فحص المطابقة) و<strong>المشاكل</strong> (فحص واكتشاف المشاكل، إضافة مشكلة، مزامنة المشاكل).</li>
+            </ul>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">فحص المرشحين</h5>
+              <p className="text-xs text-muted-foreground">يستخرج مرشحي المشاكل من محتوى التقرير (الجداول والنصوص) ويعرضهم للمراجعة والقبول في لوحة المشاكل. يُستخدم بعد كتابة المحتوى أو استيراده.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">فحص المطابقة</h5>
+              <p className="text-xs text-muted-foreground">يتحقق من اتساق العدادات (النص مقابل جدول التحليل مقابل المشاكل المرتبطة) ويكشف الفروقات مع سببها الجذري.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">اكتشاف المشاكل</h5>
+              <p className="text-xs text-muted-foreground">يفحص جدول التقرير ويستخرج بنود المشاكل إلى جدول البيانات والتحليل أسفل نفس التبويب، مع تحديث النتائج تلقائياً.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">إدارة المشاكل</h5>
+              <p className="text-xs text-muted-foreground">إضافة مشكلة يدوياً، تعديل البنود أو حذفها من جدول التحليل، مزامنة البنود غير المسجلة إلى لوحة المشاكل (Kanban)، واستخدام البحث والفلاتر (الخطورة/الحالة) لتضييق النتائج.</p>
+            </div>
+          </div>
+        </div>
+      ),
+      contentEn: (
+        <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
+          <div className="rounded-xl border p-4 bg-card space-y-2">
+            <h5 className="font-bold text-xs text-foreground">Where each tool lives (after reorganization):</h5>
+            <ul className="text-xs text-muted-foreground space-y-1.5 list-disc ps-5">
+              <li><strong>Top bar:</strong> a single <strong>Scan</strong> shortcut opening a small menu (Scan Candidates / Matching Check).</li>
+              <li><strong>Issues & Matching tab:</strong> a sticky <strong>Action Center</strong> split into <strong>Scan</strong> (candidates, matching) and <strong>Issues</strong> (detect, add, sync).</li>
+            </ul>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">Candidate Scan</h5>
+              <p className="text-xs text-muted-foreground">Extracts issue candidates from report content (tables and text) for review and approval into the issue board. Run after writing or importing content.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">Matching Check</h5>
+              <p className="text-xs text-muted-foreground">Verifies counter consistency (document text vs analysis table vs linked issues) and pinpoints discrepancies with root causes.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">Issue Detection</h5>
+              <p className="text-xs text-muted-foreground">Scans the report table and extracts issue rows into the data & analysis table below in the same tab, with automatic refresh.</p>
+            </div>
+            <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
+              <h5 className="font-bold text-xs text-foreground">Issue Management</h5>
+              <p className="text-xs text-muted-foreground">Manually add an issue, edit or delete analysis rows, sync unsynced rows to the Kanban board, and use search plus severity/status filters to narrow results.</p>
+            </div>
           </div>
         </div>
       ),

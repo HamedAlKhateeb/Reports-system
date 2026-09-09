@@ -25,6 +25,16 @@ import {
   CellFormat,
   MergedRange,
 } from '@/lib/grid/table-ops';
+import {
+  TABLE_LIMITS,
+  safeClone,
+  normalizeColumns,
+  normalizeRows,
+  normalizeFormats,
+  normalizeMerges,
+  shiftMergesOnRowChange,
+  defaultTableState,
+} from '@/lib/grid/table-guards';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import {
   Plus,
@@ -71,6 +81,13 @@ export interface SmartTableProps {
   onNavigateToContent?: () => void;
   readOnly?: boolean;
   onDeleteNode?: () => void;
+  /**
+   * Where the formatting toolbar lives:
+   * - 'internal' (default): the classic strip inside the component (Tables tab).
+   * - 'external': hidden; formatting lives in the top EditorToolbar and arrives
+   *   as addressed 'smart-table-command' events (editor-embedded usage).
+   */
+  toolbar?: 'internal' | 'external';
 }
 
 interface HistoryEntry {
@@ -118,6 +135,7 @@ export function SmartTable({
   onNavigateToContent,
   readOnly = false,
   onDeleteNode,
+  toolbar = 'internal',
 }: SmartTableProps) {
   const { lang } = useLanguage();
   const isAr = lang === 'ar';
@@ -171,6 +189,43 @@ export function SmartTable({
 
   // Debounce save timer
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const tableRef = useRef<TableEntity | null>(null);
+  const editValueRef = useRef('');
+  const [tableName, setTableName] = useState(isAr ? 'جدول' : 'Table');
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    tableRef.current = table;
+  }, [table]);
+
+  useEffect(() => {
+    editValueRef.current = editValue;
+  }, [editValue]);
+
+  // ---- Top-toolbar bridge: announce focus + receive formatting commands ----
+  // The grid isolates its DOM events from ProseMirror (stopPropagation), so the
+  // editor cannot detect "cursor in smart table" by itself. We announce it
+  // explicitly; EditorToolbar shows the same formatting sub-toolbar as normal
+  // tables and sends back commands addressed by tableId.
+  const notifySmartActive = useCallback(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('smart-table-active', {
+          detail: { tableId, name: tableRef.current?.name ?? '' },
+        })
+      );
+    } catch {}
+  }, [tableId]);
+
+
 
   const safeActiveCell: CellPos = useMemo(() => {
     return {
@@ -215,54 +270,77 @@ export function SmartTable({
   useEffect(() => {
     let isMounted = true;
     async function load() {
-      if (!tableId) return;
+      if (!tableId) {
+        if (isMounted) setLoading(false);
+        return;
+      }
       try {
-        setLoading(true);
+        if (isMounted) setLoading(true);
         const fetched = await getTableById(tableId);
-        if (isMounted) {
-          if (fetched) {
-            setTable(fetched);
-            const cols = Array.isArray(fetched.columns_data) ? fetched.columns_data : [];
-            const rws = Array.isArray(fetched.rows_data) ? fetched.rows_data : [];
-            setColumns(cols);
-            setRows(rws);
-            setCellFormats((fetched.cell_formats as Record<string, CellFormat>) || {});
-            setMergedCells((fetched.merged_cells as MergedRange[]) || []);
-            setDirection(fetched.direction || (isAr ? 'rtl' : 'ltr'));
-          } else {
-            // Default template when the table entity does not exist yet
-            const defaultTable: TableEntity = {
-              id: tableId,
-              report_id: reportId || '',
-              name: isAr ? 'جدول' : 'Table',
-              direction: isAr ? 'rtl' : 'ltr',
-              cell_formats: {},
-              merged_cells: [],
-              columns_data: [
-                { id: 'A', name: isAr ? 'البند' : 'Item', type: 'text', width: 200 },
-                { id: 'B', name: isAr ? 'الوصف' : 'Description', type: 'text', width: 260 },
-                { id: 'C', name: isAr ? 'العدد' : 'Count', type: 'number', width: 110 },
-              ],
-              rows_data: [
-                { A: '', B: '', C: '' },
-                { A: '', B: '', C: '' },
-                { A: '', B: '', C: '' },
-              ],
-              version: 1,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            };
+        if (!isMounted) return;
+        if (fetched) {
+          // Normalize everything: a single bad payload must never crash the editor.
+          const cols = normalizeColumns((fetched as any).columns_data);
+          const fmt = normalizeFormats((fetched as any).cell_formats);
+          const rws = normalizeRows((fetched as any).rows_data, cols);
+          const merges = normalizeMerges((fetched as any).merged_cells, Math.max(cols.length, 1), Math.max(rws.length, 1));
+          const dir = (fetched as any).direction === 'ltr' || (fetched as any).direction === 'rtl'
+            ? (fetched as any).direction
+            : isAr ? 'rtl' : 'ltr';
+          const safeCols = cols.length > 0 ? cols : defaultTableState(isAr, tableId, reportId || '').columns;
+          const safeRws = rws.length > 0 ? rws : defaultTableState(isAr, tableId, reportId || '').rows;
+          setTable(fetched);
+          tableRef.current = fetched;
+          setColumns(safeCols);
+          setRows(safeRws);
+          setCellFormats(fmt);
+          setMergedCells(merges);
+          setDirection(dir);
+          setTableName(typeof (fetched as any).name === 'string' && (fetched as any).name ? (fetched as any).name.slice(0, 120) : isAr ? 'جدول' : 'Table');
+          setEditValue(String((safeRws[0] as any)?.[safeCols[0]?.id] ?? ''));
+        } else {
+          // Default template when the table entity does not exist yet
+          const tpl = defaultTableState(isAr, tableId, reportId || '');
+          const defaultTable: TableEntity = {
+            id: tableId,
+            report_id: reportId || '',
+            name: isAr ? 'جدول' : 'Table',
+            direction: tpl.direction,
+            cell_formats: {},
+            merged_cells: [],
+            columns_data: tpl.columns,
+            rows_data: tpl.rows,
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+          if (isMounted) {
             setTable(defaultTable);
-            setColumns(defaultTable.columns_data);
-            setRows(defaultTable.rows_data);
+            tableRef.current = defaultTable;
+            setColumns(tpl.columns);
+            setRows(tpl.rows);
             setCellFormats({});
             setMergedCells([]);
-            setDirection(defaultTable.direction || (isAr ? 'rtl' : 'ltr'));
-            saveTable(defaultTable);
+            setDirection(tpl.direction);
+            setTableName(defaultTable.name);
+          }
+          try {
+            await saveTable(defaultTable);
+          } catch (e) {
+            console.error('Failed to persist default table:', e);
           }
         }
       } catch (e) {
         console.error('Failed to load table:', e);
+        if (isMounted) {
+          // Fall back to an empty-but-valid table instead of a blank crash screen.
+          const tpl = defaultTableState(isAr, tableId, reportId || '');
+          setColumns(tpl.columns);
+          setRows(tpl.rows);
+          setCellFormats({});
+          setMergedCells([]);
+          setDirection(tpl.direction);
+        }
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -286,18 +364,20 @@ export function SmartTable({
       m = mergedCells,
       d = direction
     ) => {
-      setHistory((prev) => [
-        ...prev.slice(-40),
-        {
-          columns: JSON.parse(JSON.stringify(cols)),
-          rows: JSON.parse(JSON.stringify(r)),
-          cellFormats: JSON.parse(JSON.stringify(f || {})),
-          mergedCells: JSON.parse(JSON.stringify(m || [])),
+      try {
+        const entry = {
+          columns: safeClone(cols, [] as TableColumnEntity[]),
+          rows: safeClone(r, [] as Record<string, any>[]),
+          cellFormats: safeClone(f || {}, {} as Record<string, CellFormat>),
+          mergedCells: safeClone(m || [], [] as MergedRange[]),
           direction: d,
-          description: desc,
-        },
-      ]);
-      setRedoStack([]);
+          description: String(desc || '').slice(0, 120),
+        };
+        setHistory((prev) => [...prev.slice(-TABLE_LIMITS.MAX_HISTORY), entry]);
+        setRedoStack([]);
+      } catch (e) {
+        console.error('pushHistory failed (ignored):', e);
+      }
     },
     [columns, rows, cellFormats, mergedCells, direction]
   );
@@ -308,34 +388,51 @@ export function SmartTable({
       newRows: Record<string, any>[],
       newFormats: Record<string, CellFormat>,
       newMerged: MergedRange[],
-      newDir: 'rtl' | 'ltr'
+      newDir: 'rtl' | 'ltr',
+      newName?: string
     ) => {
-      if (!table) return;
-      setSaveStatus('saving');
+      const base = tableRef.current;
+      if (!base) return;
+      if (mountedRef.current) setSaveStatus('saving');
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
+      const snapshot = {
+        cols: safeClone(newCols, [] as TableColumnEntity[]),
+        rws: safeClone(newRows, [] as Record<string, any>[]),
+        fmt: safeClone(newFormats, {} as Record<string, CellFormat>),
+        mrg: safeClone(newMerged, [] as MergedRange[]),
+        dir: newDir,
+        name: typeof newName === 'string' ? newName.slice(0, 120) : base.name,
+        base,
+      };
       saveTimeoutRef.current = setTimeout(async () => {
         try {
           const updated: TableEntity = {
-            ...table,
-            columns_data: newCols,
-            rows_data: newRows,
-            cell_formats: newFormats,
-            merged_cells: newMerged,
-            direction: newDir,
+            ...snapshot.base,
+            name: snapshot.name,
+            columns_data: snapshot.cols.slice(0, TABLE_LIMITS.MAX_COLS),
+            rows_data: snapshot.rws.slice(0, TABLE_LIMITS.MAX_ROWS),
+            cell_formats: snapshot.fmt,
+            merged_cells: snapshot.mrg,
+            direction: snapshot.dir,
             updated_at: new Date().toISOString(),
           };
           await saveTable(updated);
+          if (!mountedRef.current) return;
+          tableRef.current = updated;
           setTable(updated);
           setSaveStatus('saved');
+          try {
+            window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId: updated.id } }));
+          } catch {}
         } catch (err) {
           console.error('Failed to autosave table:', err);
-          setSaveStatus('error');
+          if (mountedRef.current) setSaveStatus('error');
         }
       }, 650);
     },
-    [table]
+    []
   );
 
   const commitChanges = useCallback(
@@ -344,16 +441,31 @@ export function SmartTable({
       newRows: Record<string, any>[],
       newFormats: Record<string, CellFormat> = cellFormats,
       newMerged: MergedRange[] = mergedCells,
-      newDir: 'rtl' | 'ltr' = direction
+      newDir: 'rtl' | 'ltr' = direction,
+      newName?: string
     ) => {
-      setColumns(newCols);
-      setRows(newRows);
-      setCellFormats(newFormats);
-      setMergedCells(newMerged);
-      setDirection(newDir);
-      scheduleSave(newCols, newRows, newFormats, newMerged, newDir);
+      try {
+        const cols = Array.isArray(newCols) ? newCols.slice(0, TABLE_LIMITS.MAX_COLS) : columns;
+        const rws = Array.isArray(newRows) ? newRows.slice(0, TABLE_LIMITS.MAX_ROWS) : rows;
+        const fmt = newFormats && typeof newFormats === 'object' ? newFormats : {};
+        const mrg = normalizeMerges(
+          Array.isArray(newMerged) ? newMerged : [],
+          Math.max(cols.length, 1),
+          Math.max(rws.length, 1)
+        );
+        if (mountedRef.current) {
+          setColumns(cols);
+          setRows(rws);
+          setCellFormats(fmt);
+          setMergedCells(mrg);
+          setDirection(newDir);
+        }
+        scheduleSave(cols, rws, fmt, mrg, newDir, newName ?? tableRef.current?.name);
+      } catch (e) {
+        console.error('commitChanges failed (ignored):', e);
+      }
     },
-    [cellFormats, mergedCells, direction, scheduleSave]
+    [cellFormats, mergedCells, direction, scheduleSave, columns, rows]
   );
 
   // ==========================
@@ -361,32 +473,42 @@ export function SmartTable({
   // ==========================
   const cellCoordMap = useMemo(() => {
     const map: Record<string, any> = {};
-    if (!Array.isArray(rows)) return map;
-    rows.forEach((r, rIdx) => {
-      const rowNum = rIdx + 1;
-      columns.forEach((c) => {
-        const coord = `${c.id}${rowNum}`.toUpperCase();
-        map[coord] = r[c.id] !== undefined ? r[c.id] : '';
+    try {
+      if (!Array.isArray(rows) || !Array.isArray(columns)) return map;
+      rows.forEach((r, rIdx) => {
+        if (!r || typeof r !== 'object') return;
+        const rowNum = rIdx + 1;
+        columns.forEach((c) => {
+          if (!c || typeof c.id !== 'string') return;
+          const coord = `${c.id}${rowNum}`.toUpperCase();
+          const v = (r as Record<string, any>)[c.id];
+          map[coord] = v !== undefined && v !== null ? v : '';
+        });
       });
-    });
+    } catch (e) {
+      console.error('cellCoordMap build failed (ignored):', e);
+    }
     return map;
   }, [rows, columns]);
 
   const evaluatedMap = useMemo(() => {
     const map: Record<string, any> = {};
-    Object.keys(cellCoordMap).forEach((coord) => {
-      const val = cellCoordMap[coord];
-      if (typeof val === 'string' && val.startsWith('=')) {
-        try {
-          map[coord] = evaluateFormula(val, cellCoordMap);
-        } catch (err) {
-          console.error('Formula evaluation failed for', coord, err);
-          map[coord] = '#ERROR!';
+    try {
+      Object.keys(cellCoordMap).forEach((coord) => {
+        const val = cellCoordMap[coord];
+        if (typeof val === 'string' && val.startsWith('=')) {
+          try {
+            map[coord] = evaluateFormula(val, cellCoordMap);
+          } catch (err) {
+            map[coord] = '#ERROR!';
+          }
+        } else {
+          map[coord] = val;
         }
-      } else {
-        map[coord] = val;
-      }
-    });
+      });
+    } catch (e) {
+      console.error('evaluatedMap build failed (ignored):', e);
+    }
     return map;
   }, [cellCoordMap]);
 
@@ -415,17 +537,29 @@ export function SmartTable({
   // ==========================
   const findMergeAt = useCallback(
     (colIdx: number, rowIdx: number): { merge: MergedRange; isStart: boolean } | null => {
-      for (const m of mergedCells) {
-        const s = parseCoord(m.start);
-        const e = parseCoord(m.end);
-        if (!s || !e) continue;
-        const c1 = Math.min(s.colIdx, e.colIdx);
-        const c2 = Math.max(s.colIdx, e.colIdx);
-        const r1 = Math.min(s.rowIdx, e.rowIdx);
-        const r2 = Math.max(s.rowIdx, e.rowIdx);
-        if (colIdx >= c1 && colIdx <= c2 && rowIdx >= r1 && rowIdx <= r2) {
-          return { merge: m, isStart: colIdx === s.colIdx && rowIdx === s.rowIdx };
+      try {
+        if (!Array.isArray(mergedCells)) return null;
+        for (const m of mergedCells) {
+          if (!m || typeof m.start !== 'string' || typeof m.end !== 'string') continue;
+          let s: { colIdx: number; rowIdx: number } | null = null;
+          let e: { colIdx: number; rowIdx: number } | null = null;
+          try {
+            s = parseCoord(m.start);
+            e = parseCoord(m.end);
+          } catch {
+            continue;
+          }
+          if (!s || !e) continue;
+          const c1 = Math.min(s.colIdx, e.colIdx);
+          const c2 = Math.max(s.colIdx, e.colIdx);
+          const r1 = Math.min(s.rowIdx, e.rowIdx);
+          const r2 = Math.max(s.rowIdx, e.rowIdx);
+          if (colIdx >= c1 && colIdx <= c2 && rowIdx >= r1 && rowIdx <= r2) {
+            return { merge: m, isStart: colIdx === s.colIdx && rowIdx === s.rowIdx };
+          }
         }
+      } catch {
+        return null;
       }
       return null;
     },
@@ -443,14 +577,11 @@ export function SmartTable({
   /** Drops merges that no longer fit the given dimensions (structural safety). */
   const pruneMerges = useCallback(
     (merges: MergedRange[], colCount: number, rowCount: number): MergedRange[] => {
-      return merges.filter((m) => {
-        const s = parseCoord(m.start);
-        const e = parseCoord(m.end);
-        if (!s || !e) return false;
-        const c2 = Math.max(s.colIdx, e.colIdx);
-        const r2 = Math.max(s.rowIdx, e.rowIdx);
-        return c2 < colCount && r2 < rowCount;
-      });
+      try {
+        return normalizeMerges(merges, colCount, rowCount);
+      } catch {
+        return [];
+      }
     },
     []
   );
@@ -527,31 +658,58 @@ export function SmartTable({
     }, 10);
   };
 
-  const commitCellEdit = useCallback(() => {
-    setIsEditing(false);
-    const currentVal = rows[safeActiveCell.rowIdx]?.[activeColId];
-    if (currentVal === editValue) return;
+  const commitCellEdit = useCallback((): Record<string, any>[] | null => {
+    try {
+      if (!mountedRef.current) return null;
+      setIsEditing(false);
+      const pending = editValueRef.current;
+      const row = rows[safeActiveCell.rowIdx];
+      const currentVal = row && typeof row === 'object' ? (row as any)[activeColId] : undefined;
+      if (currentVal === pending) return rows;
+      if (typeof pending === 'string' && pending.length > 10000) {
+        toast.error(isAr ? 'النص طويل جداً (الحد 10000 حرف)' : 'Text too long (max 10000 chars)');
+        return null;
+      }
 
-    pushHistory(`Edit ${activeCoordStr}`);
-    const newRows = rows.map((r, i) =>
-      i === safeActiveCell.rowIdx ? { ...r, [activeColId]: editValue } : r
-    );
-    commitChanges(columns, newRows);
-  }, [rows, safeActiveCell, activeColId, activeCoordStr, editValue, pushHistory, commitChanges, columns]);
+      pushHistory(`Edit ${activeCoordStr}`);
+      const newRows = rows.map((r, i) =>
+        i === safeActiveCell.rowIdx ? { ...(r || {}), [activeColId]: pending } : r
+      );
+      commitChanges(columns, newRows);
+      return newRows;
+    } catch (e) {
+      console.error('commitCellEdit failed (ignored):', e);
+      if (mountedRef.current) setIsEditing(false);
+      return null;
+    }
+  }, [rows, safeActiveCell, activeColId, activeCoordStr, pushHistory, commitChanges, isAr]);
 
   const cancelCellEdit = () => {
     setIsEditing(false);
     setEditValue(String(rows[safeActiveCell.rowIdx]?.[activeColId] ?? ''));
   };
 
+  // Keeps the draft mirrored to the active cell while NOT editing, so
+  // programmatic navigation (Tab/Enter/arrows) never commits a stale draft
+  // into the newly focused cell.
+  useEffect(() => {
+    if (isEditing || !mountedRef.current) return;
+    try {
+      const raw = rows[safeActiveCell.rowIdx]?.[columns[safeActiveCell.colIdx]?.id] ?? '';
+      const next = String(raw ?? '');
+      if (next !== editValueRef.current) setEditValue(next);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [safeActiveCell.colIdx, safeActiveCell.rowIdx, isEditing, rows, columns]);
+
   // ==========================
   // UNDO / REDO
   // ==========================
   const snapshotCurrent = (): HistoryEntry => ({
-    columns: JSON.parse(JSON.stringify(columns)),
-    rows: JSON.parse(JSON.stringify(rows)),
-    cellFormats: JSON.parse(JSON.stringify(cellFormats || {})),
-    mergedCells: JSON.parse(JSON.stringify(mergedCells || [])),
+    columns: safeClone(columns, [] as TableColumnEntity[]),
+    rows: safeClone(rows, [] as Record<string, any>[]),
+    cellFormats: safeClone(cellFormats || {}, {} as Record<string, CellFormat>),
+    mergedCells: safeClone(mergedCells || [], [] as MergedRange[]),
     direction,
     description: 'Current State',
   });
@@ -733,12 +891,20 @@ export function SmartTable({
   // ==========================
   const handleInsertRow = (position: 'above' | 'below' | 'end') => {
     if (readOnly) return;
-    const idx = position === 'end' ? rows.length : position === 'above' ? safeActiveCell.rowIdx : safeActiveCell.rowIdx + 1;
-    pushHistory(`Insert row at ${idx + 1}`);
-    const next = opsInsertRow({ columns, rows, cellFormats, mergedCells }, idx);
-    commitChanges(next.columns, next.rows, next.cellFormats, pruneMerges(next.mergedCells, next.columns.length, next.rows.length), direction);
-    setActiveCell({ colIdx: safeActiveCell.colIdx, rowIdx: idx });
-    setSelectionAnchor(null);
+    try {
+      if (rows.length >= TABLE_LIMITS.MAX_ROWS) {
+        toast.error(isAr ? `الحد الأقصى ${TABLE_LIMITS.MAX_ROWS} صف` : `Max ${TABLE_LIMITS.MAX_ROWS} rows`);
+        return;
+      }
+      const idx = position === 'end' ? rows.length : position === 'above' ? safeActiveCell.rowIdx : safeActiveCell.rowIdx + 1;
+      pushHistory(`Insert row at ${idx + 1}`);
+      const next = opsInsertRow({ columns, rows, cellFormats, mergedCells }, idx);
+      commitChanges(next.columns, next.rows, next.cellFormats, pruneMerges(next.mergedCells, next.columns.length, next.rows.length), direction);
+      setActiveCell({ colIdx: safeActiveCell.colIdx, rowIdx: Math.min(idx, next.rows.length - 1) });
+      setSelectionAnchor(null);
+    } catch (err) {
+      console.error('Insert row failed (ignored):', err);
+    }
   };
 
   const handleDeleteRow = (rowIdx?: number) => {
@@ -756,17 +922,25 @@ export function SmartTable({
 
   const handleInsertColumn = (position: 'before' | 'after' | 'end') => {
     if (readOnly) return;
-    const idx = position === 'end' ? columns.length : position === 'before' ? safeActiveCell.colIdx : safeActiveCell.colIdx + 1;
-    pushHistory(`Insert column at ${idx + 1}`);
-    const next = opsInsertColumn(
-      { columns, rows, cellFormats, mergedCells },
-      idx,
-      isAr ? 'عمود' : 'Column',
-      isAr ? 'Column' : 'Column'
-    );
-    commitChanges(next.columns, next.rows, next.cellFormats, pruneMerges(next.mergedCells, next.columns.length, next.rows.length), direction);
-    setActiveCell({ colIdx: idx, rowIdx: safeActiveCell.rowIdx });
-    setSelectionAnchor(null);
+    try {
+      if (columns.length >= TABLE_LIMITS.MAX_COLS) {
+        toast.error(isAr ? `الحد الأقصى ${TABLE_LIMITS.MAX_COLS} عمود` : `Max ${TABLE_LIMITS.MAX_COLS} columns`);
+        return;
+      }
+      const idx = position === 'end' ? columns.length : position === 'before' ? safeActiveCell.colIdx : safeActiveCell.colIdx + 1;
+      pushHistory(`Insert column at ${idx + 1}`);
+      const next = opsInsertColumn(
+        { columns, rows, cellFormats, mergedCells },
+        idx,
+        isAr ? 'عمود' : 'Column',
+        'Column'
+      );
+      commitChanges(next.columns, next.rows, next.cellFormats, pruneMerges(next.mergedCells, next.columns.length, next.rows.length), direction);
+      setActiveCell({ colIdx: Math.min(idx, next.columns.length - 1), rowIdx: safeActiveCell.rowIdx });
+      setSelectionAnchor(null);
+    } catch (err) {
+      console.error('Insert column failed (ignored):', err);
+    }
   };
 
   const handleDeleteColumn = (colIdx?: number) => {
@@ -815,6 +989,77 @@ export function SmartTable({
     }
   };
 
+  // Defined after pushHistory/scheduleSave/commitChanges (uses them at call time).
+  const commitTableName = useCallback(
+    (nextRaw: string) => {
+      if (readOnly) return;
+      const next = String(nextRaw ?? '').slice(0, 120);
+      const base = tableRef.current;
+      if (!base || base.name === next) return;
+      try {
+        pushHistory('Rename table');
+        const updated = { ...base, name: next };
+        tableRef.current = updated;
+        if (mountedRef.current) {
+          setTable(updated);
+          setTableName(next);
+        }
+        scheduleSave(columns, rows, cellFormats, mergedCells, direction, next);
+        notifySmartActive();
+      } catch (err) {
+        console.error('Rename failed (ignored):', err);
+      }
+    },
+    [readOnly, pushHistory, scheduleSave, columns, rows, cellFormats, mergedCells, direction, notifySmartActive]
+  );
+
+  // Receives formatting commands from the top EditorToolbar sub-toolbar.
+  // Events carry a tableId so only the focused instance reacts (multi-table safe).
+  const topCommandRef = useRef<{ [k: string]: (...a: any[]) => void }>({});
+  topCommandRef.current = {
+    'insert-row-above': () => handleInsertRow('above'),
+    'insert-row-below': () => handleInsertRow('below'),
+    'insert-row-end': () => handleInsertRow('end'),
+    'delete-row': () => handleDeleteRow(),
+    'insert-col-before': () => handleInsertColumn('before'),
+    'insert-col-after': () => handleInsertColumn('after'),
+    'insert-col-end': () => handleInsertColumn('end'),
+    'delete-col': () => handleDeleteColumn(),
+    merge: () => handleToggleMerge(),
+    'delete-table': () => handleRequestDelete(),
+    undo: () => handleUndo(),
+    redo: () => handleRedo(),
+    'toggle-direction': () => handleToggleDirection(),
+    transpose: () => handleTranspose(),
+    fullscreen: () => {
+      if (mountedRef.current) setIsFullScreenModalOpen((v) => !v);
+    },
+    'align-left': () => handleSetCellsAlignment('left'),
+    'align-center': () => handleSetCellsAlignment('center'),
+    'align-right': () => handleSetCellsAlignment('right'),
+    'align-justify': () => handleSetCellsAlignment('justify'),
+    'style-bold': () => handleToggleCellsStyle('bold'),
+    'style-italic': () => handleToggleCellsStyle('italic'),
+    'style-underline': () => handleToggleCellsStyle('underline'),
+    rename: (value?: unknown) => commitTableName(String(value ?? '')),
+  };
+
+  useEffect(() => {
+    const onTopCommand = (e: Event) => {
+      try {
+        const d = (e as CustomEvent)?.detail || {};
+        if (!d || d.tableId !== tableId || typeof d.command !== 'string') return;
+        if (readOnly && d.command !== 'fullscreen') return;
+        const fn = topCommandRef.current[d.command];
+        if (fn) fn((d as any).value);
+      } catch (err) {
+        console.error('SmartTable top command failed (ignored):', err);
+      }
+    };
+    window.addEventListener('smart-table-command', onTopCommand);
+    return () => window.removeEventListener('smart-table-command', onTopCommand);
+  }, [tableId, readOnly]);
+
   // ==========================
   // COPY / PASTE
   // ==========================
@@ -828,65 +1073,136 @@ export function SmartTable({
 
   const handlePaste = (e: React.ClipboardEvent) => {
     if (readOnly) return;
-    const text = e.clipboardData.getData('text/plain');
+    let text = '';
+    try {
+      text = e.clipboardData.getData('text/plain');
+    } catch {
+      return;
+    }
     if (!text) return;
+    // Single-cell paste into an active edit is handled by the input itself.
+    if (isEditing && !text.includes('\t') && !text.includes('\n')) return;
 
     if (text.includes('\t') || text.includes('\n')) {
       e.preventDefault();
-      pushHistory('Paste Range');
-
-      const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
-      const startColIdx = safeActiveCell.colIdx;
-      const startRowIdx = safeActiveCell.rowIdx;
-
-      let newCols = [...columns];
-      let newRows = [...rows];
-
-      lines.forEach((line, rOffset) => {
-        const targetRow = startRowIdx + rOffset;
-        while (targetRow >= newRows.length) {
-          const emptyRow: Record<string, any> = {};
-          newCols.forEach((c) => (emptyRow[c.id] = ''));
-          newRows.push(emptyRow);
+      e.stopPropagation();
+      try {
+        // Hard caps: pasting a whole spreadsheet must never freeze the editor.
+        const lines = text.split(/\r?\n/).filter((l) => l.length > 0).slice(0, 50);
+        if (lines.length === 0) return;
+        const cellCount = lines.reduce((n, l) => n + l.split('\t').length, 0);
+        if (cellCount > TABLE_LIMITS.MAX_CELLS_PASTE) {
+          toast.error(isAr ? 'البيانات الملصقة كبيرة جداً (الحد 2000 خلية)' : 'Pasted data too large (max 2000 cells)');
+          return;
         }
+        pushHistory('Paste Range');
 
-        const values = line.split('\t');
-        values.forEach((val, cOffset) => {
-          const targetColIdx = startColIdx + cOffset;
-          while (targetColIdx >= newCols.length) {
-            const nextLetter = colIndexToName(newCols.length);
-            newCols.push({
-              id: nextLetter,
-              name: nextLetter,
-              type: 'text',
-              width: 130,
-            });
-            newRows = newRows.map((r) => ({ ...r, [nextLetter]: '' }));
+        const startColIdx = safeActiveCell.colIdx;
+        const startRowIdx = safeActiveCell.rowIdx;
+
+        let newCols = [...columns];
+        let newRows = [...rows];
+
+        lines.forEach((line, rOffset) => {
+          const targetRow = startRowIdx + rOffset;
+          if (targetRow >= TABLE_LIMITS.MAX_ROWS) return;
+          while (targetRow >= newRows.length) {
+            const emptyRow: Record<string, any> = {};
+            newCols.forEach((c) => (emptyRow[c.id] = ''));
+            newRows.push(emptyRow);
           }
 
-          const colId = newCols[targetColIdx].id;
-          newRows[targetRow] = {
-            ...newRows[targetRow],
-            [colId]: val.trim(),
-          };
-        });
-      });
+          const values = line.split('\t').slice(0, 20);
+          values.forEach((val, cOffset) => {
+            const targetColIdx = startColIdx + cOffset;
+            if (targetColIdx >= TABLE_LIMITS.MAX_COLS) return;
+            while (targetColIdx >= newCols.length) {
+              const nextLetter = colIndexToName(newCols.length);
+              newCols.push({
+                id: nextLetter,
+                name: nextLetter,
+                type: 'text',
+                width: 130,
+              });
+              newRows = newRows.map((r) => ({ ...(r || {}), [nextLetter]: '' }));
+            }
 
-      commitChanges(newCols, newRows, cellFormats, pruneMerges(mergedCells, newCols.length, newRows.length), direction);
-      toast.success(isAr ? 'تم لصق البيانات المجدولة بنجاح' : 'Pasted tabular data successfully');
+            const colId = newCols[targetColIdx]?.id;
+            if (!colId) return;
+            newRows[targetRow] = {
+              ...(newRows[targetRow] || {}),
+              [colId]: String(val ?? '').trim().slice(0, 10000),
+            };
+          });
+        });
+
+        commitChanges(newCols, newRows, cellFormats, pruneMerges(mergedCells, newCols.length, newRows.length), direction);
+        toast.success(isAr ? 'تم لصق البيانات المجدولة بنجاح' : 'Pasted tabular data successfully');
+      } catch (err) {
+        console.error('Paste failed (ignored):', err);
+      }
     }
   };
 
   // ==========================
   // KEYBOARD NAVIGATION
   // ==========================
-  const moveCursor = (dCol: number, dRow: number) => {
+  const moveCursor = (dCol: number, dRow: number, extend?: boolean) => {
+    if (columns.length === 0 || rows.length === 0) return;
     const nextCol = Math.min(Math.max(safeActiveCell.colIdx + dCol, 0), columns.length - 1);
     const nextRow = Math.min(Math.max(safeActiveCell.rowIdx + dRow, 0), rows.length - 1);
+    if (extend) {
+      setSelectionAnchor((prev) => prev ?? { ...safeActiveCell });
+    } else {
+      setSelectionAnchor(null);
+    }
     setActiveCell({ colIdx: nextCol, rowIdx: nextRow });
   };
 
+  /** Appends a row at the end from the given rows (Tab on the last cell, like normal tables). */
+  const appendRowFrom = (baseRows: Record<string, any>[]) => {
+    if (readOnly) return;
+    try {
+      if (baseRows.length >= TABLE_LIMITS.MAX_ROWS) {
+        toast.error(isAr ? `الحد الأقصى ${TABLE_LIMITS.MAX_ROWS} صف` : `Max ${TABLE_LIMITS.MAX_ROWS} rows`);
+        return;
+      }
+      pushHistory('Add row on Tab');
+      const next = opsInsertRow({ columns, rows: baseRows, cellFormats, mergedCells }, baseRows.length);
+      commitChanges(next.columns, next.rows, next.cellFormats, pruneMerges(next.mergedCells, next.columns.length, next.rows.length), direction);
+      if (mountedRef.current) {
+        setActiveCell({ colIdx: 0, rowIdx: next.rows.length - 1 });
+        setSelectionAnchor(null);
+      }
+    } catch (err) {
+      console.error('Append row on Tab failed (ignored):', err);
+    }
+  };
+
+  /** Tab while editing: commit first, then move exactly like a normal table. */
+  const handleTabKey = (shiftKey: boolean) => {
+    if (readOnly || columns.length === 0 || rows.length === 0) return;
+    const committed = commitCellEdit() || rows;
+    const cIdx = safeActiveCell.colIdx;
+    const rIdx = safeActiveCell.rowIdx;
+    if (shiftKey) {
+      if (cIdx > 0) setActiveCell({ colIdx: cIdx - 1, rowIdx: rIdx });
+      else if (rIdx > 0) setActiveCell({ colIdx: columns.length - 1, rowIdx: rIdx - 1 });
+    } else if (cIdx < columns.length - 1) {
+      setActiveCell({ colIdx: cIdx + 1, rowIdx: rIdx });
+    } else if (rIdx < committed.length - 1) {
+      setActiveCell({ colIdx: 0, rowIdx: rIdx + 1 });
+    } else {
+      appendRowFrom(committed);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Isolate from ProseMirror/TipTap: keys inside the smart table must never
+    // delete the node, split the doc, or trigger editor shortcuts.
+    try {
+      e.stopPropagation();
+    } catch {}
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) handleRedo();
@@ -916,15 +1232,7 @@ export function SmartTable({
         cancelCellEdit();
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        commitCellEdit();
-        const cIdx = safeActiveCell.colIdx;
-        if (e.shiftKey) {
-          if (cIdx > 0) setActiveCell({ colIdx: cIdx - 1, rowIdx: safeActiveCell.rowIdx });
-        } else if (cIdx < columns.length - 1) {
-          setActiveCell({ colIdx: cIdx + 1, rowIdx: safeActiveCell.rowIdx });
-        } else if (safeActiveCell.rowIdx < rows.length - 1) {
-          setActiveCell({ colIdx: 0, rowIdx: safeActiveCell.rowIdx + 1 });
-        }
+        handleTabKey(e.shiftKey);
       }
       return;
     }
@@ -936,23 +1244,39 @@ export function SmartTable({
 
     if (e.key === 'ArrowUp') {
       e.preventDefault();
-      moveCursor(0, -1);
+      moveCursor(0, -1, e.shiftKey);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
-      moveCursor(0, 1);
+      moveCursor(0, 1, e.shiftKey);
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
-      moveCursor(-1 * rtlFactor, 0);
+      moveCursor(-1 * rtlFactor, 0, e.shiftKey);
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
-      moveCursor(1 * rtlFactor, 0);
+      moveCursor(1 * rtlFactor, 0, e.shiftKey);
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      setSelectionAnchor(null);
+      setActiveCell({ colIdx: 0, rowIdx: safeActiveCell.rowIdx });
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      setSelectionAnchor(null);
+      setActiveCell({ colIdx: columns.length - 1, rowIdx: safeActiveCell.rowIdx });
     } else if (e.key === 'Tab') {
       e.preventDefault();
+      if (readOnly) return;
       const cIdx = safeActiveCell.colIdx;
+      const rIdx = safeActiveCell.rowIdx;
       if (e.shiftKey) {
-        if (cIdx > 0) setActiveCell({ colIdx: cIdx - 1, rowIdx: safeActiveCell.rowIdx });
+        if (cIdx > 0) setActiveCell({ colIdx: cIdx - 1, rowIdx: rIdx });
+        else if (rIdx > 0) setActiveCell({ colIdx: columns.length - 1, rowIdx: rIdx - 1 });
       } else if (cIdx < columns.length - 1) {
-        setActiveCell({ colIdx: cIdx + 1, rowIdx: safeActiveCell.rowIdx });
+        setActiveCell({ colIdx: cIdx + 1, rowIdx: rIdx });
+      } else if (rIdx < rows.length - 1) {
+        setActiveCell({ colIdx: 0, rowIdx: rIdx + 1 });
+      } else {
+        // Last cell: like normal tables, Tab appends a fresh row.
+        appendRowFrom(rows);
       }
     } else if (e.key === 'Enter') {
       e.preventDefault();
@@ -1023,7 +1347,7 @@ export function SmartTable({
     });
 
     const newRows = rows.map((r, rIdx) => {
-      const updatedRow = { ...r };
+      const updatedRow = { ...(r || {}) };
       const coord = `${col.id}${rIdx + 1}`.toUpperCase();
       if (res.newCells[coord] !== undefined) {
         updatedRow[col.id] = res.newCells[coord];
@@ -1031,7 +1355,26 @@ export function SmartTable({
       return updatedRow;
     });
 
-    commitChanges(columns, newRows);
+    // Carry the source cell's formatting (align/position, bold, italic,
+    // underline) onto every filled cell — like Excel's fill behavior.
+    const updatedFormats = { ...cellFormats };
+    try {
+      const sourceCoord = `${col.id}${sourceRowIdx + 1}`.toUpperCase();
+      const sourceFmt = cellFormats[sourceCoord];
+      const rStart = Math.min(sourceRowIdx, targetRowIdx);
+      const rEnd = Math.max(sourceRowIdx, targetRowIdx);
+      for (let r = rStart; r <= rEnd; r++) {
+        if (r === sourceRowIdx) continue;
+        const coord = `${col.id}${r + 1}`.toUpperCase();
+        if (res.newCells[coord] === undefined) continue;
+        if (sourceFmt) updatedFormats[coord] = safeClone(sourceFmt, {});
+        else delete updatedFormats[coord];
+      }
+    } catch (e) {
+      console.error('Autofill format carry failed (ignored):', e);
+    }
+
+    commitChanges(columns, newRows, updatedFormats);
   };
 
   const handleMouseUpAfterDrag = useCallback(() => {
@@ -1136,7 +1479,9 @@ export function SmartTable({
   const safeRows = Array.isArray(rows) ? rows : [];
   const isFullScreen = mode === 'full-screen' || isFullScreenModalOpen;
 
-  const gridTemplateColumns = `44px ${safeColumns.map((c) => `${c.width || 140}px`).join(' ')}`;
+  // Natural fit like normal tables: no horizontal scroll — saved pixel widths
+  // act as proportions (fr) so the grid always fills its container.
+  const gridTemplateColumns = `44px ${safeColumns.map((c) => `minmax(0, ${Math.max(c.width || 140, 60)}fr)`).join(' ')}`;
   const rowHeaderWidth = 44;
 
   const activeFormat = cellFormats[activeCoordStr] || {};
@@ -1148,16 +1493,24 @@ export function SmartTable({
   return (
     <div
       className={cn(
-        'smart-table-wrapper flex flex-col border border-border rounded-xl bg-card shadow-2xs outline-none select-none my-3',
+        'smart-table-wrapper flex flex-col border rounded-xl bg-card shadow-2xs outline-none select-none my-3',
         isFullScreen && 'fixed inset-0 z-50 rounded-none border-none bg-background p-4 sm:p-6 overflow-y-auto',
         isFormulaMode && 'ring-2 ring-blue-400/60'
       )}
       tabIndex={0}
+      contentEditable={false}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
+      onCopy={(e) => { try { e.stopPropagation(); } catch {} }}
+      onCut={(e) => { try { e.stopPropagation(); } catch {} }}
+      onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
+      onFocus={(e) => { try { e.stopPropagation(); } catch {} }}
+      onMouseDownCapture={notifySmartActive}
+      onFocusCapture={notifySmartActive}
       dir={isAr ? 'rtl' : 'ltr'}
     >
-      {/* ============ 1. TOP TOOLBAR ============ */}
+      {/* ============ 1. TOP TOOLBAR (internal mode only; external mode uses the top EditorToolbar) ============ */}
+      {toolbar === 'internal' && (
       <div
         className="flex flex-wrap items-center justify-between gap-2 border-b border-border/80 bg-muted/40 px-3 py-2 text-xs"
         role="toolbar"
@@ -1168,21 +1521,21 @@ export function SmartTable({
           <div className="flex items-center gap-1.5 font-bold text-foreground me-1 min-w-0">
             <input
               type="text"
-              value={table?.name || (isAr ? 'جدول' : 'Table')}
+              value={tableName}
               onChange={(e) => {
-                if (readOnly || !table) return;
-                setTable({ ...table, name: e.target.value });
+                if (readOnly) return;
+                setTableName(e.target.value.slice(0, 120));
               }}
-              onBlur={(e) => {
-                if (readOnly || !table) return;
-                if (table.name !== e.target.value) {
-                  pushHistory('Rename table');
-                  scheduleSave(columns, rows, cellFormats, mergedCells, direction);
-                }
+              onBlur={() => commitTableName(tableName)}
+              onKeyDown={(e) => {
+                try { e.stopPropagation(); } catch {}
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
+              onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
               className="bg-transparent font-bold text-foreground focus:outline-none focus:underline min-w-0 w-28 sm:w-40 truncate"
               aria-label={isAr ? 'اسم الجدول' : 'Table name'}
               readOnly={readOnly}
+              maxLength={120}
             />
           </div>
 
@@ -1545,12 +1898,30 @@ export function SmartTable({
           )}
         </div>
       </div>
+      )}
 
-      {/* ============ 2. FORMULA BAR ============ */}
-      <div className="formula-bar flex flex-wrap items-center gap-2 border-b border-border/80 bg-background px-3 py-1.5">
+      {/* External-mode fullscreen exit (internal strip is hidden there) */}
+      {toolbar === 'external' && isFullScreenModalOpen && (
+        <button
+          type="button"
+          onClick={() => {
+            if (mountedRef.current) setIsFullScreenModalOpen(false);
+          }}
+          onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
+          className="fixed top-4 end-4 z-[60] flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs font-semibold text-foreground shadow-xl hover:bg-muted"
+          aria-label={isAr ? 'إنهاء وضع ملء الشاشة' : 'Exit fullscreen mode'}
+        >
+          <Minimize2 className="h-3.5 w-3.5" />
+          <span>{isAr ? 'إنهاء التكبير' : 'Exit Fullscreen'}</span>
+        </button>
+      )}
+
+      {/* ============ 2. FORMULA BAR (strictly LTR, isolated) ============ */}
+      <div className="formula-bar formula-bar-ltr flex flex-wrap items-center gap-2 border-b border-border/80 bg-background px-3 py-1.5" dir="ltr">
         <div
           className="flex h-7 w-16 items-center justify-center rounded-md border border-border bg-muted/60 font-mono text-xs font-bold text-foreground shrink-0 shadow-2xs select-none"
           aria-label={isAr ? `الخلية النشطة ${selectionLabel}` : `Active cell ${selectionLabel}`}
+          dir="ltr"
         >
           {selectionLabel}
         </div>
@@ -1571,10 +1942,11 @@ export function SmartTable({
           </div>
         )}
 
-        <div className="relative flex-1 flex items-center min-w-[140px]">
+        <div className="relative flex-1 flex items-center min-w-[140px]" dir="ltr" style={{ unicodeBidi: 'isolate' }}>
           <input
             ref={formulaBarInputRef}
             type="text"
+            dir="ltr"
             value={isEditing ? editValue : String(activeRawValue)}
             onChange={(e) => {
               if (readOnly) return;
@@ -1585,13 +1957,18 @@ export function SmartTable({
                 setEditValue(e.target.value);
               }
             }}
-            onFocus={() => {
+            onFocus={(e) => {
+              try { e.stopPropagation(); } catch {}
               if (!isEditing) {
                 setEditValue(String(activeRawValue));
                 setIsEditing(true);
               }
             }}
             onKeyDown={(e) => {
+              try { e.stopPropagation(); } catch {}
+              if ((e.nativeEvent as any)?.stopImmediatePropagation) {
+                try { (e.nativeEvent as any).stopImmediatePropagation(); } catch {}
+              }
               if (e.key === 'Enter') {
                 e.preventDefault();
                 commitCellEdit();
@@ -1600,12 +1977,14 @@ export function SmartTable({
                 cancelCellEdit();
               }
             }}
+            onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
             placeholder={
               isAr
                 ? 'قيمة أو صيغة مثل =C2+D2 أو =SUM(C2,D2,E2)'
                 : 'Value or formula like =C2+D2 or =SUM(C2,D2,E2)'
             }
-            className="h-7 w-full rounded-md border border-border/70 bg-transparent px-2 text-xs font-mono text-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600"
+            className="h-7 w-full rounded-md border border-border/70 bg-transparent px-2 text-left text-xs font-mono text-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600"
+            style={{ unicodeBidi: 'plaintext' }}
             readOnly={readOnly}
             aria-label={isAr ? 'شريط الصيغ: اكتب قيمة الخلية أو صيغتها الحسابية' : 'Formula bar: enter cell value or formula'}
           />
@@ -1655,13 +2034,13 @@ export function SmartTable({
 
       {/* ============ 3. GRID (CSS Grid: real rectangular merges) ============ */}
       <div
-        className="smart-table-frame w-full max-w-full overflow-x-auto overflow-y-visible overscroll-x-contain relative border-t border-border/60"
+        className="smart-table-frame w-full max-w-full overflow-visible relative border-t border-border/60"
         dir={direction}
       >
         <div
           role="grid"
           aria-label={isAr ? 'شبكة الجدول' : 'Table grid'}
-          className="smart-table-grid min-w-[640px] border-collapse text-xs"
+          className="smart-table-grid w-full border-collapse text-xs"
           style={{
             display: 'grid',
             gridTemplateColumns,
@@ -1672,7 +2051,7 @@ export function SmartTable({
           {/* Header row */}
           <div
             role="columnheader"
-            className="bg-muted/60 border-e border-b border-border p-1.5 text-center font-bold text-[10px] text-muted-foreground select-none"
+            className="smart-table-corner-cell border-e border-b p-1.5 text-center font-bold text-[10px] select-none"
             style={{ width: rowHeaderWidth }}
             aria-label={isAr ? 'رؤوس الصفوف' : 'Row numbers'}
           >
@@ -1689,27 +2068,30 @@ export function SmartTable({
                 key={col.id}
                 role="columnheader"
                 className={cn(
-                  'group relative border-e border-b border-border p-1 text-center text-muted-foreground select-none',
-                  isBetween && 'bg-blue-500/10'
+                  'smart-table-header-cell group relative border-e border-b p-1 text-center select-none',
+                  isBetween && 'brightness-95'
                 )}
                 style={{ direction: isAr ? 'rtl' : 'ltr' }}
                 aria-label={isAr ? `العمود ${col.id}` : `Column ${col.id}`}
               >
                 <div className="flex items-center justify-between gap-1">
-                  <span className="font-mono text-foreground font-bold text-[10px] shrink-0">{col.id}</span>
+                  <span className="font-mono font-bold text-[10px] shrink-0 opacity-80">{col.id}</span>
                   <input
                     type="text"
                     value={col.name}
                     onChange={(e) => {
                       if (readOnly) return;
                       const newCols = columns.map((c) =>
-                        c.id === col.id ? { ...c, name: e.target.value } : c
+                        c.id === col.id ? { ...c, name: e.target.value.slice(0, 120) } : c
                       );
                       commitChanges(newCols, rows);
                     }}
-                    className="w-full bg-transparent text-center font-medium text-xs text-muted-foreground hover:text-foreground focus:text-foreground focus:outline-none truncate"
+                    onKeyDown={(e) => { try { e.stopPropagation(); } catch {} }}
+                    onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
+                    className="w-full bg-transparent text-center font-medium text-xs focus:outline-none truncate"
                     title={isAr ? 'تعديل اسم العمود' : 'Rename column'}
                     readOnly={readOnly}
+                    maxLength={120}
                     aria-label={isAr ? `اسم العمود ${col.id}` : `Column ${col.id} name`}
                   />
                   {!readOnly && safeColumns.length > 1 && (
@@ -1767,7 +2149,7 @@ export function SmartTable({
                 {/* Row number cell */}
                 <div
                   role="rowheader"
-                  className="group relative border-e border-b border-border bg-muted/40 p-1 text-center font-mono text-[11px] font-semibold text-muted-foreground select-none flex items-center justify-center"
+                  className="smart-table-rowheader group relative border-e border-b bg-muted/40 p-1 text-center font-mono text-[11px] font-semibold text-muted-foreground select-none flex items-center justify-center"
                   style={{ width: rowHeaderWidth }}
                   aria-label={isAr ? `الصف ${rIdx + 1}` : `Row ${rIdx + 1}`}
                 >
@@ -1836,13 +2218,13 @@ export function SmartTable({
                       onMouseEnter={() => handleMouseEnterCellDuringDrag(rIdx)}
                       onDoubleClick={() => startEditing()}
                       className={cn(
-                        'relative border-e border-b border-border/60 p-0 text-xs transition-colors cursor-cell',
+                        'smart-table-cell relative border-e border-b p-0 text-xs transition-colors cursor-cell',
                         isSelected
-                          ? 'ring-2 ring-[#2E4034] dark:ring-emerald-400 ring-inset bg-[#2E4034]/5 z-10'
+                          ? 'smart-table-cell-selected z-10'
                           : inSelection
-                          ? 'bg-blue-500/10'
+                          ? 'bg-[#486450]/15'
                           : 'hover:bg-muted/30',
-                        isDragTarget && 'bg-[#2E4034]/15'
+                        isDragTarget && 'bg-[#486450]/15'
                       )}
                     >
                       {isSelected && isEditing ? (
@@ -1850,8 +2232,12 @@ export function SmartTable({
                           ref={editInputRef}
                           type="text"
                           value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
+                          onChange={(e) => setEditValue(e.target.value.slice(0, 10000))}
                           onKeyDown={(e) => {
+                            try { e.stopPropagation(); } catch {}
+                            if ((e.nativeEvent as any)?.stopImmediatePropagation) {
+                              try { (e.nativeEvent as any).stopImmediatePropagation(); } catch {}
+                            }
                             if (e.key === 'Enter') {
                               e.preventDefault();
                               commitCellEdit();
@@ -1861,16 +2247,21 @@ export function SmartTable({
                             } else if (e.key === 'Escape') {
                               e.preventDefault();
                               cancelCellEdit();
+                            } else if (e.key === 'Tab') {
+                              e.preventDefault();
+                              handleTabKey(e.shiftKey);
                             }
                           }}
+                          onMouseDown={(e) => { try { e.stopPropagation(); } catch {} }}
                           onBlur={commitCellEdit}
-                          dir="auto"
-                          className="w-full h-full min-h-[34px] p-2 bg-background text-xs font-mono text-foreground focus:outline-none"
+                          dir={editValue.trimStart().startsWith('=') ? 'ltr' : 'auto'}
+                          className="w-full h-full min-h-[34px] bg-background text-xs font-mono text-foreground focus:outline-none"
+                          style={{ padding: '10px 14px', lineHeight: 1.6 }}
                           aria-label={isAr ? `تحرير الخلية ${coord}` : `Editing cell ${coord}`}
                         />
                       ) : (
                         <div
-                          className="w-full h-full min-h-[34px] px-2 py-1.5 flex items-center overflow-hidden"
+                          className="w-full h-full min-h-[34px] flex items-center overflow-hidden"
                           style={{
                             justifyContent:
                               customAlign === 'center'

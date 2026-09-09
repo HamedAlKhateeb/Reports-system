@@ -2,6 +2,7 @@ import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { formatWhatsAppUrl } from './contact-links';
 import { evaluateFormula } from './grid/formula-parser';
+import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLINE_CSS } from './latex';
 
 /**
  * Converts TipTap JSON node to clean styled HTML for print/PDF
@@ -50,7 +51,22 @@ function tipTapNodeToHtml(
           }
         }
       }
+      // Inline LaTeX: $...$ and \(...\) render via KaTeX (delimiters hidden).
+      // Text is already escaped → pass alreadyEscaped=true.
+      try {
+        text = renderTextWithLatexToHtml(text, true);
+      } catch {}
       return text;
+    }
+
+    case 'latexInline': {
+      const latex = node.attrs?.latex || '';
+      if (!latex) return '';
+      try {
+        return `<span class="latex-inline" dir="ltr">${renderLatexToHtml(latex)}</span>`;
+      } catch {
+        return `<span class="latex-inline" dir="ltr">$${latex}$</span>`;
+      }
     }
 
     case 'heading': {
@@ -213,6 +229,12 @@ function tipTapNodeToHtml(
       `;
     }
 
+    case 'reportChart': {
+      const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
+      const type = node.attrs?.type || 'bar';
+      return `<figure class="report-chart-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">📊 ${title}</div><div style="font-size:11px;color:#64748b;">${type}</div></figure>`;
+    }
+
     default:
       if (node.content) {
         return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
@@ -309,7 +331,9 @@ export function buildPrintableHtml(
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="${KATEX_CDN_CSS}">
   <style>
+    ${LATEX_INLINE_CSS}
     @page {
       size: A4 portrait;
       margin: 15mm 15mm 20mm 15mm;

@@ -16,6 +16,9 @@ import {
   X,
   AlertOctagon,
   HelpCircle,
+  ScanSearch,
+  Plus,
+  ArrowUpRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -176,7 +179,87 @@ export function IssuesTab({
 
   return (
     <div className="space-y-6">
-      {/* 1. Action Header: Search, Filters & Action Buttons */}
+      {/* Unified Action Center — the SINGLE primary place for all scan/problem
+          operations in this tab (sticky: same bar stays visible while scrolling,
+          no duplicated copies below). */}
+      <div className="sticky top-2 z-20 rounded-xl border border-border bg-card p-4 shadow-2xs space-y-3">
+        <div className="flex items-center gap-2">
+          <AlertOctagon className="h-4 w-4 text-[#2E4034] dark:text-emerald-400" />
+          <span className="text-sm font-bold text-foreground">
+            {isAr ? 'المشاكل والمطابقة' : 'Issues & Matching'}
+          </span>
+        </div>
+
+        {/* Group 1: الفحص */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground min-w-[64px]">
+            {isAr ? 'الفحص' : 'Scan'}
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              onClick={onOpenScanner}
+              className="h-9 bg-[#2E4034] text-white hover:bg-[#24382F] gap-1.5 text-xs font-semibold shadow-xs"
+            >
+              <ScanSearch className="h-3.5 w-3.5 text-olive-300" />
+              <span>{isAr ? 'فحص المرشحين' : 'Scan Candidates'}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onOpenInspector}
+              className="h-9 gap-1.5 text-xs font-semibold border-blue-300 dark:border-blue-800 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/50 shadow-2xs"
+            >
+              <Scale className="h-3.5 w-3.5 text-blue-600" />
+              <span>{isAr ? 'فحص المطابقة' : 'Matching Check'}</span>
+            </Button>
+          </div>
+        </div>
+
+        {/* Group 2: المشاكل */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 border-t border-border/60 pt-3">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground min-w-[64px]">
+            {isAr ? 'المشاكل' : 'Issues'}
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => window.dispatchEvent(new CustomEvent('scan-report-tables'))}
+              className="h-9 gap-1.5 text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
+              title={isAr ? 'فحص جدول التقرير واكتشاف المشاكل' : 'Scan document table for issues'}
+            >
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <span>{isAr ? 'فحص واكتشاف المشاكل' : 'Detect Issues'}</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => window.dispatchEvent(new CustomEvent('analysis-add-request'))}
+              className="h-9 gap-1.5 text-xs font-semibold shadow-2xs"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>{isAr ? 'إضافة مشكلة' : 'Add Issue'}</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => window.dispatchEvent(new CustomEvent('analysis-sync-all-request'))}
+              className="h-9 gap-1.5 text-xs font-semibold shadow-2xs"
+            >
+              <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
+              <span>{isAr ? 'مزامنة المشاكل' : 'Sync Issues'}</span>
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Search & Filters row (functionality preserved, actions live above) */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-card p-4 rounded-xl border border-border shadow-2xs">
         <div className="flex items-center gap-2 flex-1 max-w-md relative">
           <Search className="h-4 w-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -225,29 +308,6 @@ export function IssuesTab({
             <option value="in_progress">{isAr ? 'قيد المعالجة' : 'In Progress'}</option>
             <option value="closed">{isAr ? 'مغلقة / مكتملة' : 'Closed'}</option>
           </select>
-
-          {/* Issue Scanner Button */}
-          <Button
-            type="button"
-            size="sm"
-            onClick={onOpenScanner}
-            className="h-9 bg-[#2E4034] text-white hover:bg-[#24382F] gap-1.5 text-xs font-semibold shadow-xs"
-          >
-            <Sparkles className="h-3.5 w-3.5 text-olive-300" />
-            <span>{isAr ? 'فحص المرشحين' : 'Scan Candidates'}</span>
-          </Button>
-
-          {/* Truth Inspector Button */}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onOpenInspector}
-            className="h-9 gap-1.5 text-xs font-semibold border-blue-300 dark:border-blue-800 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/50 shadow-2xs"
-          >
-            <Scale className="h-3.5 w-3.5 text-blue-600" />
-            <span>{isAr ? 'فاحص العدادات' : 'Inspect Truth'}</span>
-          </Button>
         </div>
       </div>
 

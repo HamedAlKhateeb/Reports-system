@@ -4,7 +4,6 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import Link from 'next/link';
 import {
   ArrowUpRight,
-  PlusCircle,
   Check,
   Plus,
   Trash2,
@@ -15,7 +14,6 @@ import {
   ChevronDown,
   ChevronUp,
   ScanSearch,
-  RefreshCw,
 } from 'lucide-react';
 import { ReportItem, AnalysisTableRow, KanbanIssuePayload, IssueItem } from '@/lib/types';
 import { createIssue, updateReport, getIssuesByReportId } from '@/lib/db';
@@ -307,7 +305,7 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
   /**
    * Bulk push all unsynced rows to Kanban
    */
-  const handleSyncAllUnsynced = async () => {
+  const handleSyncAllUnsynced = useCallback(async () => {
     const unsynced = rows.filter((r) => !r.syncedIssueId);
     if (unsynced.length === 0 || syncingAll) return;
 
@@ -362,9 +360,9 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
     } finally {
       setSyncingAll(false);
     }
-  };
+  }, [rows, syncingAll, report.id, user?.uid, isAr, saveRowsToReport]);
 
-  const handleOpenAddModal = () => {
+  const handleOpenAddModal = useCallback(() => {
     setEditingRow(null);
     setFormCategory('أداء النظام');
     setFormTitle('');
@@ -374,7 +372,7 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
     setFormRecommendation('');
     setFormAttachment('');
     setIsModalOpen(true);
-  };
+  }, []);
 
   const handleOpenEditModal = (row: AnalysisTableRow) => {
     setEditingRow(row);
@@ -433,6 +431,19 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
     await saveRowsToReport(filtered);
   };
 
+  // External triggers from the unified IssuesTab Action Center (single source
+  // of truth for problem actions — no duplicated buttons here).
+  useEffect(() => {
+    const onAddEvent = () => handleOpenAddModal();
+    const onSyncAllEvent = () => handleSyncAllUnsynced();
+    window.addEventListener('analysis-add-request', onAddEvent);
+    window.addEventListener('analysis-sync-all-request', onSyncAllEvent);
+    return () => {
+      window.removeEventListener('analysis-add-request', onAddEvent);
+      window.removeEventListener('analysis-sync-all-request', onSyncAllEvent);
+    };
+  }, [handleOpenAddModal, handleSyncAllUnsynced]);
+
   const getSeverityBadgeClass = (sev: AnalysisTableRow['severity']) => {
     switch (sev) {
       case 'حرجة':
@@ -482,52 +493,11 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Buttons — kept minimal on purpose: scan / add / sync live in the
+            unified IssuesTab Action Center above (single source of truth) and reach
+            this table via 'scan-report-tables' / 'analysis-add-request' /
+            'analysis-sync-all-request' window events. */}
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
-          {/* Prominent Manual Scan Button */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => handleScan(true)}
-            disabled={isScanning}
-            className="h-8 gap-1.5 text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
-            title={isAr ? 'فحص جدول التقرير واكتشاف المشاكل' : 'Scan document table for issues'}
-          >
-            <ScanSearch className={cn('h-4 w-4 text-primary', isScanning ? 'animate-spin' : 'animate-pulse')} />
-            <span>{isScanning ? (isAr ? 'جاري الفحص...' : 'Scanning...') : isAr ? 'فحص واكتشاف المشاكل' : 'Scan & Detect Issues'}</span>
-          </Button>
-
-          {/* Bulk Sync Button */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleSyncAllUnsynced}
-            disabled={unsyncedRowsCount === 0 || syncingAll}
-            className="h-8 gap-1.5 text-xs font-semibold"
-          >
-            <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
-            <span>
-              {syncingAll
-                ? isAr
-                  ? 'جاري النقل...'
-                  : 'Syncing...'
-                : isAr
-                ? `مزامنة كافة المشاكل غير المسجلة (${unsyncedRowsCount})`
-                : `Sync All Unsynced (${unsyncedRowsCount})`}
-            </span>
-          </Button>
-
-          {/* Add Manual Issue Button */}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={handleOpenAddModal}
-            className="h-8 gap-1.5 text-xs"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>{isAr ? 'إضافة مشكلة' : 'Add Issue'}</span>
-          </Button>
-
           {/* Link to Kanban */}
           <Button
             size="sm"

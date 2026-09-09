@@ -16,6 +16,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { getReportByShareToken, getTableById } from '@/lib/db';
+import { renderLatexToHtml, renderTextWithLatexToHtml } from '@/lib/latex';
 import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
 import { evaluateFormula } from '@/lib/grid/formula-parser';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
@@ -488,7 +489,20 @@ function renderTipTapContentToHtml(
           }
         }
       }
+      try {
+        text = renderTextWithLatexToHtml(text, true);
+      } catch {}
       return text;
+    }
+
+    case 'latexInline': {
+      const latex = node.attrs?.latex || '';
+      if (!latex) return '';
+      try {
+        return `<span class="latex-inline" dir="ltr">${renderLatexToHtml(latex)}</span>`;
+      } catch {
+        return `<span class="latex-inline" dir="ltr">$${latex}$</span>`;
+      }
     }
 
     case 'heading': {
@@ -630,6 +644,12 @@ function renderTipTapContentToHtml(
           return `<tr>${values}</tr>`;
         }).join('');
       return `<div class="overflow-x-auto my-5 rounded-lg border" style="border-color: ${theme.border};"><table class="w-full border-collapse text-xs" dir="${tableDir}"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table></div>`;
+    }
+
+    case 'reportChart': {
+      const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
+      const type = node.attrs?.type || 'bar';
+      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${title}</div><div class="mt-1 text-[11px] text-muted-foreground">${type}</div><div class="mt-2 text-[11px] text-muted-foreground">${isAr ? 'رسم بياني تفاعلي داخل التقرير الأصلي' : 'Interactive chart in the original report'}</div></figure>`;
     }
 
     default:

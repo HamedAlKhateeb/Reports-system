@@ -1,4 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+import sharp from 'sharp';
+import fs from 'fs';
+import path from 'path';
+import { execSync } from 'child_process';
+
+const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <!-- Background Gradient -->
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -75,4 +80,40 @@
     stroke-linecap="round"
     stroke-linejoin="round"
   />
-</svg>
+</svg>`;
+
+const publicDir = path.resolve('public');
+const appDir = path.resolve('app');
+
+// 1. Write SVG to public and app
+fs.writeFileSync(path.join(publicDir, 'icon.svg'), svgContent, 'utf-8');
+fs.writeFileSync(path.join(appDir, 'icon.svg'), svgContent, 'utf-8');
+console.log('Wrote icon.svg to public/ and app/');
+
+async function generatePngs() {
+  const svgBuffer = Buffer.from(svgContent);
+
+  // Generate PNG sizes
+  const sizes = [16, 32, 48, 64, 128, 180, 192, 512];
+  for (const size of sizes) {
+    const outName = size === 180 ? 'apple-touch-icon.png' : `icon-${size}.png`;
+    const outPath = path.join(publicDir, outName);
+    await sharp(svgBuffer)
+      .resize(size, size)
+      .png()
+      .toFile(outPath);
+    console.log(`Generated ${outName} (${size}x${size})`);
+  }
+
+  // Also write apple-touch-icon.png to app/
+  fs.copyFileSync(
+    path.join(publicDir, 'apple-touch-icon.png'),
+    path.join(appDir, 'apple-touch-icon.png')
+  );
+
+  // Create favicon.ico using python Pillow
+  console.log('Generating multi-resolution favicon.ico via Python Pillow...');
+  execSync('python scripts/create-ico.py', { stdio: 'inherit' });
+}
+
+generatePngs().catch(console.error);

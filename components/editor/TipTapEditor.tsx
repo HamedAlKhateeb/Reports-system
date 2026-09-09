@@ -10,9 +10,20 @@ import TableHeader from '@tiptap/extension-table-header';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
+import Underline from '@tiptap/extension-underline';
 import TextDirection from './TextDirectionExtension';
 import { ReportImage } from './ReportImageNode';
 import { SmartTableNode } from './SmartTableNode';
+import { ReportChart } from './ReportChartNode';
+import { LatexInline } from './LatexInlineNode';
+import { convertLatexDelimitersToNodes } from '@/lib/latex';
+import { ChartBuilderPanel } from './ChartBuilderPanel';
+import { ImportModal } from './ImportModal';
+import type { ImportKind } from '@/lib/import/validation';
+import { getTablesByReportId } from '@/lib/db';
+import { extractNativeTables } from '@/lib/charts/engine';
+import { newChartId, normalizeChartType } from '@/lib/charts/types';
+import { schemaFromCreateParams } from '@/lib/charts/ai-tools';
 import { TextColor, TextHighlight } from './CustomColorMarks';
 import { FontSize } from './FontSizeMark';
 import { EditorToolbar } from './EditorToolbar';
@@ -117,6 +128,17 @@ export function TipTapEditor({
     x: 0,
     y: 0,
   });
+  // --- Mini Chart system state ---
+  const [chartSelectMode, setChartSelectMode] = useState(false);
+  const [chartSelectedSource, setChartSelectedSource] = useState<{ tableId: string; kind: 'smart' | 'native'; name: string } | null>(null);
+  const [chartBuilderOpen, setChartBuilderOpen] = useState(false);
+  const [chartEditId, setChartEditId] = useState<string | null>(null);
+  const [chartPreset, setChartPreset] = useState<{ tableId: string; kind: 'smart' | 'native' } | null>(null);
+  const [chartTables, setChartTables] = useState<Array<{ tableId: string; kind: 'smart' | 'native'; name: string }>>([]);
+  // --- Document import (DOCX/XLSX) dialog state ---
+  const [importOpen, setImportOpen] = useState(false);
+  const [importKind, setImportKind] = useState<ImportKind | null>(null);
+  const editorContentWrapRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const editorRef = useRef<any>(null);
   const shortcutsMapRef = useRef<Record<string, string>>({});
@@ -142,6 +164,21 @@ export function TipTapEditor({
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
   }, [reloadShortcuts]);
+
+  // Document import bridge: toolbar "Import" menu dispatches
+  // 'editor-import-request' { kind: 'docx' | 'xlsx' }; the dialog owns the
+  // Select → Validate → Parse → Preview → Confirm → Insert flow.
+  useEffect(() => {
+    const onImportRequest = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail || {};
+      const kind: ImportKind | null =
+        detail.kind === 'xlsx' ? 'xlsx' : detail.kind === 'docx' ? 'docx' : null;
+      setImportKind(kind);
+      setImportOpen(true);
+    };
+    window.addEventListener('editor-import-request', onImportRequest);
+    return () => window.removeEventListener('editor-import-request', onImportRequest);
+  }, []);
 
   const saveContent = useCallback(
     async (json: any) => {
@@ -353,16 +390,25 @@ export function TipTapEditor({
       }),
       ReportImage,
       SmartTableNode,
+      ReportChart,
+      LatexInline,
       TextColor,
       TextHighlight,
       FontSize,
+      Underline,
       TextAlign.configure({
         types: ['heading', 'paragraph'],
         alignments: ['left', 'center', 'right', 'justify'],
       }),
       TextDirection,
     ],
-    content: initialContent || '',
+    content: (() => {
+      try {
+        return convertLatexDelimitersToNodes(initialContent) || initialContent || '';
+      } catch {
+        return initialContent || '';
+      }
+    })(),
     editorProps: {
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items;
@@ -795,6 +841,355 @@ export function TipTapEditor({
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
+  // ============ Mini Chart system: toolbar bridge, selection mode, AI actions ============
+  const refreshChartTables = useCallback(async () => {
+    const list: Array<{ tableId: string; kind: 'smart' | 'native'; name: string }> = [];
+    try {
+      const tables = await getTablesByReportId(reportId);
+      for (const tb of tables) list.push({ tableId: tb.id, kind: 'smart', name: tb.name || tb.id });
+    } catch {}
+    try {
+      const doc = editorRef.current?.getJSON?.();
+      const natives = extractNativeTables(doc);
+      natives.forEach((n) => {
+        const label = n.headers.length ? n.headers.slice(0, 3).join('، ') : `Table ${n.index + 1}`;
+        list.push({ tableId: n.key, kind: 'native', name: `${reportLanguage === 'ar' ? 'جدول' : 'Table'} ${n.index + 1} (${label})` });
+      });
+    } catch {}
+    // embedded smart tables from other reports
+    try {
+      editorRef.current?.state?.doc?.descendants?.((node: any) => {
+        if (node.type.name === 'smartTable' && node.attrs.tableId && !list.some((l) => l.tableId === node.attrs.tableId)) {
+          list.push({ tableId: node.attrs.tableId, kind: 'smart', name: node.attrs.tableId });
+        }
+      });
+    } catch {}
+    setChartTables(list);
+    return list;
+  }, [reportId, reportLanguage]);
+
+  const findNativeTableAtSelection = useCallback((): string | null => {
+    try {
+      const ed = editorRef.current;
+      if (!ed) return null;
+      let found: string | null = null;
+      let tableIdx = -1;
+      ed.state.doc.descendants((node: any, pos: number) => {
+        if (node.type.name === 'table') {
+          tableIdx++;
+          if (found) return;
+          const sel = ed.state.selection;
+          if (pos <= sel.$from.pos && sel.$from.pos <= pos + node.nodeSize) {
+            found = `native:${tableIdx}`;
+          }
+        }
+      });
+      return found;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const openBuilderFor = useCallback((preset: { tableId: string; kind: 'smart' | 'native' } | null, editId: string | null = null) => {
+    setChartSelectMode(false);
+    setChartPreset(preset);
+    setChartEditId(editId);
+    setChartBuilderOpen(true);
+  }, []);
+
+  useEffect(() => {
+    const onChartButton = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail || {};
+      const ed = editorRef.current;
+      // Case 1: cursor inside a native table → use it directly
+      try {
+        if (ed?.isActive?.('table')) {
+          const key = findNativeTableAtSelection();
+          if (key) {
+            openBuilderFor({ tableId: key, kind: 'native' });
+            return;
+          }
+        }
+      } catch {}
+      // Case 1b: smart table focused (toolbar bridge passes tableId)
+      if (detail.smartTableId) {
+        openBuilderFor({ tableId: detail.smartTableId, kind: 'smart' });
+        return;
+      }
+      // Case 2: selection mode
+      refreshChartTables();
+      setChartSelectedSource(null);
+      setChartSelectMode(true);
+    };
+    const onEditReq = (e: Event) => {
+      const { chartId } = (e as CustomEvent)?.detail || {};
+      if (!chartId) return;
+      let attrs: any = null;
+      try {
+        editorRef.current?.state?.doc?.descendants?.((node: any) => {
+          if (node.type.name === 'reportChart' && node.attrs.chartId === chartId) attrs = { ...node.attrs };
+        });
+      } catch {}
+      const preset = attrs?.sourceTableId
+        ? { tableId: String(attrs.sourceTableId), kind: (attrs.sourceKind === 'native' ? 'native' : 'smart') as 'smart' | 'native' }
+        : null;
+      openBuilderFor(preset, chartId);
+    };
+    const onDuplicateReq = (e: Event) => {
+      const { chartId } = (e as CustomEvent)?.detail || {};
+      if (!chartId || !editorRef.current) return;
+      let attrs: any = null;
+      try {
+        editorRef.current?.state?.doc?.descendants?.((node: any) => {
+          if (node.type.name === 'reportChart' && node.attrs.chartId === chartId) attrs = { ...node.attrs };
+        });
+      } catch {}
+      if (!attrs) return;
+      const id = newChartId();
+      try {
+        (editorRef.current.chain().focus() as any).setReportChart({
+          chartId: id,
+          type: attrs.type,
+          title: attrs.title ? `${attrs.title} (2)` : '',
+          sourceTableId: attrs.sourceTableId,
+          sourceKind: attrs.sourceKind,
+          categoryColumn: attrs.categoryColumn,
+          valueColumns: attrs.valueColumns,
+          xAxisName: attrs.xAxisName,
+          yAxisName: attrs.yAxisName,
+          showLegend: attrs.showLegend,
+          showLabels: attrs.showLabels,
+          stacked: attrs.stacked,
+          height: attrs.height,
+          tableName: attrs.tableName,
+        }).run();
+      } catch {}
+    };
+    const collectKnownTables = (): { smart: Set<string>; native: Set<string>; charts: Set<string> } => {
+      const smart = new Set<string>();
+      const native = new Set<string>();
+      const charts = new Set<string>();
+      try {
+        editorRef.current?.state?.doc?.descendants?.((node: any) => {
+          if (node.type.name === 'smartTable' && node.attrs.tableId) smart.add(String(node.attrs.tableId));
+          if (node.type.name === 'reportChart' && node.attrs.chartId) charts.add(String(node.attrs.chartId));
+        });
+        const natives = extractNativeTables(editorRef.current?.getJSON?.());
+        natives.forEach((n) => native.add(n.key));
+      } catch {}
+      chartTables.forEach((t) => {
+        if (t.kind === 'smart') smart.add(t.tableId);
+        else native.add(t.tableId);
+      });
+      return { smart, native, charts };
+    };
+    const onAiAction = (e: Event) => {
+      const action = (e as CustomEvent)?.detail;
+      if (!action || !editorRef.current) return;
+      const ed = editorRef.current;
+      try {
+        if (action.name === 'create_chart') {
+          const p = action.params;
+          // Verify before executing: source must exist, columns non-empty
+          const known = collectKnownTables();
+          const srcId = String(p.source_table || '');
+          const srcKnown = known.smart.has(srcId) || known.native.has(srcId);
+          if (!srcKnown) {
+            // refresh async then retry once
+            refreshChartTables().then((list) => {
+              const ok = list.some((x) => x.tableId === srcId);
+              if (!ok) {
+                toast.error(reportLanguage === 'ar' ? `جدول غير معروف: ${srcId}` : `Unknown source table: ${srcId}`);
+                return;
+              }
+              const schema = schemaFromCreateParams(p, newChartId());
+              (ed.chain().focus() as any).setReportChart({
+                chartId: schema.chartId,
+                type: schema.type,
+                title: schema.title || '',
+                sourceTableId: schema.source.tableId,
+                sourceKind: schema.source.kind,
+                categoryColumn: schema.source.categoryColumn,
+                valueColumns: schema.source.valueColumns,
+                showLegend: true,
+                showLabels: false,
+                height: 320,
+              }).run();
+              toast.success(reportLanguage === 'ar' ? 'تم إنشاء الرسم البياني' : 'Chart created');
+            });
+            return;
+          }
+          if (!p.category || !p.series || p.series.length === 0) {
+            toast.error(reportLanguage === 'ar' ? 'فشل إنشاء الرسم: الأعمدة ناقصة' : 'create_chart failed: missing columns');
+            return;
+          }
+          const schema = schemaFromCreateParams(p, newChartId());
+          (ed.chain().focus() as any).setReportChart({
+            chartId: schema.chartId,
+            type: schema.type,
+            title: schema.title || '',
+            sourceTableId: schema.source.tableId,
+            sourceKind: schema.source.kind,
+            categoryColumn: schema.source.categoryColumn,
+            valueColumns: schema.source.valueColumns,
+            showLegend: true,
+            showLabels: false,
+            height: 320,
+          }).run();
+          toast.success(reportLanguage === 'ar' ? 'تم إنشاء الرسم البياني' : 'Chart created');
+        } else if (action.name === 'update_chart') {
+          const p = action.params;
+          if (!collectKnownTables().charts.has(String(p.chartId))) {
+            toast.error(reportLanguage === 'ar' ? `رسم غير معروف: ${p.chartId}` : `Unknown chartId: ${p.chartId}`);
+            return;
+          }
+          const patch: any = {};
+          if (p.title !== undefined) patch.title = p.title;
+          if (p.type !== undefined) patch.type = normalizeChartType(p.type);
+          if (p.category !== undefined) patch.categoryColumn = p.category;
+          if (p.series !== undefined) patch.valueColumns = p.series;
+          if (p.showLegend !== undefined) patch.showLegend = p.showLegend;
+          if (p.showLabels !== undefined) patch.showLabels = p.showLabels;
+          if (p.xAxisName !== undefined) patch.xAxisName = p.xAxisName;
+          if (p.yAxisName !== undefined) patch.yAxisName = p.yAxisName;
+          ed.chain().focus().updateReportChart(p.chartId, patch).run();
+        } else if (action.name === 'delete_chart') {
+          if (!collectKnownTables().charts.has(String(action.params.chartId))) {
+            toast.error(reportLanguage === 'ar' ? `رسم غير معروف: ${action.params.chartId}` : `Unknown chartId: ${action.params.chartId}`);
+            return;
+          }
+          ed.chain().focus().deleteReportChart(action.params.chartId).run();
+        } else if (action.name === 'change_chart_type') {
+          if (!collectKnownTables().charts.has(String(action.params.chartId))) {
+            toast.error(reportLanguage === 'ar' ? `رسم غير معروف: ${action.params.chartId}` : `Unknown chartId: ${action.params.chartId}`);
+            return;
+          }
+          ed.chain().focus().updateReportChart(action.params.chartId, { type: normalizeChartType(action.params.type) }).run();
+        } else if (action.name === 'update_chart_source') {
+          const p = action.params;
+          const patch: any = {
+            sourceTableId: p.source_table,
+            sourceKind: String(p.source_table).startsWith('native:') ? 'native' : 'smart',
+          };
+          if (p.category !== undefined) patch.categoryColumn = p.category;
+          if (p.series !== undefined) patch.valueColumns = p.series;
+          ed.chain().focus().updateReportChart(p.chartId, patch).run();
+          window.dispatchEvent(new CustomEvent('chart-source-changed', { detail: { tableId: p.source_table } }));
+        }
+      } catch (err) {
+        console.error('chart-ai-action failed', err);
+      }
+    };
+    window.addEventListener('chart-button-pressed', onChartButton);
+    window.addEventListener('chart-edit-request', onEditReq);
+    window.addEventListener('chart-duplicate-request', onDuplicateReq);
+    window.addEventListener('chart-ai-action', onAiAction);
+    return () => {
+      window.removeEventListener('chart-button-pressed', onChartButton);
+      window.removeEventListener('chart-edit-request', onEditReq);
+      window.removeEventListener('chart-duplicate-request', onDuplicateReq);
+      window.removeEventListener('chart-ai-action', onAiAction);
+    };
+  }, [findNativeTableAtSelection, openBuilderFor, refreshChartTables, reportLanguage, chartTables]);
+
+  // Selection-mode: click a table in the document to pick it (with ✓ highlight)
+  useEffect(() => {
+    if (!chartSelectMode) return;
+    const wrap = editorContentWrapRef.current;
+    if (!wrap) return;
+    const markSelection = () => {
+      try {
+        // native tables
+        const domTables = wrap.querySelectorAll('.ProseMirror table');
+        domTables.forEach((el, idx) => {
+          const h = el as HTMLElement;
+          const isSel = chartSelectedSource?.kind === 'native' && chartSelectedSource.tableId === `native:${idx}`;
+          h.style.outline = isSel ? '3px solid #2E4034' : '2px dashed #2E4034AA';
+          h.style.outlineOffset = '3px';
+          h.style.cursor = 'pointer';
+          h.style.position = 'relative';
+          let badge = h.querySelector(':scope > .chart-pick-badge') as HTMLElement | null;
+          // place badge on wrapper instead (table can't hold div reliably) — use parent
+          const parent = h.parentElement as HTMLElement | null;
+          if (isSel && parent && !parent.querySelector(':scope > .chart-pick-badge')) {
+            badge = document.createElement('div');
+            badge.className = 'chart-pick-badge';
+            badge.textContent = '✓';
+            badge.style.cssText = 'position:absolute;top:-12px;inset-inline-end:-8px;z-index:20;width:24px;height:24px;border-radius:9999px;background:#2E4034;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.25)';
+            parent.style.position = 'relative';
+            parent.appendChild(badge);
+          }
+          if (!isSel && parent) {
+            parent.querySelectorAll(':scope > .chart-pick-badge').forEach((b) => b.remove());
+          }
+        });
+        // smart tables
+        const smarts = wrap.querySelectorAll('.smart-table-wrapper');
+        smarts.forEach((el) => {
+          const h = el as HTMLElement;
+          const id = h.getAttribute('data-table-id') || h.querySelector('[data-table-id]')?.getAttribute('data-table-id') || '';
+          // fallback: match by order against chartTables smart entries
+          const isSel = !!chartSelectedSource && chartSelectedSource.kind === 'smart' &&
+            (chartSelectedSource.tableId === id || h.textContent?.includes(chartSelectedSource.name));
+          h.style.outline = isSel ? '3px solid #2E4034' : '2px dashed #2E4034AA';
+          h.style.outlineOffset = '3px';
+          h.style.cursor = 'pointer';
+          h.style.borderRadius = '12px';
+          let badge = h.querySelector(':scope > .chart-pick-badge') as HTMLElement | null;
+          if (isSel && !badge) {
+            badge = document.createElement('div');
+            badge.className = 'chart-pick-badge';
+            badge.textContent = '✓';
+            badge.style.cssText = 'position:absolute;top:-12px;inset-inline-end:-8px;z-index:20;width:24px;height:24px;border-radius:9999px;background:#2E4034;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;box-shadow:0 2px 8px rgba(0,0,0,.25)';
+            h.style.position = 'relative';
+            h.appendChild(badge);
+          }
+          if (!isSel) badge?.remove();
+        });
+      } catch {}
+    };
+    markSelection();
+    const onClick = (ev: MouseEvent) => {
+      const t = ev.target as HTMLElement | null;
+      if (!t || typeof t.closest !== 'function') return;
+      const smartEl = t.closest('.smart-table-wrapper') as HTMLElement | null;
+      if (smartEl) {
+        ev.preventDefault(); ev.stopPropagation();
+        // resolve tableId: search chartTables smart list by matching DOM order
+        const allSmarts = Array.from(wrap.querySelectorAll('.smart-table-wrapper'));
+        const idx = allSmarts.indexOf(smartEl);
+        const smartOpts = chartTables.filter((x) => x.kind === 'smart');
+        const pick = smartOpts[idx] || smartOpts[0];
+        if (pick) setChartSelectedSource(pick);
+        return;
+      }
+      const tbl = t.closest('.ProseMirror table') as HTMLElement | null;
+      if (tbl) {
+        ev.preventDefault(); ev.stopPropagation();
+        const all = Array.from(wrap.querySelectorAll('.ProseMirror table'));
+        const idx = all.indexOf(tbl);
+        const key = `native:${idx}`;
+        const meta = chartTables.find((x) => x.tableId === key);
+        setChartSelectedSource(meta || { tableId: key, kind: 'native', name: `Table ${idx + 1}` });
+      }
+    };
+    wrap.addEventListener('click', onClick, true);
+    return () => {
+      wrap.removeEventListener('click', onClick, true);
+      try {
+        wrap.querySelectorAll('.ProseMirror table').forEach((el) => {
+          const h = el as HTMLElement;
+          h.style.outline = ''; h.style.outlineOffset = ''; h.style.cursor = '';
+        });
+        wrap.querySelectorAll('.smart-table-wrapper').forEach((el) => {
+          const h = el as HTMLElement;
+          h.style.outline = ''; h.style.outlineOffset = ''; h.style.cursor = '';
+        });
+        wrap.querySelectorAll('.chart-pick-badge').forEach((b) => b.remove());
+      } catch {}
+    };
+  }, [chartSelectMode, chartSelectedSource, chartTables]);
+
   const dir = reportLanguage === 'ar' ? 'rtl' : 'ltr';
   const themeConfig = getReportTheme(themeColor);
   const bgConfig = getReportBackground(backgroundColor);
@@ -858,8 +1253,69 @@ export function TipTapEditor({
         />
       </div>
 
+      {/* Chart Selection Mode banner */}
+      {chartSelectMode && (
+        <div className="flex flex-col gap-2 border-b border-[#2E4034]/30 bg-[#2E4034]/5 px-3 py-2.5 sm:px-4" dir={dir}>
+          <div className="flex items-center gap-2 text-xs font-bold text-[#2E4034] dark:text-emerald-300">
+            <span>📊 {reportLanguage === 'ar' ? 'اختيار بيانات الرسم البياني' : 'Pick chart data'}</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {reportLanguage === 'ar' ? 'حدد جدولًا أو نطاق بيانات من التقرير' : 'Select a table or data range from the report'}
+          </p>
+          {chartTables.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {chartTables.map((tb) => {
+                const sel = chartSelectedSource?.tableId === tb.tableId;
+                return (
+                  <button
+                    key={tb.tableId}
+                    type="button"
+                    onClick={() => setChartSelectedSource(tb)}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors',
+                      sel
+                        ? 'border-[#2E4034] bg-[#2E4034] text-white shadow'
+                        : 'border-border bg-background text-foreground hover:border-[#2E4034]/60'
+                    )}
+                  >
+                    {sel && <span>✓</span>}
+                    <span className="max-w-[180px] truncate">{tb.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {chartSelectedSource && (
+            <div className="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+              ✓ {chartSelectedSource.name}
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => { setChartSelectMode(false); setChartSelectedSource(null); }}
+              className="h-8 rounded-lg border border-border bg-background px-3 text-xs font-semibold text-muted-foreground hover:text-foreground"
+            >
+              {reportLanguage === 'ar' ? 'إلغاء' : 'Cancel'}
+            </button>
+            <button
+              type="button"
+              disabled={!chartSelectedSource}
+              onClick={() => {
+                if (!chartSelectedSource) return;
+                openBuilderFor({ tableId: chartSelectedSource.tableId, kind: chartSelectedSource.kind });
+              }}
+              className="h-8 rounded-lg bg-[#2E4034] px-4 text-xs font-bold text-white hover:bg-[#24382F] disabled:opacity-40"
+            >
+              {reportLanguage === 'ar' ? 'متابعة →' : 'Continue →'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Editor Content Area respecting Report Language, Direction, Theme, and Background */}
       <div
+        ref={editorContentWrapRef}
         dir={dir}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -900,6 +1356,35 @@ export function TipTapEditor({
         isOpen={contextMenu.isOpen}
         onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
         lang={reportLanguage}
+      />
+
+      {/* Chart Builder side panel */}
+      {chartBuilderOpen && editor && (
+        <ChartBuilderPanel
+          editor={editor}
+          reportId={reportId}
+          editChartId={chartEditId}
+          presetSource={chartPreset}
+          onClose={() => { setChartBuilderOpen(false); setChartEditId(null); setChartPreset(null); }}
+          onDone={() => {
+            try {
+              const json = editorRef.current?.getJSON?.();
+              if (json) {
+                if (onContentChange) onContentChange(json);
+                triggerAutosave(json);
+              }
+            } catch {}
+          }}
+        />
+      )}
+
+      {/* Document Import dialog (DOCX/XLSX) — inserts into the existing editor */}
+      <ImportModal
+        open={importOpen}
+        initialKind={importKind}
+        editor={editor}
+        reportId={reportId}
+        onClose={() => setImportOpen(false)}
       />
     </div>
   );

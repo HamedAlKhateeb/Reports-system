@@ -747,6 +747,18 @@ export function AiAssistantModal({ isOpen, onClose, reportId }: AiAssistantModal
               );
             }, 350);
           }
+        } else if (
+          tc.name === 'create_chart' ||
+          tc.name === 'update_chart' ||
+          tc.name === 'delete_chart' ||
+          tc.name === 'change_chart_type' ||
+          tc.name === 'update_chart_source'
+        ) {
+          // Chart tools execute against the live report editor (verified there).
+          // Never requires HTML/SVG from the model.
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('chart-ai-action', { detail: { name: tc.name, params: tc.parameters } }));
+          }
         }
       }
     } catch (err: any) {

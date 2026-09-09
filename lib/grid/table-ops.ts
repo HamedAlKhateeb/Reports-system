@@ -134,6 +134,68 @@ function remapAllFormulas(
 // INSERT / DELETE ROWS
 // ==========================================
 
+function shiftMergesForRowInsert(merges: MergedRange[], atIndex: number, newRowCount: number, colCount: number): MergedRange[] {
+  try {
+    if (!Array.isArray(merges)) return [];
+    const out: MergedRange[] = [];
+    for (const m of merges) {
+      if (!m || typeof m.start !== 'string' || typeof m.end !== 'string') continue;
+      const s = m.start.match(/^([A-Za-z]+)([0-9]+)$/);
+      const e = m.end.match(/^([A-Za-z]+)([0-9]+)$/);
+      if (!s || !e) continue;
+      let r1 = Math.min(parseInt(s[2], 10) - 1, parseInt(e[2], 10) - 1);
+      let r2 = Math.max(parseInt(s[2], 10) - 1, parseInt(e[2], 10) - 1);
+      const c1 = s[1].toUpperCase();
+      const c2 = e[1].toUpperCase();
+      if (r1 >= atIndex) r1 += 1;
+      if (r2 >= atIndex) r2 += 1;
+      if (r2 >= newRowCount) continue;
+      const sc = colNameToIndex(c1);
+      const ec = colNameToIndex(c2);
+      if (sc >= colCount || ec >= colCount) continue;
+      out.push({
+        start: `${c1}${r1 + 1}`,
+        end: `${c2}${r2 + 1}`,
+        rowSpan: r2 - r1 + 1,
+        colSpan: Math.abs(ec - sc) + 1,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function shiftMergesForRowDelete(merges: MergedRange[], atIndex: number): MergedRange[] {
+  try {
+    if (!Array.isArray(merges)) return [];
+    const out: MergedRange[] = [];
+    for (const m of merges) {
+      if (!m || typeof m.start !== 'string' || typeof m.end !== 'string') continue;
+      const s = m.start.match(/^([A-Za-z]+)([0-9]+)$/);
+      const e = m.end.match(/^([A-Za-z]+)([0-9]+)$/);
+      if (!s || !e) continue;
+      let r1 = Math.min(parseInt(s[2], 10) - 1, parseInt(e[2], 10) - 1);
+      let r2 = Math.max(parseInt(s[2], 10) - 1, parseInt(e[2], 10) - 1);
+      const c1 = s[1].toUpperCase();
+      const c2 = e[1].toUpperCase();
+      // Drop merges touching the deleted row (Excel-like safe behavior)
+      if (atIndex >= r1 && atIndex <= r2) continue;
+      if (r1 > atIndex) r1 -= 1;
+      if (r2 > atIndex) r2 -= 1;
+      out.push({
+        start: `${c1}${r1 + 1}`,
+        end: `${c2}${r2 + 1}`,
+        rowSpan: r2 - r1 + 1,
+        colSpan: Math.abs(colNameToIndex(c1) - colNameToIndex(c2)) + 1,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export function insertRow(
   state: TableState,
   atIndex: number
@@ -146,20 +208,35 @@ export function insertRow(
   // References to rows at or below the insertion point shift down by 1.
   // Formats below the insertion point shift down by 1 as well.
   const shiftedFormats: Record<string, CellFormat> = {};
-  Object.keys(state.cellFormats).forEach((coord) => {
-    const m = coord.match(/^([A-Za-z]+)([0-9]+)$/);
-    if (!m) return;
-    const rowNum = parseInt(m[2], 10);
-    const newRowNum = rowNum >= idx + 1 ? rowNum + 1 : rowNum;
-    shiftedFormats[`${m[1].toUpperCase()}${newRowNum}`] = state.cellFormats[coord];
-  });
+  try {
+    Object.keys(state.cellFormats || {}).forEach((coord) => {
+      const m = coord.match(/^([A-Za-z]+)([0-9]+)$/);
+      if (!m) return;
+      const rowNum = parseInt(m[2], 10);
+      if (!isFinite(rowNum)) return;
+      const newRowNum = rowNum >= idx + 1 ? rowNum + 1 : rowNum;
+      shiftedFormats[`${m[1].toUpperCase()}${newRowNum}`] = (state.cellFormats as Record<string, CellFormat>)[coord];
+    });
+  } catch {
+    // keep what we have; never throw on malformed formats
+  }
 
-  const remappedRows = remapAllFormulas(rows, (c, r) => {
-    if (r >= idx) return { colIndex: c, rowIndex: r + 1 };
-    return { colIndex: c, rowIndex: r };
-  });
+  let remappedRows: Record<string, any>[];
+  try {
+    remappedRows = remapAllFormulas(rows, (c, r) => {
+      if (r >= idx) return { colIndex: c, rowIndex: r + 1 };
+      return { colIndex: c, rowIndex: r };
+    });
+  } catch {
+    remappedRows = rows;
+  }
 
-  return { columns: state.columns, rows: remappedRows, cellFormats: shiftedFormats, mergedCells: state.mergedCells };
+  return {
+    columns: state.columns,
+    rows: remappedRows,
+    cellFormats: shiftedFormats,
+    mergedCells: shiftMergesForRowInsert(state.mergedCells || [], idx, remappedRows.length, state.columns.length),
+  };
 }
 
 export function deleteRow(
@@ -173,22 +250,37 @@ export function deleteRow(
 
   // Formats on the deleted row vanish; below it they shift up by 1.
   const shiftedFormats: Record<string, CellFormat> = {};
-  Object.keys(state.cellFormats).forEach((coord) => {
-    const m = coord.match(/^([A-Za-z]+)([0-9]+)$/);
-    if (!m) return;
-    const rowNum = parseInt(m[2], 10);
-    if (rowNum - 1 === idx) return; // format belonged to the deleted row
-    const newRowNum = rowNum > idx + 1 ? rowNum - 1 : rowNum;
-    shiftedFormats[`${m[1].toUpperCase()}${newRowNum}`] = state.cellFormats[coord];
-  });
+  try {
+    Object.keys(state.cellFormats || {}).forEach((coord) => {
+      const m = coord.match(/^([A-Za-z]+)([0-9]+)$/);
+      if (!m) return;
+      const rowNum = parseInt(m[2], 10);
+      if (!isFinite(rowNum)) return;
+      if (rowNum - 1 === idx) return; // format belonged to the deleted row
+      const newRowNum = rowNum > idx + 1 ? rowNum - 1 : rowNum;
+      shiftedFormats[`${m[1].toUpperCase()}${newRowNum}`] = (state.cellFormats as Record<string, CellFormat>)[coord];
+    });
+  } catch {
+    // never throw
+  }
 
-  const remappedRows = remapAllFormulas(rows, (c, r) => {
-    if (r === idx) return null; // referenced row itself was deleted
-    if (r > idx) return { colIndex: c, rowIndex: r - 1 };
-    return { colIndex: c, rowIndex: r };
-  });
+  let remappedRows: Record<string, any>[];
+  try {
+    remappedRows = remapAllFormulas(rows, (c, r) => {
+      if (r === idx) return null; // referenced row itself was deleted
+      if (r > idx) return { colIndex: c, rowIndex: r - 1 };
+      return { colIndex: c, rowIndex: r };
+    });
+  } catch {
+    remappedRows = rows;
+  }
 
-  return { columns: state.columns, rows: remappedRows, cellFormats: shiftedFormats, mergedCells: state.mergedCells };
+  return {
+    columns: state.columns,
+    rows: remappedRows,
+    cellFormats: shiftedFormats,
+    mergedCells: shiftMergesForRowDelete(state.mergedCells || [], idx),
+  };
 }
 
 // ==========================================

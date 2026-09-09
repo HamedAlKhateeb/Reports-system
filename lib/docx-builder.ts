@@ -167,6 +167,7 @@ export async function buildDocxDocument(
   // Helper to extract text from a TipTap node
   function extractNodeText(node: any): string {
     if (!node) return '';
+    if (node.type === 'latexInline') return `$${node.attrs?.latex || ''}$`;
     if (node.text) return node.text;
     if (node.content) return node.content.map(extractNodeText).join('');
     return '';
@@ -594,6 +595,17 @@ export async function buildDocxDocument(
             alignment: AlignmentType.CENTER,
             bidirectional: isAr,
             spacing: { before: 40, after: 180 },
+          })
+        );
+      } else if (node.type === 'reportChart') {
+        const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
+        const ctype = node.attrs?.type || 'bar';
+        children.push(
+          new Paragraph({
+            children: [makeRun(`📊 ${title} (${ctype})`, { bold: true, size: 24, color: theme.primary })],
+            alignment: AlignmentType.CENTER,
+            bidirectional: isAr,
+            spacing: { before: 160, after: 120 },
           })
         );
       }

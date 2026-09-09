@@ -779,30 +779,35 @@ export default function ReportDetailPage() {
             <span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span>
           </Button>
 
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleScanCandidates}
-            disabled={isScanningCandidates}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
-            title={lang === 'ar' ? 'فحص واكتشاف مرشحي المشاكل في التقرير' : 'Scan document for issue candidates'}
-          >
-            <ScanSearch className={cn("h-3.5 w-3.5 text-primary", isScanningCandidates && "animate-spin")} />
-            <span>{isScanningCandidates ? (lang === 'ar' ? 'جاري الفحص...' : 'Scanning...') : (lang === 'ar' ? 'فحص المشاكل' : 'Scan Issues')}</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleOpenInspector}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 shadow-2xs"
-            title={lang === 'ar' ? 'فاحص اتساق العدادات والمشاكل' : 'Counter Consistency Inspector'}
-          >
-            <Scale className="h-3.5 w-3.5 text-amber-600" />
-            <span>{lang === 'ar' ? 'فاحص المطابقة' : 'Inspector'}</span>
-          </Button>
+          {/* Quick inspection actions — Candidate Inspection and Problem
+              (Matching) Inspection side by side, no dropdown. Logic and
+              handlers unchanged; full controls live in the
+              "المشاكل والمطابقة" tab Action Center. */}
+          <div className="flex flex-wrap items-center gap-2" role="group" aria-label={lang === 'ar' ? 'فحص التقرير' : 'Inspect report'}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleScanCandidates}
+              disabled={isScanningCandidates}
+              className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
+              title={lang === 'ar' ? 'فحص المرشحين' : 'Candidate Inspection — scan candidates'}
+            >
+              <ScanSearch className={cn("h-3.5 w-3.5 text-primary", (isScanningCandidates) && "animate-spin")} />
+              <span>{isScanningCandidates ? (lang === 'ar' ? 'جاري الفحص...' : 'Scanning...') : (lang === 'ar' ? 'فحص المرشحين' : 'Candidate Inspection')}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleOpenInspector}
+              className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 shadow-2xs"
+              title={lang === 'ar' ? 'فحص المطابقة (فحص المشاكل)' : 'Problem Inspection — matching check'}
+            >
+              <Scale className="h-3.5 w-3.5 text-amber-600 shrink-0" />
+              <span>{lang === 'ar' ? 'فحص المشاكل' : 'Problem Inspection'}</span>
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -910,8 +915,6 @@ export default function ReportDetailPage() {
             userUid={user?.uid}
             onNavigateTab={handleNavigateTab}
             onReportUpdate={(updatedReport) => setReport(updatedReport)}
-            onOpenScanner={handleScanCandidates}
-            onOpenInspector={handleOpenInspector}
           />
         )}
 

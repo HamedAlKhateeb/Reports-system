@@ -115,10 +115,11 @@ function LoginFormContent() {
             : 'The sign-in popup was closed before completion.'
         );
       } else if (err.code === 'auth/unauthorized-domain') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
         setLocalError(
           lang === 'ar'
-            ? 'النطاق الحالي غير مُعتمد في إعدادات Firebase Auth. يمكنك إنشاء حساب بالبريد الإلكتروني أو الدخول كضيف.'
-            : 'Current domain is not authorized in Firebase Auth. You can create an email account or use Guest mode.'
+            ? `النطاق الحالي (${host}) غير مُعتمد في Firebase Auth. الحل للمشرف (دقيقة واحدة): Firebase Console ← Authentication ← Settings ← Authorized domains ← أضف النطاق: ${host}. بديل مؤقت: أنشئ حساباً بالبريد الإلكتروني أو ادخل كضيف.`
+            : `Current domain (${host}) is not authorized in Firebase Auth. Admin fix (1 minute): Firebase Console → Authentication → Settings → Authorized domains → add: ${host}. Temporary workaround: create an email account or use Guest mode.`
         );
       } else if (err.code === 'auth/timeout') {
         setLocalError(

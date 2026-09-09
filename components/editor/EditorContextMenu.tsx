@@ -499,19 +499,31 @@ export function EditorContextMenu({
 
           <div className="my-1 border-t border-border/60" />
 
-          {/* Unified Table Insert (single entry point) */}
+          {/* Table Insert: normal vs smart */}
+          <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+            {isAr ? 'إدراج جدول' : 'Insert Table'}
+          </div>
           <button
             type="button"
             onClick={() => {
-              document.dispatchEvent(
-                new CustomEvent('editor-insert-table-request')
-              );
+              window.dispatchEvent(new CustomEvent('editor-insert-normal-table-request'));
+              onClose();
+            }}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            <TableIcon className="h-3.5 w-3.5" />
+            <span>{isAr ? 'جدول عادي (نصوص)' : 'Normal table (text)'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('editor-insert-smart-table-request'));
               onClose();
             }}
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950 transition-colors"
           >
             <TableIcon className="h-3.5 w-3.5 text-olive-600" />
-            <span>{isAr ? 'إدراج جدول' : 'Insert Table'}</span>
+            <span>{isAr ? 'جدول ذكي (معادلات)' : 'Smart table (formulas)'}</span>
           </button>
         </>
       )}

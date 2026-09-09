@@ -124,6 +124,20 @@ export function extractCleanTextFromTipTap(node: any, maxLen: number = 6000): st
       return;
     }
 
+    if ((n as any).type === 'reportChart') {
+      const title = (n as any).attrs?.title || 'Chart';
+      const ctype = (n as any).attrs?.type || 'bar';
+      const src = (n as any).attrs?.sourceTableId || '';
+      chunks.push(` [رسم بياني / Chart: "${title}" type=${ctype} source=${src}] `);
+      return;
+    }
+
+    if ((n as any).type === 'smartTable') {
+      const tid = (n as any).attrs?.tableId || '';
+      chunks.push(`\n[جدول ذكي / SmartTable id=${tid}]\n`);
+      return;
+    }
+
     if (Array.isArray(n.content)) {
       n.content.forEach(traverse);
     }
