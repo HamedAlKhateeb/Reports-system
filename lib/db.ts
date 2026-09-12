@@ -70,10 +70,16 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
   const normalized = email.trim().toLowerCase();
 
   // If Firebase is configured and user is signed in, check or register in Firestore
+  // Bounded: auth checks must never hang the login flow on a slow network.
   if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const userDocRef = doc(db, 'authorized_users', normalized);
-      const snap = await getDoc(userDocRef);
+      const snap = await Promise.race([
+        getDoc(userDocRef),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('authorized_users timeout')), 8000)
+        ),
+      ]);
       if (snap.exists()) {
         return true;
       }

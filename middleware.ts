@@ -49,10 +49,16 @@ export function middleware(request: NextRequest) {
     pathname.startsWith('/settings') ||
     pathname === '/';
 
-  // If visiting protected page without session, redirect to /login
+  // If visiting protected page without session, redirect to /login.
+  // `reason=invalid-session` marks the case where a cookie EXISTED but was
+  // malformed/legacy (e.g. server-session mint failed) so /login can explain
+  // instead of silently bouncing.
   if (isProtectedPath && !hasSessionCookie) {
     const loginUrl = new URL('/login', request.url);
     loginUrl.searchParams.set('redirect', pathname);
+    if (session && session.split('.').length !== 3) {
+      loginUrl.searchParams.set('reason', 'invalid-session');
+    }
     const redirectResponse = NextResponse.redirect(loginUrl);
     redirectResponse.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
     redirectResponse.headers.set('Pragma', 'no-cache');

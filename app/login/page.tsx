@@ -19,6 +19,7 @@ function LoginFormContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectPath = searchParams.get('redirect') || '/reports';
+  const bounceReason = searchParams.get('reason');
 
   const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, sendPasswordReset, error: authContextError, clearError } = useAuth();
   const { lang, setLang, t } = useLanguage();
@@ -96,6 +97,12 @@ function LoginFormContent() {
         );
       } else if (err.code === 'auth/too-many-requests') {
         setLocalError(lang === 'ar' ? 'محاولات كثيرة — انتظر قليلًا ثم حاول مجددًا.' : 'Too many attempts — wait a bit and retry.');
+      } else if (err.code === 'session-mint-failed') {
+        setLocalError(
+          lang === 'ar'
+            ? 'تم التحقق من حسابك لكن تعذر إنشاء جلسة الخادم (انقطاع أو بطء شبكة). تحقق من الاتصال وحاول مجددًا — لم يتم الدخول بعد.'
+            : 'Your account verified but the server session could not be created (network issue). Check your connection and retry — you are not signed in yet.'
+        );
       } else if (err.message === 'unauthorizedUserError') {
         setLocalError(t('unauthorizedUserError'));
       } else {
@@ -268,6 +275,18 @@ function LoginFormContent() {
               <Alert variant="success">
                 <CheckCircle2 data-icon="inline-start" />
                 <AlertDescription>{successMessage}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Bounce hint: reached /login with a broken session cookie */}
+            {bounceReason === 'invalid-session' && !currentError && !successMessage && (
+              <Alert variant="default" className="bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800">
+                <AlertCircle data-icon="inline-start" />
+                <AlertDescription className="text-xs">
+                  {lang === 'ar'
+                    ? 'انتهت جلسة الخادم السابقة دون اكتمال الدخول. سجل الدخول مجددًا — وإن تكرر الأمر تحقق من الاتصال.'
+                    : 'The previous server session did not complete. Sign in again — if it repeats, check your connection.'}
+                </AlertDescription>
               </Alert>
             )}
 

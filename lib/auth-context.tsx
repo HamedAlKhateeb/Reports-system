@@ -62,17 +62,25 @@ function isServerVerifiableUid(uid: string): boolean {
   );
 }
 
-async function mintServerSession(getToken: () => Promise<string>): Promise<void> {
+async function mintServerSession(getToken: () => Promise<string>): Promise<boolean> {
+  // Bounded: never hang the login flow on a slow session endpoint.
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer: any = ctrl ? setTimeout(() => ctrl.abort(), 10000) : null;
   try {
     const idToken = await getToken();
-    await fetch('/api/auth/session', {
+    const res = await fetch('/api/auth/session', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ idToken }),
+      signal: ctrl?.signal,
     });
+    return res.ok;
   } catch {
-    // Offline / server unreachable: client keeps working from localStorage,
-    // server routes will return 401 until the next successful mint.
+    // Offline / server unreachable / timeout: client keeps working from
+    // localStorage; server routes will return 401 until the next mint.
+    return false;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -88,32 +96,39 @@ async function clearServerSession(): Promise<void> {
   }
 }
 
+/**
+ * Explicit sign-in flows must prove the server session exists before the
+ * app navigates to protected pages — otherwise the middleware bounces back
+ * to /login with NO error message (the "spinner then nothing" symptom).
+ */
+async function mintOrThrow(getToken: () => Promise<string>): Promise<void> {
+  const ok = await mintServerSession(getToken);
+  if (!ok) {
+    const err: any = new Error('Server session could not be established');
+    err.code = 'session-mint-failed';
+    throw err;
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Sync session cookie for Next.js Middleware + API routes (Phase 1.1/B3).
-  // Firebase users: the server mints an HttpOnly cookie holding the verified
-  // ID token (short-lived, refreshed periodically). Legacy raw-uid cookies
-  // are rejected server-side, so we proactively expire any stale one.
+  // Sync page-gating cookies for Next.js Middleware (Phase 1.1/B3).
+  // Firebase users: the SERVER mints an HttpOnly cookie via mintServerSession
+  // (called explicitly by sign-in flows so failures stay visible); here we
+  // only clear stale markers. Legacy raw-uid cookies are rejected
+  // server-side, so we proactively expire any stale one.
   // Guest/local/demo users: marker cookie only (page shell gating);
   // every privileged API route returns 401 for them by design.
-  const syncSessionCookie = (
-    userObj: AuthUser | null,
-    getToken?: () => Promise<string>
-  ) => {
+  const syncSessionCookie = (userObj: AuthUser | null) => {
     if (typeof document === 'undefined') return;
     if (!userObj) {
       void clearServerSession();
       return;
     }
-    if (
-      getToken &&
-      isServerVerifiableUid(userObj.uid) &&
-      isFirebaseConfigured
-    ) {
-      void mintServerSession(getToken);
+    if (isServerVerifiableUid(userObj.uid) && isFirebaseConfigured) {
       document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
       document.cookie = `${LOCAL_SESSION_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
       return;
@@ -138,8 +153,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (isFirebaseConfigured && auth) {
-      // Check if arriving from a redirect sign-in
-      getRedirectResult(auth)
+      // Check if arriving from a redirect sign-in (bounded: never hang boot).
+      Promise.race([
+        getRedirectResult(auth),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10000)),
+      ])
         .then(async (result) => {
           if (result && result.user && result.user.email) {
             await isUserAuthorized(result.user.email);
@@ -151,7 +169,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               emailVerified: result.user.emailVerified,
             };
             setUser(currentAuthUser);
-            syncSessionCookie(currentAuthUser, () => result.user.getIdToken());
+            syncSessionCookie(currentAuthUser);
+            void mintServerSession(() => result.user.getIdToken());
           }
         })
         .catch((e) => {
@@ -171,7 +190,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             emailVerified: fbUser.emailVerified,
           };
           setUser(currentAuthUser);
-          syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
+          syncSessionCookie(currentAuthUser);
+          void mintServerSession(() => fbUser.getIdToken());
           if (typeof window !== 'undefined') {
             localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
           }
@@ -259,7 +279,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             emailVerified: fbUser.emailVerified, // false until clicked
           };
           setUser(currentAuthUser);
-          syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
+          syncSessionCookie(currentAuthUser);
+          // Explicit sign-up: prove the server session before navigating.
+          await mintOrThrow(() => fbUser.getIdToken());
           if (typeof window !== 'undefined') {
             localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
           }
@@ -273,6 +295,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setLoading(false);
           return;
         } catch (firebaseErr: any) {
+          // A failed server-session mint must NOT fall through to local
+          // account creation (that would shadow the real Firebase account).
+          if (firebaseErr?.code === 'session-mint-failed') {
+            throw firebaseErr;
+          }
           console.warn('Firebase createUser failed, falling back to secure isolated local account', firebaseErr);
           // If error is already-in-use, throw to user
           if (firebaseErr.code === 'auth/email-already-in-use') {
@@ -335,13 +362,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           emailVerified: fbUser.emailVerified,
         };
         setUser(currentAuthUser);
-        syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
+        syncSessionCookie(currentAuthUser);
+        // Explicit sign-in: prove the server session before navigating.
+        await mintOrThrow(() => fbUser.getIdToken());
         if (typeof window !== 'undefined') {
           localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
         }
         setLoading(false);
         return;
       } catch (err: any) {
+        // A failed server-session mint must NOT fall through to the local
+        // registry (that would sign a Firebase user into a wrong identity).
+        if (err?.code === 'session-mint-failed') {
+          setLoading(false);
+          throw err;
+        }
         // If domain unauthorized or offline, check if account exists in local registry
         const localUsers = getRegisteredUsers();
         const localAcc = localUsers[normalizedEmail];
@@ -453,7 +488,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           emailVerified: fbUser.emailVerified ?? true,
         };
         setUser(currentAuthUser);
-        syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
+        syncSessionCookie(currentAuthUser);
+        // Explicit Google sign-in: prove the server session before navigating.
+        await mintOrThrow(() => fbUser.getIdToken());
         if (typeof window !== 'undefined') {
           localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
         }
@@ -549,7 +586,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         emailVerified: fbUser.emailVerified,
       };
       setUser(updatedAuthUser);
-      syncSessionCookie(updatedAuthUser, () => fbUser.getIdToken());
+      syncSessionCookie(updatedAuthUser);
+      void mintServerSession(() => fbUser.getIdToken());
       if (typeof window !== 'undefined') {
         localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(updatedAuthUser));
       }
