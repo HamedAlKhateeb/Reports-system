@@ -6,6 +6,7 @@ import {
   colIndexToName,
   colNameToIndex,
   evaluateFormula,
+  formatCellDisplay,
 } from '@/lib/grid/formula-parser';
 import {
   executeAutofill,
@@ -696,7 +697,7 @@ export function ExcelGridEditor({ table, onChange, readOnly = false }: ExcelGrid
                                 typeof rawVal === 'string' && rawVal.startsWith('=') && 'font-mono font-medium'
                               )}
                             >
-                              {displayVal !== null && displayVal !== undefined ? String(displayVal) : ''}
+                              {formatCellDisplay(displayVal)}
                             </span>
                           </div>
                         )}

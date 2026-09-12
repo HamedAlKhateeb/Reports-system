@@ -20,7 +20,8 @@ import {
 import { ReportItem, ReportImageItem } from './types';
 import { t, DICTIONARY } from './i18n/dictionary';
 import { getTableById } from './db';
-import { evaluateFormula } from './grid/formula-parser';
+import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
+import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
 
 async function resolveImageBuffer(downloadUrl?: string): Promise<Buffer | null> {
   if (!downloadUrl) return null;
@@ -416,17 +417,18 @@ export async function buildDocxDocument(
             });
 
             const mergedList = tbl.merged_cells || [];
-            const isCoveredByMerge = (coord: string) =>
-              mergedList.some((m: any) => m.end === coord && m.start !== coord);
-            const findMerge = (coord: string) =>
-              mergedList.find((m: any) => m.start === coord);
+            // Phase 3.1 (B9): point-in-rect coverage (was endpoint-only,
+            // which leaked interior cells of merges larger than 2 cells).
+            const isCovered = (coord: string) =>
+              isCoveredByMerge(coord, mergedList, tbl.columns_data || []);
+            const findMerge = (coord: string) => findMergeStart(coord, mergedList);
 
             (tbl.rows_data || []).forEach((row: any, rIdx: number) => {
               const rowNum = rIdx + 1;
               const rowCells = tbl.columns_data
                 .map((col: any, colIdx: number) => {
                   const coord = `${col.id}${rowNum}`.toUpperCase();
-                  if (isCoveredByMerge(coord)) return null;
+                  if (isCovered(coord)) return null;
                   const merge = findMerge(coord);
                   const colSpan = merge?.colSpan && merge.colSpan > 1 ? merge.colSpan : 1;
                   const rowSpan = merge?.rowSpan && merge.rowSpan > 1 ? merge.rowSpan : 1;
@@ -441,7 +443,7 @@ export async function buildDocxDocument(
                       evaluated = '#ERROR!';
                     }
                   }
-                  const cellVal = evaluated !== undefined && evaluated !== null ? String(evaluated) : '';
+                  const cellVal = formatCellDisplay(evaluated);
                   const cellFormat = tbl.cell_formats?.[coord];
                   const cellAlign = cellFormat?.align || cellFormat?.horizontalAlign;
                   const docxAlign = cellAlign === 'center'

@@ -1,7 +1,8 @@
 import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { formatWhatsAppUrl } from './contact-links';
-import { evaluateFormula } from './grid/formula-parser';
+import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
+import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLINE_CSS } from './latex';
 
 /**
@@ -185,9 +186,10 @@ function tipTapNodeToHtml(
           const tds = tbl.columns_data
             .map((col: any, colIdx: number) => {
               const coord = `${col.id}${rowNum}`.toUpperCase();
-              const isCovered = mergedList.some((m: any) => m.end === coord && m.start !== coord);
+              // Phase 3.1 (B9): point-in-rect coverage.
+              const isCovered = isCoveredByMerge(coord, mergedList, tbl.columns_data || []);
               if (isCovered) return '';
-              const merge = mergedList.find((m: any) => m.start === coord);
+              const merge = findMergeStart(coord, mergedList);
               const colSpanAttr = merge?.colSpan && merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : '';
               const rowSpanAttr = merge?.rowSpan && merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : '';
               const widthStyle = !colSpanAttr
@@ -212,7 +214,7 @@ function tipTapNodeToHtml(
                 cellFormat?.underline ? 'text-decoration: underline;' : '',
               ].join(' ');
 
-              return `<td class="report-cell"${colSpanAttr}${rowSpanAttr} style="text-align: ${align};${widthStyle} ${styleClasses}">${val !== undefined && val !== null ? String(val) : ''}</td>`;
+              return `<td class="report-cell"${colSpanAttr}${rowSpanAttr} style="text-align: ${align};${widthStyle} ${styleClasses}">${formatCellDisplay(val)}</td>`;
             })
             .join('');
           return `<tr class="report-row">${tds}</tr>`;

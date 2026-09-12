@@ -12,6 +12,15 @@ export const MAX_IMPORT_SHEETS = 10;
 export const MAX_IMPORT_ROWS = 200;
 export const MAX_IMPORT_COLS = 50;
 
+/**
+ * Phase 3.4 (B14) — two-tier column caps, single source of truth.
+ * MAX_IMPORT_COLS (50) is the PARSE cap: plain TipTap tables keep up to 50
+ * columns. The Smart Table STORE caps at TABLE_LIMITS.MAX_COLS (26) via
+ * normalizeColumns. xlsx-import warns with the exact dropped count instead
+ * of slicing silently — never raise one cap without the other + its warning.
+ */
+export { TABLE_LIMITS } from '../grid/table-guards';
+
 export type ImportKind = 'docx' | 'xlsx';
 
 export interface ImportValidationResult {

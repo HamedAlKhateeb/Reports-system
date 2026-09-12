@@ -7,6 +7,7 @@ import {
   colIndexToName,
   colNameToIndex,
   evaluateFormula,
+  formatCellDisplay,
   adjustFormula,
   isFormulaError,
   extractFormulaRefs,
@@ -2296,7 +2297,7 @@ export function SmartTable({
                                   : 'left'),
                             }}
                           >
-                            {displayVal !== null && displayVal !== undefined ? String(displayVal) : ''}
+                            {formatCellDisplay(displayVal)}
                           </span>
                         </div>
                       )}

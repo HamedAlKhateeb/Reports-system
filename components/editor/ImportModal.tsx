@@ -346,6 +346,20 @@ export function ImportModal({ open, initialKind, editor, reportId, onClose }: Im
                 ))}
               </ul>
             )}
+            {/* Phase 3.4/3.5 (B14/B15): path-specific loss warnings — smart
+                vs plain insert lose different things. */}
+            {(() => {
+              const pathWarnings = xlsxResult.sheets.flatMap((s) =>
+                asSmartTable ? s.smartWarnings : s.nativeWarnings
+              );
+              return pathWarnings.length > 0 ? (
+                <ul className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-[11px] text-amber-800 dark:text-amber-300 space-y-1">
+                  {pathWarnings.map((w) => (
+                    <li key={w}>• {w}</li>
+                  ))}
+                </ul>
+              ) : null;
+            })()}
             <label className="flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer">
               <input
                 type="checkbox"

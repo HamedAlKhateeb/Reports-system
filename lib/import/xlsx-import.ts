@@ -11,6 +11,8 @@
  */
 
 import { MAX_IMPORT_SHEETS, MAX_IMPORT_ROWS, MAX_IMPORT_COLS } from './validation';
+import { TABLE_LIMITS } from '../grid/table-guards';
+import { colNameToIndex } from '../grid/formula-parser';
 
 export interface NormalizedSheet {
   name: string;
@@ -20,6 +22,13 @@ export interface NormalizedSheet {
   colCount: number;
   truncated: boolean;
   merges: Array<{ start: string; end: string }>;
+  /**
+   * Phase 3.4/3.5 (B14/B15): path-specific loss warnings, surfaced by
+   * ImportModal depending on the plain/smart toggle. Previously all of
+   * this was lost silently.
+   */
+  smartWarnings: string[];
+  nativeWarnings: string[];
 }
 
 export interface XlsxImportResult {
@@ -103,6 +112,8 @@ export function normalizeSheetGrid(rawGrid: unknown[][], rawName: string, index:
     colCount,
     truncated,
     merges: [],
+    smartWarnings: [],
+    nativeWarnings: [],
   };
 }
 
@@ -137,6 +148,10 @@ export async function parseXlsxFile(file: File): Promise<XlsxImportResult> {
     const ws = workbook.Sheets[sheetName];
     if (!ws) continue;
     let grid: unknown[][] = [];
+    // Phase 3.5 (B15): lossy-conversion counters for explicit warnings.
+    let dateCells = 0;
+    let boolCells = 0;
+    let formulaCells = 0;
     try {
       // Formulas: prefer the stored formula text (Smart Tables evaluate `=…`
       // natively); fall back to the cached value otherwise.
@@ -150,9 +165,13 @@ export async function parseXlsxFile(file: File): Promise<XlsxImportResult> {
           if (!cell) {
             row.push('');
           } else if (typeof cell.f === 'string' && cell.f) {
+            formulaCells++;
             row.push(`=${cell.f}`);
           } else {
-            row.push((cell as any).v ?? '');
+            const v = (cell as any).v;
+            if (v instanceof Date) dateCells++;
+            else if (typeof v === 'boolean') boolCells++;
+            row.push(v ?? '');
           }
         }
         rows.push(row);
@@ -182,6 +201,36 @@ export async function parseXlsxFile(file: File): Promise<XlsxImportResult> {
     if (normalized.truncated) {
       warnings.push(
         `Sheet "${normalized.name}" was truncated to ${MAX_IMPORT_ROWS} rows × ${MAX_IMPORT_COLS} columns.`
+      );
+    }
+    // Phase 3.5 (B15): type flattening is inherent to the string grid —
+    // warn instead of losing it silently (both insert paths).
+    if (dateCells > 0) {
+      warnings.push(
+        `Sheet "${normalized.name}": ${dateCells} date cell(s) imported as text (YYYY-MM-DD).`
+      );
+    }
+    if (boolCells > 0) {
+      warnings.push(
+        `Sheet "${normalized.name}": ${boolCells} boolean cell(s) imported as text (TRUE/FALSE).`
+      );
+    }
+    // Phase 3.4 (B14): the Smart Table store caps columns at
+    // TABLE_LIMITS.MAX_COLS — warn with the exact dropped count.
+    if (normalized.colCount > TABLE_LIMITS.MAX_COLS) {
+      normalized.smartWarnings.push(
+        `Sheet "${normalized.name}": ${normalized.colCount - TABLE_LIMITS.MAX_COLS} column(s) will be dropped in smart tables (limit ${TABLE_LIMITS.MAX_COLS}). Use plain-table insert to keep all ${normalized.colCount}.`
+      );
+    }
+    // Phase 3.5 (B15): path-specific merge/formula notes.
+    if (normalized.merges.length > 0) {
+      normalized.nativeWarnings.push(
+        `Sheet "${normalized.name}": ${normalized.merges.length} merged range(s) will be flattened in plain-table insert. Use smart-table import to preserve them.`
+      );
+    }
+    if (formulaCells > 0) {
+      normalized.nativeWarnings.push(
+        `Sheet "${normalized.name}": ${formulaCells} formula cell(s) will appear as literal text in plain tables. Use smart-table import to compute them.`
       );
     }
     sheets.push(normalized);
@@ -233,6 +282,16 @@ export function sheetsToTipTapNodes(sheets: NormalizedSheet[]): any[] {
   return nodes;
 }
 
+/** Parse an "A1"-style coord into 0-based col / 1-based row. */
+function parseMergeCoord(coord: string): { col: number; row: number } | null {
+  const m = /^([A-Za-z]+)([0-9]+)$/.exec(String(coord || '').trim());
+  if (!m) return null;
+  const col = colNameToIndex(m[1]);
+  const row = parseInt(m[2], 10);
+  if (col < 0 || !Number.isInteger(row) || row < 1) return null;
+  return { col, row };
+}
+
 /** Build an existing-shape TableEntity for the Smart Table path (no new architecture). */
 export function sheetToSmartTableEntity(
   sheet: NormalizedSheet,
@@ -240,7 +299,10 @@ export function sheetToSmartTableEntity(
   tableId: string,
   isAr: boolean
 ): any {
-  const colCount = Math.max(sheet.colCount, 1);
+  // Phase 3.4 (B14): hard-cap at the store limit here (saveTable would
+  // slice silently via normalizeColumns); the drop is already warned in
+  // sheet.smartWarnings at parse time.
+  const colCount = Math.max(Math.min(sheet.colCount, TABLE_LIMITS.MAX_COLS), 1);
   const columns = Array.from({ length: colCount }, (_, i) => {
     const id = colIndexToName(i);
     return {
@@ -257,6 +319,53 @@ export function sheetToSmartTableEntity(
     });
     return record;
   });
+  const dataRowCount = Math.max(rows.length, 1);
+  // Phase 3.5 (B15): preserve merges (clamped to the surviving grid)
+  // instead of dropping them. Sheet row 1 is the header (stored as column
+  // names, NOT in rows_data), so entity rowNum = sheetRow - 1. Merges
+  // touching only the header row cannot be represented and are dropped
+  // with a count (warned below).
+  const mergedCells: Array<{ start: string; end: string; rowSpan?: number; colSpan?: number }> = [];
+  let droppedMerges = 0;
+  for (const m of sheet.merges || []) {
+    const s = parseMergeCoord(m.start);
+    const e = parseMergeCoord(m.end);
+    if (!s || !e) {
+      droppedMerges++;
+      continue;
+    }
+    const cMin = Math.min(s.col, e.col);
+    const cMax = Math.max(s.col, e.col);
+    const rMinE = Math.min(s.row, e.row) - 1;
+    const rMaxE = Math.max(s.row, e.row) - 1;
+    // Single-cell "merges" are noise; ranges fully outside the kept grid
+    // (incl. header-only) are dropped.
+    if (cMin === cMax && rMinE === rMaxE) continue;
+    if (cMin >= colCount || rMaxE < 1 || rMinE > dataRowCount) {
+      droppedMerges++;
+      continue;
+    }
+    const cc = Math.min(cMax, colCount - 1);
+    const rr = Math.min(rMaxE, dataRowCount);
+    const r0 = Math.max(rMinE, 1);
+    if (cc < cMin || rr < r0 || (cc === cMin && rr === r0)) {
+      droppedMerges++;
+      continue;
+    }
+    const start = `${colIndexToName(cMin)}${r0}`;
+    const end = `${colIndexToName(cc)}${rr}`;
+    mergedCells.push({
+      start,
+      end,
+      rowSpan: rr - r0 + 1,
+      colSpan: cc - cMin + 1,
+    });
+  }
+  if (droppedMerges > 0) {
+    sheet.smartWarnings.push(
+      `Sheet "${sheet.name}": ${droppedMerges} merged range(s) outside the kept grid were dropped.`
+    );
+  }
   const now = new Date().toISOString();
   return {
     id: tableId,
@@ -264,7 +373,7 @@ export function sheetToSmartTableEntity(
     name: sheet.name || (isAr ? 'جدول مستورد' : 'Imported table'),
     direction: isAr ? 'rtl' : 'ltr',
     cell_formats: {},
-    merged_cells: [],
+    merged_cells: mergedCells,
     columns_data: columns,
     rows_data: rows.length > 0 ? rows : [Object.fromEntries(columns.map((c) => [c.id, '']))],
     version: 1,
