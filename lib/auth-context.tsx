@@ -9,6 +9,7 @@ import {
   signInWithRedirect,
   getRedirectResult,
   sendEmailVerification,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -35,6 +36,8 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   sendVerificationEmail: () => Promise<void>;
   reloadUser: () => Promise<void>;
+  /** Password reset: sends a reset link via Firebase, or local guidance. */
+  sendPasswordReset: (email: string) => Promise<{ ok: boolean; code: string }>;
   error: string | null;
   clearError: () => void;
 }
@@ -505,6 +508,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  /**
+   * Password reset ("forgot password" path — previously missing entirely).
+   * Firebase: sends the reset link to the account email (works for accounts
+   * created via email/password; Google-only accounts have no password and
+   * get a dedicated message). Local/demo mode: no mailer exists, so we
+   * return a code the UI turns into guidance instead of fake success.
+   */
+  const sendPasswordReset = async (email: string): Promise<{ ok: boolean; code: string }> => {
+    const normalized = email.trim().toLowerCase();
+    if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+      return { ok: false, code: 'auth/invalid-email' };
+    }
+    if (isFirebaseConfigured && auth) {
+      try {
+        await sendPasswordResetEmail(auth, normalized);
+        return { ok: true, code: 'reset-sent' };
+      } catch (err: any) {
+        const code = err?.code || 'reset-failed';
+        // Do not leak account existence, but surface actionable codes.
+        if (code === 'auth/user-not-found') return { ok: false, code };
+        if (code === 'auth/invalid-email') return { ok: false, code };
+        if (code === 'auth/too-many-requests') return { ok: false, code };
+        if (code === 'auth/network-request-failed') return { ok: false, code };
+        return { ok: false, code: 'reset-failed' };
+      }
+    }
+    return { ok: false, code: 'local-mode-no-mailer' };
+  };
+
   const reloadUser = async () => {
     if (isFirebaseConfigured && auth?.currentUser) {
       await auth.currentUser.reload();
@@ -572,6 +604,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signOut,
         sendVerificationEmail,
         reloadUser,
+        sendPasswordReset,
         error,
         clearError,
       }}

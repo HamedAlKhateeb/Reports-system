@@ -20,7 +20,7 @@ function LoginFormContent() {
   const searchParams = useSearchParams();
   const redirectPath = searchParams.get('redirect') || '/reports';
 
-  const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, error: authContextError, clearError } = useAuth();
+  const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, sendPasswordReset, error: authContextError, clearError } = useAuth();
   const { lang, setLang, t } = useLanguage();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
@@ -31,6 +31,9 @@ function LoginFormContent() {
   const [localError, setLocalError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Forgot-password flow (previously missing entirely).
+  const [resetMode, setResetMode] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
 
   const toggleLanguage = () => {
     setLang(lang === 'ar' ? 'en' : 'ar');
@@ -80,8 +83,19 @@ function LoginFormContent() {
         setLocalError(lang === 'ar' ? 'هذا البريد الإلكتروني مسجل بالفعل. يرجى تسجيل الدخول.' : 'This email is already registered. Please sign in.');
       } else if (err.code === 'auth/weak-password') {
         setLocalError(t('passwordTooShort'));
-      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
-        setLocalError(t('invalidCredentialsError'));
+      } else if (
+        err.code === 'auth/wrong-password' ||
+        err.code === 'auth/invalid-credential' ||
+        err.code === 'auth/user-not-found' ||
+        err.code === 'auth/invalid-email'
+      ) {
+        setLocalError(
+          lang === 'ar'
+            ? 'بيانات الدخول غير صحيحة (البريد أو كلمة السر). جرّب "نسيت كلمة السر؟" إن كنت لا تتذكرها.'
+            : 'Invalid credentials (email or password). Try "Forgot password?" if you cannot recall it.'
+        );
+      } else if (err.code === 'auth/too-many-requests') {
+        setLocalError(lang === 'ar' ? 'محاولات كثيرة — انتظر قليلًا ثم حاول مجددًا.' : 'Too many attempts — wait a bit and retry.');
       } else if (err.message === 'unauthorizedUserError') {
         setLocalError(t('unauthorizedUserError'));
       } else {
@@ -139,8 +153,54 @@ function LoginFormContent() {
     }
   };
 
-  const handleGuestLogin = async () => {
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
     setLocalError(null);
+    setSuccessMessage(null);
+    clearError();
+    if (!email.trim()) {
+      setLocalError(lang === 'ar' ? 'أدخل بريدك الإلكتروني أولًا.' : 'Enter your email first.');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      const res = await sendPasswordReset(email);
+      if (res.ok) {
+        setResetSent(true);
+        setSuccessMessage(
+          lang === 'ar'
+            ? 'أرسلنا رابط استعادة كلمة السر إلى بريدك. تحقق من الوارد وSpam/Junk، الرابط صالح لساعة واحدة.'
+            : 'Password reset link sent. Check your inbox and Spam/Junk — the link is valid for one hour.'
+        );
+      } else if (res.code === 'auth/user-not-found') {
+        // Same generic message either way (no account enumeration).
+        setResetSent(true);
+        setSuccessMessage(
+          lang === 'ar'
+            ? 'إذا كان هذا البريد مسجلًا ستصلك رسالة الاستعادة خلال دقائق. تحقق أيضًا من Spam/Junk.'
+            : 'If this email is registered, a reset message will arrive within minutes. Also check Spam/Junk.'
+        );
+      } else if (res.code === 'auth/too-many-requests') {
+        setLocalError(lang === 'ar' ? 'محاولات كثيرة — انتظر قليلًا ثم حاول مجددًا.' : 'Too many attempts — wait a bit and retry.');
+      } else if (res.code === 'auth/network-request-failed') {
+        setLocalError(lang === 'ar' ? 'تعذر الاتصال — تحقق من الإنترنت وحاول مجددًا.' : 'Network error — check your connection and retry.');
+      } else if (res.code === 'local-mode-no-mailer') {
+        setLocalError(
+          lang === 'ar'
+            ? 'وضع عدم الاتصال: لا يوجد مرسل بريد. أنشئ حسابًا جديدًا من تبويب التسجيل أو ادخل كضيف.'
+            : 'Offline mode: no mailer available. Create a new account from Sign Up or continue as Guest.'
+        );
+      } else {
+        setLocalError(lang === 'ar' ? 'تعذر إرسال رابط الاستعادة. حاول مجددًا.' : 'Could not send the reset link. Try again.');
+      }
+    } catch {
+      setLocalError(lang === 'ar' ? 'تعذر إرسال رابط الاستعادة. حاول مجددًا.' : 'Could not send the reset link. Try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGuestLogin = async () => {    setLocalError(null);
     setSuccessMessage(null);
     clearError();
     try {
@@ -186,20 +246,22 @@ function LoginFormContent() {
 
           <CardContent className="space-y-4">
             {/* Mode Switcher Tabs (Sign In vs Sign Up) */}
-            <Tabs
-              value={mode}
-              onValueChange={(val) => {
-                setMode(val as 'signin' | 'signup');
-                setLocalError(null);
-                setSuccessMessage(null);
-              }}
-              className="w-full"
-            >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="signin">{t('login')}</TabsTrigger>
-                <TabsTrigger value="signup">{t('signUp')}</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            {!resetMode && (
+              <Tabs
+                value={mode}
+                onValueChange={(val) => {
+                  setMode(val as 'signin' | 'signup');
+                  setLocalError(null);
+                  setSuccessMessage(null);
+                }}
+                className="w-full"
+              >
+                <TabsList className="grid w-full grid-cols-2">
+                  <TabsTrigger value="signin">{t('login')}</TabsTrigger>
+                  <TabsTrigger value="signup">{t('signUp')}</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            )}
 
             {/* Success Banner */}
             {successMessage && (
@@ -218,7 +280,52 @@ function LoginFormContent() {
             )}
 
             {/* Form */}
-            <form onSubmit={handleEmailSubmit} className="space-y-4">
+            {resetMode ? (
+              <form onSubmit={handlePasswordReset} className="space-y-4">
+                <div className="rounded-xl border border-border bg-muted/30 p-3 text-xs text-muted-foreground leading-relaxed">
+                  {lang === 'ar'
+                    ? 'أدخل بريد حسابك وسنرسل لك رابطًا لتعيين كلمة سر جديدة.'
+                    : 'Enter your account email and we will send you a link to set a new password.'}
+                </div>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="resetEmail">{t('email')}</FieldLabel>
+                    <div className="relative">
+                      <div className="pointer-events-none absolute inset-y-0 start-0 flex items-center ps-3 text-muted-foreground">
+                        <Mail className="size-4" />
+                      </div>
+                      <Input
+                        id="resetEmail"
+                        type="email"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder={t('emailPlaceholder')}
+                        required
+                        className="ps-9 text-xs"
+                        dir="ltr"
+                      />
+                    </div>
+                  </Field>
+                </FieldGroup>
+                <Button type="submit" disabled={submitting || resetSent} className="w-full" size="default">
+                  {submitting ? t('loading') : lang === 'ar' ? 'إرسال رابط الاستعادة' : 'Send reset link'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full text-xs"
+                  onClick={() => {
+                    setResetMode(false);
+                    setResetSent(false);
+                    setLocalError(null);
+                    setSuccessMessage(null);
+                  }}
+                >
+                  {lang === 'ar' ? '← عودة لتسجيل الدخول' : '← Back to sign in'}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleEmailSubmit} className="space-y-4">
               <FieldGroup>
                 {mode === 'signup' && (
                   <Field>
@@ -308,7 +415,24 @@ function LoginFormContent() {
                   ? t('createAccountBtn')
                   : t('signInWithEmail')}
               </Button>
+              {mode === 'signin' && (
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetMode(true);
+                      setResetSent(false);
+                      setLocalError(null);
+                      setSuccessMessage(null);
+                    }}
+                    className="text-xs font-semibold text-primary hover:underline"
+                  >
+                    {lang === 'ar' ? 'نسيت كلمة السر؟' : 'Forgot password?'}
+                  </button>
+                </div>
+              )}
             </form>
+            )}
 
             {/* Divider */}
             <div className="relative my-4 flex items-center justify-center">
