@@ -1286,6 +1286,16 @@ export function SmartTable({
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       if (readOnly) return;
+      // Collect cleared coords first: only these cells are touched. Formulas
+      // elsewhere keep their text — dependents simply re-evaluate (never deleted).
+      const cleared = new Set<string>();
+      const inRect = (rIdx: number) => !selectionRect || (rIdx >= selectionRect.r1 && rIdx <= selectionRect.r2);
+      rows.forEach((r, i) => {
+        if (!inRect(i)) return;
+        forEachSelectionCoord((c) => {
+          if (columns[c]) cleared.add(coordOf(c, i));
+        });
+      });
       pushHistory('Clear selection');
       const newRows = rows.map((r, i) => {
         const inRow =
@@ -1299,6 +1309,31 @@ export function SmartTable({
         return copy;
       });
       commitChanges(columns, newRows);
+      // Warn when cleared cells feed other formulas, so blank dependents are
+      // understood (their formulas are intact — only the source was cleared).
+      try {
+        if (cleared.size > 0) {
+          let dependents = 0;
+          rows.forEach((r, i) => {
+            columns.forEach((c, cIdx) => {
+              const coord = coordOf(cIdx, i);
+              if (cleared.has(coord)) return;
+              const v = (r as Record<string, unknown>)?.[c.id];
+              if (typeof v !== 'string' || !v.startsWith('=')) return;
+              const refs = extractFormulaRefs(v);
+              if (refs.some((ref) => cleared.has(ref))) dependents++;
+            });
+          });
+          if (dependents > 0) {
+            toast({
+              title: isAr
+                ? `تم مسح ${cleared.size} خلية — ${dependents} خلايا مرتبطة ستعرض قيمًا فارغة (معادلاتها محفوظة).`
+                : `Cleared ${cleared.size} cell(s) — ${dependents} linked cell(s) will show blank (their formulas are kept).`,
+              type: 'info',
+            });
+          }
+        }
+      } catch {}
     } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
       startEditing(e.key);
     }
@@ -1357,8 +1392,10 @@ export function SmartTable({
       return updatedRow;
     });
 
-    // Carry the source cell's formatting (align/position, bold, italic,
-    // underline) onto every filled cell — like Excel's fill behavior.
+    // Carry the source cell's character styling (bold, italic, underline)
+    // onto every filled cell — like Excel's fill behavior. Alignment and
+    // direction are deliberately NOT carried: the target cells keep their own
+    // layout so autofill never flips text direction.
     const updatedFormats = { ...cellFormats };
     try {
       const sourceCoord = `${col.id}${sourceRowIdx + 1}`.toUpperCase();
@@ -1369,8 +1406,13 @@ export function SmartTable({
         if (r === sourceRowIdx) continue;
         const coord = `${col.id}${r + 1}`.toUpperCase();
         if (res.newCells[coord] === undefined) continue;
-        if (sourceFmt) updatedFormats[coord] = safeClone(sourceFmt, {});
-        else delete updatedFormats[coord];
+        if (sourceFmt) {
+          const { align, horizontalAlign, ...charStyle } = sourceFmt as Record<string, unknown>;
+          void align;
+          void horizontalAlign;
+          if (Object.keys(charStyle).length > 0) updatedFormats[coord] = safeClone(charStyle, {}) as CellFormat;
+          else delete updatedFormats[coord];
+        } else delete updatedFormats[coord];
       }
     } catch (e) {
       console.error('Autofill format carry failed (ignored):', e);

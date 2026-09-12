@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { PageLoading } from '@/components/ui/loading';
 import {
   CounterConsistencyReport,
   verifyCounterConsistency,
@@ -54,6 +55,42 @@ export function DiscrepancyInspectorModal({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isFixing, setIsFixing] = useState(false);
 
+  // Fetch on open (never during render — a render-phase fetch caused an
+  // update loop that left the matching check blank/broken).
+  const [fetchedFor, setFetchedFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isOpen) {
+      setFetchedFor(null);
+      return;
+    }
+    if (initialReport) {
+      setReport(initialReport);
+      setFetchedFor(`${reportId}:initial`);
+      return;
+    }
+    if (fetchedFor === reportId) return;
+    setFetchedFor(reportId);
+    let cancelled = false;
+    (async () => {
+      try {
+        setIsRefreshing(true);
+        const res = await verifyCounterConsistency(reportId, userUid);
+        if (!cancelled) setReport(res);
+      } catch (e: any) {
+        if (!cancelled) {
+          toast.error(isAr ? 'فشل فحص اتساق العدادات' : 'Failed to verify counters', {
+            description: e?.message,
+          });
+        }
+      } finally {
+        if (!cancelled) setIsRefreshing(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, reportId, initialReport, userUid, fetchedFor, isAr]);
+
   const handleRefresh = async () => {
     try {
       setIsRefreshing(true);
@@ -85,10 +122,6 @@ export function DiscrepancyInspectorModal({
       setIsFixing(false);
     }
   };
-
-  if (!report && isOpen) {
-    handleRefresh();
-  }
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -126,6 +159,12 @@ export function DiscrepancyInspectorModal({
             </Button>
           </div>
         </DialogHeader>
+
+        {!report && (
+          <div className="py-10">
+            <PageLoading label={isAr ? 'جاري فحص المطابقة...' : 'Running matching check...'} className="flex-col" />
+          </div>
+        )}
 
         {report && (
           <div className="space-y-4 py-2 overflow-y-auto">

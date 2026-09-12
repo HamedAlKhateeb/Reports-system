@@ -1,6 +1,6 @@
 /**
  * Import pipeline tests: DOCX normalization, XLSX normalization, validation,
- * error handling, large-file guards, and Candidate/Problem side-by-side UI.
+ * error handling, large-file guards, and Similarity/Matching Action Center UI.
  *
  * Run via: npx tsx scripts/tests/test-import-docx-xlsx.ts
  * (also auto-discovered by scripts/test-runner.mjs)
@@ -186,16 +186,19 @@ await check('sheetToSmartTableEntity matches existing TableEntity shape', () => 
   assert.ok(entity.version === 1 && Array.isArray(entity.merged_cells));
 });
 
-// ------------------------------------------------- Candidate/Problem UI nav
-console.log('\nCandidate/Problem navigation:');
-await check('top bar shows both inspections side by side (no dropdown)', () => {
-  const src = readFileSync(join(process.cwd(), 'app', 'reports', '[id]', 'page.tsx'), 'utf8');
-  assert.ok(src.includes('Candidate Inspection'), 'missing Candidate Inspection button');
-  assert.ok(src.includes('Problem Inspection'), 'missing Problem Inspection button');
-  assert.ok(!src.includes('showScanMenu'), 'dropdown state still present');
-  assert.ok(!src.includes('فحص التقرير (المرشحين / المطابقة)'), 'old dropdown title still present');
-  assert.ok(src.includes('handleScanCandidates'), 'candidate handler wiring missing');
-  assert.ok(src.includes('handleOpenInspector'), 'inspector handler wiring missing');
+// ------------------------------------------------- Similarity/Matching UI nav
+console.log('\nSimilarity/Matching navigation:');
+await check('inspections live in the Issues tab Action Center (not the top bar)', () => {
+  const pageSrc = readFileSync(join(process.cwd(), 'app', 'reports', '[id]', 'page.tsx'), 'utf8');
+  const tabSrc = readFileSync(join(process.cwd(), 'components', 'reports', 'tabs', 'IssuesTab.tsx'), 'utf8');
+  assert.ok(!pageSrc.includes('Candidate Inspection'), 'top-bar Candidate button still present');
+  assert.ok(!pageSrc.includes('Problem Inspection'), 'top-bar Problem button still present');
+  assert.ok(!pageSrc.includes('showScanMenu'), 'dropdown state still present');
+  assert.ok(!pageSrc.includes('??? ??????? (???????? / ????????)'), 'old dropdown title still present');
+  assert.ok(tabSrc.includes('فحص التشابه'), 'missing Similarity Check button in Action Center');
+  assert.ok(tabSrc.includes('فحص المطابقة'), 'missing Matching Check button in Action Center');
+  assert.ok(pageSrc.includes('handleScanCandidates'), 'candidate handler wiring missing');
+  assert.ok(pageSrc.includes('handleOpenInspector'), 'inspector handler wiring missing');
 });
 
 console.log(`\n=============================================\nImport Test Results: ${passed} passed, ${failed} failed\n=============================================`);

@@ -16,6 +16,7 @@ import {
   X,
   AlertOctagon,
   HelpCircle,
+  Kanban,
   ScanSearch,
   Plus,
   ArrowUpRight,
@@ -32,13 +33,14 @@ import {
   TableCell,
 } from '@/components/ui/table';
 import { AnalysisTable } from '@/components/reports/AnalysisTable';
+import { cn } from '@/lib/utils';
+import Link from 'next/link';
 import {
   normalizeSeverity,
   normalizeStatus,
   getSeverityLabel,
   getStatusLabel,
 } from '@/lib/i18n/dictionary';
-import { cn } from '@/lib/utils';
 
 interface IssuesTabProps {
   report: ReportItem;
@@ -203,7 +205,7 @@ export function IssuesTab({
               className="h-9 bg-[#2E4034] text-white hover:bg-[#24382F] gap-1.5 text-xs font-semibold shadow-xs"
             >
               <ScanSearch className="h-3.5 w-3.5 text-olive-300" />
-              <span>{isAr ? 'فحص المرشحين' : 'Scan Candidates'}</span>
+              <span>{isAr ? 'فحص التشابه' : 'Similarity Check'}</span>
             </Button>
             <Button
               type="button"
@@ -254,6 +256,19 @@ export function IssuesTab({
             >
               <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
               <span>{isAr ? 'مزامنة المشاكل' : 'Sync Issues'}</span>
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              asChild
+              className="h-9 gap-1.5 text-xs font-semibold shadow-2xs"
+              title={isAr ? 'فتح صفحة المشاكل لهذا التقرير' : 'Open the issues page for this report'}
+            >
+              <Link href={`/dashboard?report=${report.id}`}>
+                <Kanban className="h-3.5 w-3.5 text-primary" />
+                <span>{isAr ? 'صفحة المشاكل' : 'Issues Page'}</span>
+              </Link>
             </Button>
           </div>
         </div>
@@ -437,8 +452,8 @@ export function IssuesTab({
                     ? 'جرّب تعديل الفلاتر أو مسحها لعرض كافة المشاكل المسجلة.'
                     : 'Try clearing or modifying the active filters.'
                   : isAr
-                  ? 'يمكنك فحص محتوى الجداول واستخراج المشاكل آلياً عبر الضغط على "فحص المرشحين".'
-                  : 'You can extract candidate issues from report tables using the scanner.'}
+                  ? 'يمكنك فحص محتوى الجداول واكتشاف البنود المتشابهة آلياً عبر الضغط على "فحص التشابه".'
+                  : 'You can scan report tables and detect similar items using the similarity check.'}
               </p>
             </div>
             {hasActiveFilters ? (
@@ -460,7 +475,7 @@ export function IssuesTab({
                 className="h-8 bg-[#2E4034] text-white hover:bg-[#24382F] text-xs font-semibold"
               >
                 <Sparkles className="h-3.5 w-3.5 me-1 text-olive-300" />
-                <span>{isAr ? 'فحص المرشحين الآن' : 'Scan Candidates Now'}</span>
+                <span>{isAr ? 'فحص التشابه الآن' : 'Run Similarity Check Now'}</span>
               </Button>
             )}
           </div>
@@ -534,8 +549,11 @@ export function IssuesTab({
         )}
       </div>
 
-      {/* 4. Embedded Analysis Table Component */}
-      <div className="pt-2">
+      {/* Headless AnalysisTable: its visible section was removed (duplicate),
+          but the Detect/Add/Sync buttons above drive its logic through window
+          events. Kept mounted hidden — its Dialog modals portal to <body> so
+          they still appear normally. */}
+      <div className="hidden" aria-hidden="true">
         <AnalysisTable
           report={report}
           liveEditorRef={liveEditorRef}

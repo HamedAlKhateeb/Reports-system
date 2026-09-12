@@ -384,23 +384,22 @@ export default function InstructionsPage() {
       icon: ScanSearch,
       badgeAr: 'الفحص والمشاكل',
       badgeEn: 'Scan & Issues',
-      titleAr: 'فحص المرشحين والمطابقة وإدارة المشاكل (الواجهة الموحدة)',
-      titleEn: 'Candidate Scan, Matching & Issue Management (Unified UI)',
-      summaryAr: 'كل عمليات الفحص والمشاكل تُدار من Action Center واحد داخل تبويب المشاكل والمطابقة، مع زر فحص سريع في الشريط العلوي.',
-      summaryEn: 'All scan and issue operations run from one Action Center inside the Issues & Matching tab, with a quick Scan shortcut up top.',
+      titleAr: 'فحص التشابه والمطابقة وإدارة المشاكل (الواجهة الموحدة)',
+      titleEn: 'Similarity Check, Matching & Issue Management (Unified UI)',
+      summaryAr: 'كل عمليات الفحص والمشاكل تُدار من Action Center واحد داخل تبويب المشاكل والمطابقة.',
+      summaryEn: 'All scan and issue operations run from one Action Center inside the Issues & Matching tab.',
       contentAr: (
         <div className="space-y-4 text-sm text-foreground/90 leading-relaxed">
           <div className="rounded-xl border p-4 bg-card space-y-2">
-            <h5 className="font-bold text-xs text-foreground">أين تجد كل أداة (بعد إعادة التنظيم):</h5>
+            <h5 className="font-bold text-xs text-foreground">أين تجد كل أداة:</h5>
             <ul className="text-xs text-muted-foreground space-y-1.5 list-disc ps-5">
-              <li><strong>الشريط العلوي:</strong> زر واحد <strong>فحص</strong> يفتح قائمة صغيرة (فحص المرشحين / فحص المطابقة) للوصول السريع فقط.</li>
-              <li><strong>تبويب المشاكل والمطابقة:</strong> يحتوي <strong>Action Center</strong> ثابتاً أثناء التمرير، مقسماً إلى مجموعتين: <strong>الفحص</strong> (فحص المرشحين، فحص المطابقة) و<strong>المشاكل</strong> (فحص واكتشاف المشاكل، إضافة مشكلة، مزامنة المشاكل).</li>
+              <li><strong>تبويب المشاكل والمطابقة:</strong> يحتوي <strong>Action Center</strong> ثابتاً أثناء التمرير، مقسماً إلى مجموعتين: <strong>الفحص</strong> (فحص التشابه، فحص المطابقة) و<strong>المشاكل</strong> (فحص واكتشاف المشاكل، إضافة مشكلة، مزامنة المشاكل، صفحة المشاكل).</li>
             </ul>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
-              <h5 className="font-bold text-xs text-foreground">فحص المرشحين</h5>
-              <p className="text-xs text-muted-foreground">يستخرج مرشحي المشاكل من محتوى التقرير (الجداول والنصوص) ويعرضهم للمراجعة والقبول في لوحة المشاكل. يُستخدم بعد كتابة المحتوى أو استيراده.</p>
+              <h5 className="font-bold text-xs text-foreground">فحص التشابه</h5>
+              <p className="text-xs text-muted-foreground">يستخرج بنود المشاكل من محتوى التقرير (الجداول والنصوص) ويطابقها مع المشاكل المسجلة لاكتشاف التشابه والتكرار، ثم يعرضها للمراجعة والقبول في لوحة المشاكل.</p>
             </div>
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
               <h5 className="font-bold text-xs text-foreground">فحص المطابقة</h5>
@@ -408,7 +407,7 @@ export default function InstructionsPage() {
             </div>
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
               <h5 className="font-bold text-xs text-foreground">اكتشاف المشاكل</h5>
-              <p className="text-xs text-muted-foreground">يفحص جدول التقرير ويستخرج بنود المشاكل إلى جدول البيانات والتحليل أسفل نفس التبويب، مع تحديث النتائج تلقائياً.</p>
+              <p className="text-xs text-muted-foreground">يفحص جدول التقرير ويستخرج بنود المشاكل مع تحديث النتائج تلقائياً، ثم زامنها إلى لوحة المشاكل بزر المزامنة.</p>
             </div>
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
               <h5 className="font-bold text-xs text-foreground">إدارة المشاكل</h5>
@@ -422,14 +421,13 @@ export default function InstructionsPage() {
           <div className="rounded-xl border p-4 bg-card space-y-2">
             <h5 className="font-bold text-xs text-foreground">Where each tool lives (after reorganization):</h5>
             <ul className="text-xs text-muted-foreground space-y-1.5 list-disc ps-5">
-              <li><strong>Top bar:</strong> a single <strong>Scan</strong> shortcut opening a small menu (Scan Candidates / Matching Check).</li>
-              <li><strong>Issues & Matching tab:</strong> a sticky <strong>Action Center</strong> split into <strong>Scan</strong> (candidates, matching) and <strong>Issues</strong> (detect, add, sync).</li>
+              <li><strong>Issues & Matching tab:</strong> a sticky <strong>Action Center</strong> split into <strong>Scan</strong> (similarity, matching) and <strong>Issues</strong> (detect, add, sync, issues page).</li>
             </ul>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
-              <h5 className="font-bold text-xs text-foreground">Candidate Scan</h5>
-              <p className="text-xs text-muted-foreground">Extracts issue candidates from report content (tables and text) for review and approval into the issue board. Run after writing or importing content.</p>
+              <h5 className="font-bold text-xs text-foreground">Similarity Check</h5>
+              <p className="text-xs text-muted-foreground">Extracts issue items from report content (tables and text) and matches them against recorded issues to detect similarity and duplication, for review and approval into the issue board.</p>
             </div>
             <div className="border rounded-xl p-3.5 bg-card space-y-1.5">
               <h5 className="font-bold text-xs text-foreground">Matching Check</h5>

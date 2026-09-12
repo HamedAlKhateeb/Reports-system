@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -53,6 +53,16 @@ export function CandidateReviewModal({
     return scanResult.candidates.map((c) => c.tempId);
   });
   const [isApproving, setIsApproving] = useState(false);
+
+  // A fresh scan produces new tempIds — resync selection instead of keeping
+  // the previous scan's (stale) ids, which silently approved the wrong set.
+  useEffect(() => {
+    if (scanResult) {
+      setSelectedCandidateIds(scanResult.candidates.map((c) => c.tempId));
+    } else {
+      setSelectedCandidateIds([]);
+    }
+  }, [scanResult]);
 
   if (!scanResult) return null;
 
@@ -117,12 +127,12 @@ export function CandidateReviewModal({
             </div>
             <div>
               <DialogTitle className="text-base font-bold">
-                {isAr ? 'مراجعة واعتماد المرشحين المستخرجين' : 'Review & Approve Extracted Candidates'}
+                {isAr ? 'مراجعة نتائج فحص التشابه' : 'Similarity Check Results'}
               </DialogTitle>
               <p className="text-xs text-muted-foreground">
                 {isAr
-                  ? 'تم فحص التقرير واكتشاف المرشحين ومطابقتهم لمنع أي تكرار قبل حفظهم في قاعدة البيانات.'
-                  : 'Report scanned. Review candidate classification before persisting.'}
+                  ? 'تم فحص التقرير واكتشاف البنود المتشابهة ومطابقتها مع المشاكل المسجلة لمنع أي تكرار قبل الحفظ.'
+                  : 'Report scanned. Review similar items matched against recorded issues before saving.'}
               </p>
             </div>
           </div>
@@ -189,7 +199,7 @@ export function CandidateReviewModal({
         <div className="flex-1 overflow-y-auto space-y-3 py-2 pr-1">
           {scanResult.candidates.length === 0 ? (
             <div className="py-12 text-center text-xs text-muted-foreground">
-              {isAr ? 'لم يتم العثور على أي مشاكل مرشحة في التقرير.' : 'No candidate issues detected.'}
+              {isAr ? 'لم يتم العثور على بنود متشابهة في التقرير.' : 'No similar items detected.'}
             </div>
           ) : (
             scanResult.candidates.map((cand) => {
