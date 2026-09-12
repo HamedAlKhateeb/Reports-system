@@ -120,6 +120,46 @@ export async function addAuthorizedUser(email: string): Promise<void> {
 // REPORTS
 // ==========================================
 
+function parseReportNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+/** Strict validation for manually edited report numbers (Phase 2.1/B7). */
+export function isValidReportNumber(value: unknown): boolean {
+  return parseReportNumber(value) !== null;
+}
+
+function userCounterStorageKey(userUid?: string): string {
+  return `${LOCAL_COUNTER_KEY}_${userUid || 'global'}`;
+}
+
+function collectLocalNumbers(userUid?: string): number[] {
+  const out: number[] = [];
+  const push = (r: ReportItem) => {
+    if (!userUid || r.ownerUid === userUid) {
+      const n = parseReportNumber(r.reportNumber);
+      if (n !== null) out.push(n);
+    }
+  };
+  if (userUid) {
+    getLocal<ReportItem[]>(`${LOCAL_REPORTS_KEY}_${userUid}`, []).forEach(push);
+  }
+  getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []).forEach(push);
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+          getLocal<ReportItem[]>(key, []).forEach(push);
+        }
+      }
+    } catch {}
+  }
+  return out;
+}
+
 export async function getNextReportNumber(userUid?: string): Promise<number> {
   const allNumbers: number[] = [];
 
@@ -138,11 +178,8 @@ export async function getNextReportNumber(userUid?: string): Promise<number> {
         snap = await getDocs(collection(db, 'reports'));
       }
       snap.docs.forEach((d) => {
-        const num = d.data()?.reportNumber;
-        const parsed = typeof num === 'number' ? num : parseInt(String(num), 10);
-        if (!isNaN(parsed) && parsed > 0) {
-          allNumbers.push(parsed);
-        }
+        const parsed = parseReportNumber(d.data()?.reportNumber);
+        if (parsed !== null) allNumbers.push(parsed);
       });
     } catch (e) {
       console.warn('Could not query reports collection to find next report number in Firestore', e);
@@ -150,59 +187,208 @@ export async function getNextReportNumber(userUid?: string): Promise<number> {
   }
 
   // 2. Collect numbers from LocalStorage
-  if (userUid) {
-    const userReports = getLocal<ReportItem[]>(`${LOCAL_REPORTS_KEY}_${userUid}`, []);
-    userReports.forEach((r) => {
-      const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
-      if (!isNaN(parsed) && parsed > 0) {
-        allNumbers.push(parsed);
+  collectLocalNumbers(userUid).forEach((n) => allNumbers.push(n));
+
+  // Next number is (highest existing report number + 1) or 1 if empty.
+  // NOTE (Phase 2.1/B7): this scan is NOT atomic — it is kept for
+  // migration/validation reads only. Allocation must use
+  // allocateReportNumber(). The old dead writes to LOCAL_COUNTER_KEY and
+  // `counters/reports` were removed (never read back).
+  const maxExisting = allNumbers.length > 0 ? Math.max(...allNumbers) : 0;
+  return maxExisting > 0 ? maxExisting + 1 : 1;
+}
+
+/**
+ * Phase 2.1 (B7) — single atomic allocator for report numbers.
+ *
+ * Firestore path: a per-user counter document `counters/reports_{uid}` is
+ * advanced inside a transaction together with an in-transaction max-scan of
+ * the user's reports, so concurrent creators always get distinct numbers
+ * and deleting the highest report never reuses its number (monotonic).
+ * Local path: per-user monotonic counter merged with the local max
+ * (atomic for a single tab; multi-tab races documented as residual).
+ */
+export async function allocateReportNumber(userUid?: string): Promise<number> {
+  const isGuest = !userUid || userUid.startsWith('guest_') || userUid === 'guest_user_session';
+
+  if (isFirebaseConfigured && db && userUid && !isGuest && auth?.currentUser) {
+    // Capture narrowed Firestore instance for the transaction closure.
+    const fdb = db;
+    try {
+      // Pre-transaction max-scan (transaction.get(query) is unsupported in
+      // firebase v10, so the scan happens here; the +1 step itself stays
+      // inside the serialized counter transaction below).
+      let preMax = 0;
+      try {
+        const q = query(collection(fdb, 'reports'), where('ownerUid', '==', userUid));
+        const snap = await getDocs(q);
+        snap.docs.forEach((d) => {
+          const n = parseReportNumber(d.data()?.reportNumber);
+          if (n !== null && n > preMax) preMax = n;
+        });
+      } catch {}
+      collectLocalNumbers(userUid).forEach((n) => {
+        if (n > preMax) preMax = n;
+      });
+
+      const counterRef = doc(fdb, 'counters', `reports_${userUid}`);
+      const next = await runTransaction(fdb, async (tx) => {
+        const cSnap = await tx.get(counterRef);
+        const counterVal = cSnap.exists()
+          ? parseReportNumber(cSnap.data()?.currentNumber) || 0
+          : 0;
+        // Serialized: concurrent creators queue here, each seeing the
+        // previous allocation — always distinct, never reusing deleted highs.
+        const allocated = Math.max(preMax, counterVal) + 1;
+        tx.set(counterRef, { currentNumber: allocated, ownerUid: userUid }, { merge: true });
+        return allocated;
+      });
+      return next;
+    } catch (e) {
+      console.warn('Atomic number allocation failed, falling back to local allocator', e);
+    }
+  }
+
+  // Local fallback (guests, offline, or transaction failure).
+  const key = userCounterStorageKey(userUid);
+  const stored = getLocal<number>(key, 0);
+  const localMax = collectLocalNumbers(userUid).reduce((m, n) => Math.max(m, n), 0);
+  const next = Math.max(Number.isInteger(stored) ? stored : 0, localMax) + 1;
+  setLocal(key, next);
+  return next;
+}
+
+/**
+ * Phase 2.1 (B7) — one-time/per-create migration: finds duplicate report
+ * numbers within a user's scope and reassigns them to fresh unique values.
+ * The earliest-created report keeps its number; later duplicates move up
+ * past the current max. Runs best-effort (never throws).
+ */
+export async function normalizeReportNumbers(
+  userUid?: string
+): Promise<{ fixed: number }> {
+  try {
+    if (!userUid) return { fixed: 0 };
+    const merged = new Map<string, ReportItem>();
+
+    if (isFirebaseConfigured && db && auth?.currentUser) {
+      try {
+        const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
+        const snap = await getDocs(q);
+        snap.docs.forEach((d) => {
+          merged.set(d.id, { id: d.id, ...(d.data() as object) } as ReportItem);
+        });
+      } catch {}
+    }
+    const pushLocal = (r: ReportItem) => {
+      if (r.ownerUid === userUid && !merged.has(r.id)) merged.set(r.id, r);
+    };
+    getLocal<ReportItem[]>(`${LOCAL_REPORTS_KEY}_${userUid}`, []).forEach(pushLocal);
+    getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []).forEach(pushLocal);
+
+    const byNumber = new Map<number, ReportItem[]>();
+    merged.forEach((r) => {
+      const n = parseReportNumber(r.reportNumber);
+      if (n !== null) {
+        const list = byNumber.get(n) || [];
+        list.push(r);
+        byNumber.set(n, list);
       }
     });
-  }
 
-  const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
-  globalReports.forEach((r) => {
-    if (!userUid || r.ownerUid === userUid) {
-      const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
-      if (!isNaN(parsed) && parsed > 0) {
-        allNumbers.push(parsed);
+    const dupes: ReportItem[] = [];
+    byNumber.forEach((list) => {
+      if (list.length > 1) {
+        list.sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+        dupes.push(...list.slice(1));
+      }
+    });
+    if (dupes.length === 0) return { fixed: 0 };
+
+    let maxSeen = 0;
+    merged.forEach((r) => {
+      const n = parseReportNumber(r.reportNumber);
+      if (n !== null && n > maxSeen) maxSeen = n;
+    });
+
+    let batch: any = null;
+    if (isFirebaseConfigured && db && auth?.currentUser) {
+      try {
+        batch = writeBatch(db);
+      } catch {
+        batch = null;
       }
     }
-  });
 
-  if (typeof window !== 'undefined') {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
-          const uReports = getLocal<ReportItem[]>(key, []);
-          uReports.forEach((r) => {
-            if (!userUid || r.ownerUid === userUid) {
-              const parsed = typeof r.reportNumber === 'number' ? r.reportNumber : parseInt(String(r.reportNumber), 10);
-              if (!isNaN(parsed) && parsed > 0) {
-                allNumbers.push(parsed);
+    for (const r of dupes) {
+      maxSeen += 1;
+      const now = new Date().toISOString();
+      if (batch) {
+        try {
+          batch.update(doc(db as any, 'reports', r.id), { reportNumber: maxSeen, updatedAt: now });
+        } catch {}
+      }
+      // Mirror into every local copy holding this report id.
+      if (typeof window !== 'undefined') {
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && key.startsWith(LOCAL_REPORTS_KEY)) {
+              const list = getLocal<ReportItem[]>(key, []);
+              const idx = list.findIndex((x) => x.id === r.id);
+              if (idx !== -1) {
+                list[idx] = { ...list[idx], reportNumber: maxSeen, updatedAt: now };
+                setLocal(key, list);
               }
             }
-          });
-        }
+          }
+        } catch {}
       }
-    } catch {}
+      const cur = merged.get(r.id);
+      if (cur) merged.set(r.id, { ...cur, reportNumber: maxSeen, updatedAt: now });
+    }
+
+    if (batch) {
+      try {
+        await batch.commit();
+      } catch (e) {
+        console.warn('normalizeReportNumbers batch commit failed', e);
+      }
+    }
+    return { fixed: dupes.length };
+  } catch {
+    return { fixed: 0 };
   }
+}
 
-  // Next number is (highest existing report number + 1) or 1 if empty
-  const maxExisting = allNumbers.length > 0 ? Math.max(...allNumbers) : 0;
-  const nextNum = maxExisting > 0 ? maxExisting + 1 : 1;
-
-  // Keep local counter and Firestore counter synchronized
-  setLocal(LOCAL_COUNTER_KEY, nextNum);
-  if (isFirebaseConfigured && db) {
-    try {
-      const counterRef = doc(db, 'counters', 'reports');
-      await setDoc(counterRef, { currentNumber: nextNum }, { merge: true });
-    } catch {}
+/** Phase 2.1 (B7): uniqueness probe for manual number edits. */
+export async function isReportNumberTaken(
+  userUid: string | undefined,
+  num: number,
+  excludeId?: string
+): Promise<boolean> {
+  if (!userUid || !Number.isInteger(num) || num <= 0) return false;
+  try {
+    if (isFirebaseConfigured && db && auth?.currentUser) {
+      try {
+        const q = query(collection(db, 'reports'), where('ownerUid', '==', userUid));
+        const snap = await getDocs(q);
+        for (const d of snap.docs) {
+          if (d.id !== excludeId && parseReportNumber(d.data()?.reportNumber) === num) return true;
+        }
+      } catch {}
+    }
+    const keys = [`${LOCAL_REPORTS_KEY}_${userUid}`, LOCAL_REPORTS_KEY];
+    for (const key of keys) {
+      const list = getLocal<ReportItem[]>(key, []);
+      if (list.some((r) => r.id !== excludeId && r.ownerUid === userUid && parseReportNumber(r.reportNumber) === num)) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
   }
-
-  return nextNum;
 }
 
 /**
@@ -321,7 +507,18 @@ export async function getReportById(id: string, userUid?: string): Promise<Repor
 export async function createReport(
   reportData: Omit<ReportItem, 'id' | 'reportNumber' | 'createdAt' | 'updatedAt'>
 ): Promise<ReportItem> {
-  const reportNumber = await getNextReportNumber(reportData.ownerUid);
+  // Phase 2.1 (B7): heal any pre-existing duplicates first, then allocate
+  // atomically. Both are best-effort — creation must never fail because of
+  // numbering.
+  try {
+    await normalizeReportNumbers(reportData.ownerUid);
+  } catch {}
+  let reportNumber: number;
+  try {
+    reportNumber = await allocateReportNumber(reportData.ownerUid);
+  } catch {
+    reportNumber = await getNextReportNumber(reportData.ownerUid);
+  }
   const now = new Date().toISOString();
 
   // Strip undefined values so Firestore addDoc never throws an invalid argument error
@@ -375,7 +572,7 @@ export async function createReport(
   return newReport;
 }
 
-export async function updateReport(id: string, partial: Partial<ReportItem>): Promise<void> {
+export async function updateReport(id: string, partial: Partial<ReportItem>): Promise<boolean> {
   const now = new Date().toISOString();
   const sanitizedPartial: any = {
     ...partial,
@@ -387,12 +584,29 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
     }
   });
 
+  // Phase 2.1 (B7): strict guard — an invalid manual number (0, negative,
+  // fractional, non-numeric) is never persisted. Returns false so callers
+  // can surface it instead of showing false success.
+  let valid = true;
+  if ('reportNumber' in sanitizedPartial) {
+    const n = parseReportNumber(sanitizedPartial.reportNumber);
+    if (n === null) {
+      console.warn(`updateReport: rejected invalid reportNumber for ${id}`, sanitizedPartial.reportNumber);
+      delete sanitizedPartial.reportNumber;
+      valid = false;
+    } else {
+      sanitizedPartial.reportNumber = n;
+    }
+  }
+
+  let firestoreOk = true;
   if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const docRef = doc(db, 'reports', id);
       await updateDoc(docRef, sanitizedPartial);
     } catch (e) {
       console.error('Failed to update report in Firestore', e);
+      firestoreOk = false;
     }
   }
 
@@ -436,6 +650,10 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
       }
     }
   }
+
+  // Phase 2.2 (B8): report persistence truthfully — false when the number
+  // was rejected or the Firestore write failed (local mirrors still apply).
+  return valid && firestoreOk;
 }
 
 /**
