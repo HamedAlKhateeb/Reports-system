@@ -51,6 +51,7 @@ import {
   moveReportToFolder,
   inviteToFolder,
   revokeFolderInvite,
+  findOrphanedReportOwners,
 } from '@/lib/db';
 import { ReportItem, FolderItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -122,6 +123,9 @@ export default function ReportsPage() {
   const [newReportLang, setNewReportLang] = useState<AppLanguage>(defaultReportLang);
   const [creating, setCreating] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  // Orphaned identities: reports stored under OTHER uids on this browser.
+  const [orphanInfo, setOrphanInfo] = useState<Array<{ ownerUid: string; count: number }>>([]);
   const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
 
   // Folder Modals state
@@ -170,6 +174,10 @@ export default function ReportsPage() {
       ]);
       setReports(reportsData);
       setFolders(foldersData);
+      // Orphaned-identity check: data under OTHER uids looks "deleted".
+      try {
+        setOrphanInfo(findOrphanedReportOwners(user.uid));
+      } catch {}
     } catch (err) {
       console.error('Failed to load reports and folders', err);
     } finally {
@@ -189,12 +197,22 @@ export default function ReportsPage() {
     window.addEventListener('report-updated', handleReportsChanged);
     window.addEventListener('report-created', handleReportsChanged);
     window.addEventListener('report-deleted', handleReportsChanged);
+    // Data-loss guard: any local persist failure surfaces visibly.
+    const handleStorageFull = () => {
+      setStorageError(
+        isAr
+          ? 'مساحة التخزين في هذا المتصفح ممتلئة — قد لا تُحفظ التعديلات. احذف صورًا/بيانات قديمة أو استخدم متصفحًا آخر.'
+          : 'This browser storage is full — edits may not persist. Free space or use another browser.'
+      );
+    };
+    window.addEventListener('local-storage-full', handleStorageFull);
     return () => {
       window.removeEventListener('report-updated', handleReportsChanged);
       window.removeEventListener('report-created', handleReportsChanged);
       window.removeEventListener('report-deleted', handleReportsChanged);
+      window.removeEventListener('local-storage-full', handleStorageFull);
     };
-  }, [user?.uid, authLoading]);
+  }, [user?.uid, authLoading, isAr]);
 
   const handleCopyLink = (e: React.MouseEvent, id: string) => {
     e.preventDefault();
@@ -298,8 +316,15 @@ export default function ReportsPage() {
 
       setShowTemplateModal(false);
       router.push(`/reports/${created.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create report', err);
+      if (err?.code === 'storage-full') {
+        setStorageError(
+          isAr
+            ? 'مساحة التخزين في هذا المتصفح ممتلئة — لم يُحفظ التقرير. احذف صورًا/بيانات قديمة أو استخدم متصفحًا آخر.'
+            : 'This browser storage is full — the report was NOT saved. Free space or use another browser.'
+        );
+      }
     } finally {
       setCreating(false);
     }
@@ -323,8 +348,15 @@ export default function ReportsPage() {
       });
 
       router.push(`/reports/${created.id}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to create report in folder', err);
+      if (err?.code === 'storage-full') {
+        setStorageError(
+          isAr
+            ? 'مساحة التخزين في هذا المتصفح ممتلئة — لم يُحفظ التقرير. احذف صورًا/بيانات قديمة أو استخدم متصفحًا آخر.'
+            : 'This browser storage is full — the report was NOT saved. Free space or use another browser.'
+        );
+      }
     } finally {
       setCreating(false);
     }
@@ -639,6 +671,41 @@ export default function ReportsPage() {
           >
             <X className="size-4" />
           </Button>
+        </Alert>
+      )}
+
+      {/* Storage-full Alert (data-loss guard: never silently lose a save) */}
+      {storageError && (
+        <Alert variant="destructive" className="mb-6 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle data-icon="inline-start" />
+            <AlertDescription>{storageError}</AlertDescription>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => setStorageError(null)}
+            className="size-7"
+          >
+            <X className="size-4" />
+          </Button>
+        </Alert>
+      )}
+
+      {/* Orphaned-identity Alert: data exists under OTHER uids on this browser
+          (e.g. signed in with a different account/method than the creator).
+          The reports are NOT deleted — just invisible under this identity. */}
+      {orphanInfo.length > 0 && (
+        <Alert variant="default" className="mb-6 border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800">
+          <div className="flex items-center gap-2">
+            <AlertCircle data-icon="inline-start" className="text-amber-600" />
+            <AlertDescription className="text-xs">
+              {isAr
+                ? `تنبيه: يوجد ${orphanInfo.reduce((n, o) => n + o.count, 0)} تقرير على هذا المتصفح مسجل بهوية دخول مختلفة — سجل الدخول بالحساب/الطريقة الأصلية لرؤيتها. بياناتك لم تُحذف.`
+                : `Notice: ${orphanInfo.reduce((n, o) => n + o.count, 0)} report(s) on this browser belong to a different sign-in identity — sign in with the original account/method to see them. Nothing was deleted.`}
+            </AlertDescription>
+          </div>
         </Alert>
       )}
 
