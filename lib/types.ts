@@ -75,6 +75,14 @@ export interface ReportItem {
   docsUrl?: string;           // Documentation URL / رابط الوثائق
   logoUrl?: string;           // Logo URL / رابط الشعار
   status?: 'draft' | 'in_review' | 'approved' | 'published' | 'archived';
+  /** Status to restore on unarchive (set when archiving). */
+  statusBeforeArchive?: 'draft' | 'in_review' | 'approved' | 'published' | 'archived' | null;
+  /**
+   * Archive lifecycle: status 'archived' + timestamp (both spellings, like
+   * issues). Archived reports leave all lists/counts; restore clears both.
+   */
+  archived_at?: string | null;
+  archivedAt?: string | null;
   content?: any;
   last_sync_at?: string | null;
   lastSyncAt?: string | null;

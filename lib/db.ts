@@ -471,20 +471,32 @@ export function sortReportsNewestFirst(list: ReportItem[]): ReportItem[] {
   });
 }
 
-export async function getReports(userUid?: string, userEmail?: string): Promise<ReportItem[]> {
+export interface ScopeOpts {
+  /** Include archived items (default false — archive leaves all lists). */
+  includeArchived?: boolean;
+}
+
+export async function getReports(
+  userUid?: string,
+  userEmail?: string,
+  opts?: ScopeOpts
+): Promise<ReportItem[]> {
   // CRITICAL SECURITY FIX: Never return reports if userUid is missing!
   // An unauthenticated request must ALWAYS return an empty list []!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
   const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
+  // Archive lifecycle: archived reports leave default lists.
+  const visible = (r: ReportItem): boolean =>
+    !!opts?.includeArchived || !isArchivedReport(r);
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
   if (isGuest) {
     const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
     const reports = getLocal<ReportItem[]>(userReportsKey, []);
-    return sortReportsNewestFirst(reports.filter((r) => r.ownerUid === userUid));
+    return sortReportsNewestFirst(reports.filter((r) => r.ownerUid === userUid && visible(r)));
   }
 
   if (isFirebaseConfigured && db && auth?.currentUser) {
@@ -542,7 +554,7 @@ export async function getReports(userUid?: string, userEmail?: string): Promise<
         }
       });
 
-      return sortReportsNewestFirst(Array.from(mergedMap.values()));
+      return sortReportsNewestFirst(Array.from(mergedMap.values()).filter(visible));
     } catch (e) {
       console.warn('Firestore getReports failed, using isolated local storage fallback', e);
     }
@@ -578,9 +590,10 @@ export async function getReports(userUid?: string, userEmail?: string): Promise<
   return sortReportsNewestFirst(
     Array.from(merged.values()).filter(
       (r) =>
-        r.ownerUid === userUid ||
-        (email && isEmailInvited(r.sharedWithEmails, email)) ||
-        (email && !!r.folderId && !!visibleFolderIds && visibleFolderIds.has(r.folderId))
+        visible(r) &&
+        (r.ownerUid === userUid ||
+          (email && isEmailInvited(r.sharedWithEmails, email)) ||
+          (email && !!r.folderId && !!visibleFolderIds && visibleFolderIds.has(r.folderId)))
     )
   );
 }
@@ -821,13 +834,38 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
 
 /**
  * Delete a report.
- * IMPORTANT: Enforces manual relationship integrity check.
- * If any issue is linked to this report, deletion is prevented!
+ * Archive lifecycle: permanent delete is allowed only when NO ACTIVE linked
+ * issues remain (archive the report first — archiving cascades to open
+ * issues). ARCHIVED linked issues are cascade-deleted with their report.
  */
 export async function deleteReport(id: string): Promise<{ success: boolean; error?: string }> {
-  // Check if any issues are linked to this report
-  const linkedIssues = await getIssuesByReportId(id);
-  if (linkedIssues.length > 0) {
+  // Check linked issues INCLUDING archived (needed for the cascade).
+  // NOTE: resolved with the current session uid so the check is real.
+  // Local/demo fallback: linkage is by report id (not owner), so scan every
+  // local issues store — otherwise the protection silently returns [].
+  let currentUid: string | undefined;
+  try {
+    currentUid = auth?.currentUser?.uid || undefined;
+  } catch {}
+  const linkedByScope = await getIssuesByReportId(id, currentUid, { includeArchived: true });
+  const linkedMap = new Map<string, IssueItem>();
+  linkedByScope.forEach((i) => linkedMap.set(i.id, i));
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(LOCAL_ISSUES_KEY)) {
+          getLocal<IssueItem[]>(key, []).forEach((iss) => {
+            const linked = iss.linkedReportId || (iss as any).reportId;
+            if (linked === id && !linkedMap.has(iss.id)) linkedMap.set(iss.id, iss);
+          });
+        }
+      }
+    } catch {}
+  }
+  const linkedIssues = Array.from(linkedMap.values());
+  const activeLinked = linkedIssues.filter((i) => !isArchivedIssue(i));
+  if (activeLinked.length > 0) {
     return {
       success: false,
       error: 'reportCannotBeDeletedHasIssues',
@@ -872,7 +910,153 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
     console.warn('Table metadata cleanup failed for report', id, e);
   }
 
+  // Cascade: permanently delete ARCHIVED linked issues (active ones block
+  // above, so anything left here is archived and belongs to this report).
+  for (const iss of linkedIssues) {
+    try {
+      await deleteIssue(iss.id);
+    } catch (e) {
+      console.warn('Cascade issue delete failed for', iss.id, e);
+    }
+  }
+
   return { success: true };
+}
+
+// ==========================================
+// ARCHIVE LIFECYCLE
+// ==========================================
+//
+// Methodology (reports AND issues share it):
+//   active → archived (soft, reversible, timestamped) → restore | delete.
+// - Archived items leave every default list/board/count (opt-in to view).
+// - Archiving a report optionally archives its OPEN linked issues too.
+// - Restoring never cascades (explicit per-item restore only).
+// - Permanent delete is allowed only when NO active linked issues remain;
+//   archived linked issues are cascade-deleted with their report.
+// - Archive/restore/delete stay OWNER-ONLY (collaborators edit + comment).
+// - Report numbers are never reused (Phase-2 counters are monotonic).
+
+export function isArchivedReport(r: ReportItem | null | undefined): boolean {
+  if (!r) return false;
+  return r.status === 'archived' || !!r.archived_at || !!r.archivedAt;
+}
+
+export function isArchivedIssue(i: IssueItem | null | undefined): boolean {
+  if (!i) return false;
+  return !!(i.archived_at || i.archivedAt);
+}
+
+export async function archiveReport(
+  id: string,
+  userUid: string,
+  opts?: { archiveIssues?: boolean }
+): Promise<{ ok: boolean; error?: string; archivedIssues?: number }> {
+  const rep = await getReportById(id, userUid);
+  if (!rep) return { ok: false, error: 'not-found' };
+  if (rep.ownerUid !== userUid) return { ok: false, error: 'forbidden' };
+  if (isArchivedReport(rep)) return { ok: true, archivedIssues: 0 };
+
+  const now = new Date().toISOString();
+  const ok = await updateReport(id, {
+    status: 'archived',
+    statusBeforeArchive: rep.status && rep.status !== 'archived' ? rep.status : undefined,
+    archived_at: now,
+    archivedAt: now,
+  } as Partial<ReportItem>);
+  if (!ok) return { ok: false, error: 'save-failed' };
+
+  // Optionally archive OPEN linked issues with their report (reversible).
+  let archivedIssues = 0;
+  if (opts?.archiveIssues !== false) {
+    try {
+      const linked = await getIssuesByReportId(id, userUid);
+      const { archiveIssue } = await import('./db-intelligence');
+      for (const iss of linked) {
+        if (isArchivedIssue(iss)) continue;
+        try {
+          await archiveIssue(iss.id, userUid, 'Archived with parent report');
+          archivedIssues++;
+        } catch {}
+      }
+    } catch {}
+  }
+  return { ok: true, archivedIssues };
+}
+
+export async function unarchiveReport(
+  id: string,
+  userUid: string
+): Promise<{ ok: boolean; error?: string }> {
+  const rep = await getReportById(id, userUid, undefined);
+  // NOTE: archived reports are hidden from default getReports; fetch
+  // directly so restore works from the archive view. getReportById has no
+  // archive filter, so this resolves regardless of status.
+  if (!rep) return { ok: false, error: 'not-found' };
+  if (rep.ownerUid !== userUid) return { ok: false, error: 'forbidden' };
+  if (!isArchivedReport(rep)) return { ok: true };
+
+  const ok = await updateReport(id, {
+    status: rep.statusBeforeArchive && rep.statusBeforeArchive !== 'archived' ? rep.statusBeforeArchive : 'draft',
+    statusBeforeArchive: null,
+    archived_at: null,
+    archivedAt: null,
+  } as Partial<ReportItem>);
+  return ok ? { ok: true } : { ok: false, error: 'save-failed' };
+}
+
+export async function unarchiveIssue(id: string, userUid: string): Promise<{ ok: boolean; error?: string }> {
+  if (isFirebaseConfigured && db && auth?.currentUser) {
+    try {
+      const snap = await getDoc(doc(db, 'issues', id));
+      if (!snap.exists()) return { ok: false, error: 'not-found' };
+      const data = snap.data() as IssueItem;
+      if (data.ownerUid !== userUid) return { ok: false, error: 'forbidden' };
+      await updateDoc(doc(db, 'issues', id), {
+        archived_at: null,
+        archivedAt: null,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      return { ok: false, error: 'save-failed' };
+    }
+  }
+  // Local mirrors: verify existence + ownership (fail closed).
+  let found = false;
+  let owned = false;
+  const now = new Date().toISOString();
+  try {
+    const global = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+    const gIdx = global.findIndex((x) => x.id === id);
+    if (gIdx !== -1) {
+      found = true;
+      if (global[gIdx].ownerUid === userUid) {
+        owned = true;
+        global[gIdx] = { ...global[gIdx], archived_at: null, archivedAt: null, updatedAt: now };
+        setLocal(LOCAL_ISSUES_KEY, global);
+      }
+    }
+    if (typeof window !== 'undefined') {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_ISSUES_KEY}_`)) {
+          const list = getLocal<IssueItem[]>(key, []);
+          const uIdx = list.findIndex((x) => x.id === id);
+          if (uIdx !== -1) {
+            found = true;
+            if (list[uIdx].ownerUid === userUid) {
+              owned = true;
+              list[uIdx] = { ...list[uIdx], archived_at: null, archivedAt: null, updatedAt: now };
+              setLocal(key, list);
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+  if (!found) return { ok: false, error: 'not-found' };
+  if (!owned) return { ok: false, error: 'forbidden' };
+  return { ok: true };
 }
 
 // ==========================================
@@ -1231,29 +1415,33 @@ function sortIssuesByOrder(list: IssueItem[], userUid?: string): IssueItem[] {
   });
 }
 
-export async function getIssues(userUid?: string, userEmail?: string): Promise<IssueItem[]> {
+export async function getIssues(userUid?: string, userEmail?: string, opts?: ScopeOpts): Promise<IssueItem[]> {
   // CRITICAL SECURITY FIX: Never return issues if userUid is missing!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
   const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
+  // Archive lifecycle: archived issues leave the board by default.
+  const visibleIssue = (i: IssueItem): boolean =>
+    !!opts?.includeArchived || !isArchivedIssue(i);
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
   if (isGuest) {
     const userIssuesKey = `${LOCAL_ISSUES_KEY}_${userUid}`;
     const issues = getLocal<IssueItem[]>(userIssuesKey, []);
-    return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid), userUid);
+    return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid && visibleIssue(i)), userUid);
   }
 
   // Collaboration: ids of reports this user may see (owned + shared).
   // Used to include issues linked to shared reports (any owner).
+  // NOTE: access resolution always includes archived reports (checks, not lists).
   let accessibleReportIds: Set<string> | null = null;
   const resolveAccessibleIds = async (): Promise<Set<string>> => {
     if (accessibleReportIds) return accessibleReportIds;
     accessibleReportIds = new Set<string>();
     try {
-      const reports = await getReports(userUid, email);
+      const reports = await getReports(userUid, email, { includeArchived: true });
       reports.forEach((r) => accessibleReportIds!.add(r.id));
     } catch {}
     return accessibleReportIds;
@@ -1292,7 +1480,7 @@ export async function getIssues(userUid?: string, userEmail?: string): Promise<I
       issues.forEach((iss) => seen.set(iss.id, iss));
       const ids = await resolveAccessibleIds();
       const scoped = Array.from(seen.values()).filter(
-        (iss) => iss.ownerUid === userUid || isLinkedAccessible(iss, ids)
+        (iss) => visibleIssue(iss) && (iss.ownerUid === userUid || isLinkedAccessible(iss, ids))
       );
       return sortIssuesByOrder(scoped, userUid);
     } catch (e) {
@@ -1314,7 +1502,9 @@ export async function getIssues(userUid?: string, userEmail?: string): Promise<I
   }
   const ids = await resolveAccessibleIds();
   return sortIssuesByOrder(
-    Array.from(merged.values()).filter((i) => i.ownerUid === userUid || isLinkedAccessible(i, ids)),
+    Array.from(merged.values()).filter(
+      (i) => visibleIssue(i) && (i.ownerUid === userUid || isLinkedAccessible(i, ids))
+    ),
     userUid
   );
 }
@@ -1390,9 +1580,13 @@ export async function reorderIssues(
   }
 }
 
-export async function getIssuesByReportId(reportId: string, userUid?: string): Promise<IssueItem[]> {
-  const all = await getIssues(userUid);
-  return all.filter((i) => i.linkedReportId === reportId || i.reportId === reportId);
+export async function getIssuesByReportId(
+  reportId: string,
+  userUid?: string,
+  opts?: ScopeOpts
+): Promise<IssueItem[]> {
+  const all = await getIssues(userUid, undefined, opts);
+  return all.filter((i) => i.linkedReportId === reportId || (i as any).reportId === reportId);
 }
 
 export async function createIssue(

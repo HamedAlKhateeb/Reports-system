@@ -10,9 +10,12 @@ import {
   User as UserIcon,
   Link2,
   ExternalLink,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 import { IssueItem, CommentItem, ReportItem } from '@/lib/types';
-import { getComments, addComment, updateIssue, deleteIssue } from '@/lib/db';
+import { getComments, addComment, updateIssue, deleteIssue, unarchiveIssue, isArchivedIssue } from '@/lib/db';
+import { archiveIssue } from '@/lib/db-intelligence';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -58,6 +61,7 @@ export function IssueModal({
   const [newCommentBody, setNewCommentBody] = useState('');
   const [loadingComments, setLoadingComments] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   // Editable fields
   const [title, setTitle] = useState(issue.title);
@@ -126,6 +130,36 @@ export function IssueModal({
     onClose();
   };
 
+  // Archive lifecycle (owner only — enforced in db + rules).
+  const handleArchive = async () => {
+    if (!user) return;
+    if (!confirm(lang === 'ar' ? 'أرشفة هذه المشكلة؟ ستختفي من اللوحة ويمكن استعادتها لاحقًا.' : 'Archive this issue? It will leave the board and can be restored later.')) {
+      return;
+    }
+    try {
+      setArchiving(true);
+      await archiveIssue(issue.id, user.uid, 'Archived from dashboard');
+      const now = new Date().toISOString();
+      onUpdated({ ...issue, archived_at: now, archivedAt: now, updatedAt: now });
+      onClose();
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    if (!user) return;
+    try {
+      setArchiving(true);
+      const res = await unarchiveIssue(issue.id, user.uid);
+      if (!res.ok) return;
+      onUpdated({ ...issue, archived_at: null, archivedAt: null, updatedAt: new Date().toISOString() });
+      onClose();
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   const statuses: IssueStatus[] = ['open', 'in_progress', 'done'];
   const severities: IssueSeverity[] = ['critical', 'major', 'medium', 'normal', 'minor'];
   const linkedReport = reports.find((r) => r.id === linkedReportId);
@@ -150,6 +184,32 @@ export function IssueModal({
           </div>
 
           <div className="flex items-center gap-1">
+            {isIssueOwner && !isArchivedIssue(issue) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => void handleArchive()}
+                disabled={archiving}
+                className="size-8 text-muted-foreground hover:bg-muted"
+                title={lang === 'ar' ? 'أرشفة المشكلة' : 'Archive issue'}
+              >
+                <Archive className="size-4" />
+              </Button>
+            )}
+            {isIssueOwner && isArchivedIssue(issue) && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => void handleRestore()}
+                disabled={archiving}
+                className="size-8 text-muted-foreground hover:bg-muted"
+                title={lang === 'ar' ? 'استعادة من الأرشيف' : 'Restore from archive'}
+              >
+                <ArchiveRestore className="size-4" />
+              </Button>
+            )}
             {isIssueOwner && (
               <Button
                 type="button"

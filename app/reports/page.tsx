@@ -38,6 +38,8 @@ import {
   AlertCircle,
   FolderTree,
   MoreVertical,
+  Archive,
+  ArchiveRestore,
   ExternalLink,
 } from 'lucide-react';
 import {
@@ -52,6 +54,9 @@ import {
   inviteToFolder,
   revokeFolderInvite,
   findOrphanedReportOwners,
+  archiveReport,
+  unarchiveReport,
+  isArchivedReport,
 } from '@/lib/db';
 import { ReportItem, FolderItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -147,6 +152,79 @@ export default function ReportsPage() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
+  // Archive lifecycle state: archive view lists archived reports only.
+  const [archiveView, setArchiveView] = useState(false);
+  const [archivedReports, setArchivedReports] = useState<ReportItem[]>([]);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+
+  const loadArchived = async () => {
+    if (!user) {
+      setArchivedReports([]);
+      return;
+    }
+    try {
+      const all = await getReports(user.uid, undefined, { includeArchived: true });
+      setArchivedReports(all.filter(isArchivedReport));
+    } catch (err) {
+      console.error('Failed to load archived reports', err);
+    }
+  };
+
+  const toggleArchiveView = async (on: boolean) => {
+    setArchiveView(on);
+    setSearchQuery('');
+    if (on) await loadArchived();
+  };
+
+  const handleArchiveReport = async (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) return;
+    if (!confirm(isAr ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.')) {
+      return;
+    }
+    try {
+      setArchivingId(id);
+      const res = await archiveReport(id, user.uid);
+      if (!res.ok) {
+        setDeleteError(isAr ? 'فشل الأرشفة.' : 'Archive failed.');
+        return;
+      }
+      const [updatedReports] = await Promise.all([
+        getReports(user.uid),
+        loadArchived(),
+      ]);
+      setReports(updatedReports);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Archive failed');
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
+  const handleRestoreReport = async (e: React.MouseEvent, id: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user) return;
+    try {
+      setArchivingId(id);
+      const res = await unarchiveReport(id, user.uid);
+      if (!res.ok) {
+        setDeleteError(isAr ? 'فشل الاستعادة.' : 'Restore failed.');
+        return;
+      }
+      const [updatedReports] = await Promise.all([
+        getReports(user.uid),
+        loadArchived(),
+      ]);
+      setReports(updatedReports);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Restore failed');
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
   const [itemToMove, setItemToMove] = useState<
     | { type: 'report'; item: ReportItem }
     | { type: 'folder'; item: FolderItem }
@@ -177,6 +255,11 @@ export default function ReportsPage() {
       // Orphaned-identity check: data under OTHER uids looks "deleted".
       try {
         setOrphanInfo(findOrphanedReportOwners(user.uid));
+      } catch {}
+      // Archive badge count (cheap: same fetch shape as the archive view).
+      try {
+        const all = await getReports(user.uid, undefined, { includeArchived: true });
+        setArchivedReports(all.filter(isArchivedReport));
       } catch {}
     } catch (err) {
       console.error('Failed to load reports and folders', err);
@@ -383,6 +466,8 @@ export default function ReportsPage() {
       }
 
       setReports((prev) => prev.filter((r) => r.id !== id));
+      // Keep the archive view consistent when deleting from it.
+      setArchivedReports((prev) => prev.filter((r) => r.id !== id));
     } catch (err: any) {
       console.error('Delete error:', err);
       setDeleteError(err?.message || 'Failed to delete report');
@@ -543,10 +628,12 @@ export default function ReportsPage() {
   };
 
   // Filter Logic:
+  // Archive view -> archived reports only (folder/search scoping still applies).
   // When search query is entered -> Global search across ALL reports regardless of folder
   // When no search query -> Filter by current folder selection
   const isSearching = searchQuery.trim().length > 0;
-  const filteredReports = reports.filter((r) => {
+  const archiveScoped = archiveView ? archivedReports : reports;
+  const filteredReports = archiveScoped.filter((r) => {
     if (isSearching) {
       const q = searchQuery.toLowerCase();
       return (
@@ -797,6 +884,23 @@ export default function ReportsPage() {
                 </button>
               )}
             </div>
+            {/* Archive lifecycle view toggle */}
+            <Button
+              type="button"
+              variant={archiveView ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => void toggleArchiveView(!archiveView)}
+              className="h-9 gap-1.5 shrink-0 rounded-lg text-xs font-semibold"
+              title={isAr ? 'عرض التقارير المؤرشفة' : 'View archived reports'}
+            >
+              <Archive className="size-3.5" />
+              <span>{isAr ? 'الأرشيف' : 'Archive'}</span>
+              {archivedReports.length > 0 && (
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+                  {archivedReports.length}
+                </span>
+              )}
+            </Button>
           </div>
 
           {/* Search Scope Notice */}
@@ -909,6 +1013,12 @@ export default function ReportsPage() {
                             <Globe className="size-3" />
                             <span>{report.language || 'ar'}</span>
                           </Badge>
+                          {isArchivedReport(report) && (
+                            <Badge variant="outline" className="gap-1 text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
+                              <Archive className="size-3" />
+                              <span>{isAr ? 'مؤرشف' : 'Archived'}</span>
+                            </Badge>
+                          )}
                         </div>
                       </div>
 
@@ -989,7 +1099,7 @@ export default function ReportsPage() {
                             </DropdownMenuGroup>
 
                             {/* Collaboration: move/delete stay owner-only (rules deny otherwise) */}
-                            {report.ownerUid === user?.uid && (
+                            {report.ownerUid === user?.uid && !isArchivedReport(report) && (
                               <>
                                 <DropdownMenuItem
                                   onClick={() => setItemToMove({ type: 'report', item: report })}
@@ -997,6 +1107,15 @@ export default function ReportsPage() {
                                 >
                                   <Move className="size-3.5 text-muted-foreground" />
                                   <span>{isAr ? 'نقل إلى مجلد...' : 'Move to folder...'}</span>
+                                </DropdownMenuItem>
+
+                                <DropdownMenuItem
+                                  onClick={(e) => handleArchiveReport(e, report.id)}
+                                  disabled={archivingId === report.id}
+                                  className="gap-2 cursor-pointer text-xs font-medium"
+                                >
+                                  <Archive className="size-3.5 text-muted-foreground" />
+                                  <span>{isAr ? 'أرشفة التقرير' : 'Archive report'}</span>
                                 </DropdownMenuItem>
 
                                 <DropdownMenuSeparator />
@@ -1007,6 +1126,29 @@ export default function ReportsPage() {
                                 >
                                   <Trash2 className="size-3.5" />
                                   <span>{t('delete')}</span>
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {/* Archived reports: restore or delete permanently (owner only) */}
+                            {report.ownerUid === user?.uid && isArchivedReport(report) && (
+                              <>
+                                <DropdownMenuSeparator />
+
+                                <DropdownMenuItem
+                                  onClick={(e) => handleRestoreReport(e, report.id)}
+                                  disabled={archivingId === report.id}
+                                  className="gap-2 cursor-pointer text-xs font-medium"
+                                >
+                                  <ArchiveRestore className="size-3.5 text-emerald-600" />
+                                  <span>{isAr ? 'استعادة من الأرشيف' : 'Restore from archive'}</span>
+                                </DropdownMenuItem>
+
+                                <DropdownMenuItem
+                                  onClick={(e) => handleDelete(e, report.id)}
+                                  className="gap-2 cursor-pointer text-xs font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                  <span>{isAr ? 'حذف نهائي' : 'Delete permanently'}</span>
                                 </DropdownMenuItem>
                               </>
                             )}

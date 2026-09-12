@@ -484,7 +484,7 @@ export async function mergeIssues(
   reason: string,
   actorId: string = 'system'
 ): Promise<{ success: boolean; primaryIssue: IssueItem; error?: string }> {
-  const allIssues = await getIssues(actorId);
+  const allIssues = await getIssues(actorId, undefined, { includeArchived: true });
   const primary = allIssues.find((i) => i.id === primaryIssueId);
   if (!primary) {
     return { success: false, primaryIssue: null as any, error: 'المشكلة الأساسية غير موجودة' };
@@ -756,7 +756,8 @@ export async function verifyCounterConsistency(
   const relationsCount = reportIssues.length;
 
   // 4. Kanban active issues for this report
-  const allIssues = await getIssues(userUid);
+  // (includeArchived: the archived-issues discrepancy check below needs them)
+  const allIssues = await getIssues(userUid, undefined, { includeArchived: true });
   const activeKanbanIssues = allIssues.filter(
     (i) =>
       !i.archived_at &&

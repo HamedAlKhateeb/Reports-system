@@ -44,10 +44,11 @@ service cloud.firestore {
     }
 
     // Report write: owner has full rights; collaborators may edit content
-    // but NEVER ownership/sharing/placement/numbering fields.
+    // but NEVER ownership/sharing/placement/numbering/lifecycle fields
+    // (archive/restore/publish stay owner-only).
     function collaboratorSafeReportUpdate() {
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
-        ['ownerUid', 'sharedWithEmails', 'isShared', 'shareToken', 'sharedAt', 'folderId', 'reportNumber']
+        ['ownerUid', 'sharedWithEmails', 'isShared', 'shareToken', 'sharedAt', 'folderId', 'reportNumber', 'status', 'statusBeforeArchive', 'archived_at', 'archivedAt']
       );
     }
 
