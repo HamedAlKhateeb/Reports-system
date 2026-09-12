@@ -383,12 +383,34 @@ export default function ReportDetailPage() {
     }
   };
 
-  const handleCopyShareLink = () => {
+  const handleCopyShareLink = async () => {
     if (!report?.shareToken) return;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
     const url = `${origin}/share/${report.shareToken}`;
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(url);
+    // Primary: async Clipboard API (HTTPS/localhost). Fallback: hidden textarea
+    // + execCommand for HTTP contexts where navigator.clipboard is unavailable.
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        throw new Error('clipboard-api-unavailable');
+      }
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = url;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        if (!ok) throw new Error('execCommand-copy-failed');
+      } catch (fallbackErr) {
+        console.error('Copy share link failed:', fallbackErr);
+        return;
+      }
     }
     setCopiedShareLink(true);
     setTimeout(() => setCopiedShareLink(false), 2000);
@@ -806,6 +828,11 @@ export default function ReportDetailPage() {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error('Export error:', err);
+      // Revive exportNotice (was dead state): surface the failure inline in
+      // addition to the alert so the message survives dismissal context.
+      try {
+        setExportNotice(`${t('exportError')}: ${err?.message || err}`);
+      } catch {}
       alert(t('exportError') + ': ' + err.message);
     } finally {
       setExporting(null);
