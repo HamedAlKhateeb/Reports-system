@@ -1,5 +1,4 @@
 import type { NextRequest } from 'next/server';
-import { createVerify } from 'node:crypto';
 
 /**
  * Phase 1.1 (B3) — Server-side session verification.
@@ -11,12 +10,13 @@ import { createVerify } from 'node:crypto';
  * route verifies its signature + audience + expiry here before trusting `sub`
  * as the uid.
  *
- * No new dependencies: verification uses `node:crypto` + the public Google
- * cert endpoint, with an in-memory cert cache.
+ * No new dependencies: pure WebCrypto (`crypto.subtle`) + Google's public
+ * JWK endpoint — works identically on Node, Cloudflare Workers, and edge
+ * runtimes (node:crypto proved unreliable under workers).
  */
 
-const GOOGLE_CERTS_URL =
-  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+const GOOGLE_JWKS_URL =
+  'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 
 function getProjectId(): string {
   return (
@@ -26,28 +26,53 @@ function getProjectId(): string {
   );
 }
 
-interface CachedCerts {
+interface CachedKeys {
   expiresAt: number;
-  certs: Record<string, string>;
+  keys: Map<string, CryptoKey>;
 }
 
-let certCache: CachedCerts | null = null;
+let keyCache: CachedKeys | null = null;
 
-function base64UrlDecode(input: string): Buffer {
+function base64UrlToBytes(input: string): Uint8Array {
   const normalized = input.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-  return Buffer.from(padded, 'base64');
+  // Buffer (Node) or atob (edge) — both yield identical bytes.
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(padded, 'base64'));
+  }
+  const bin = atob(padded);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
-async function getGoogleCerts(): Promise<Record<string, string>> {
-  const now = Date.now();
-  if (certCache && certCache.expiresAt > now) return certCache.certs;
+function base64UrlToText(input: string): string {
+  const bytes = base64UrlToBytes(input);
+  if (typeof Buffer !== 'undefined') return Buffer.from(bytes).toString('utf8');
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return decodeURIComponent(escape(s));
+}
 
-  const res = await fetch(GOOGLE_CERTS_URL, { cache: 'no-store' });
+function subtle(): SubtleCrypto {
+  const c: any = globalThis.crypto;
+  if (!c?.subtle) throw new Error('WebCrypto subtle unavailable');
+  return c.subtle as SubtleCrypto;
+}
+
+async function getGoogleKey(kid: string): Promise<CryptoKey | null> {
+  const now = Date.now();
+  const cached = keyCache && keyCache.expiresAt > now ? keyCache.keys.get(kid) : undefined;
+  if (cached) return cached;
+
+  const res = await fetch(GOOGLE_JWKS_URL, { cache: 'no-store' });
   if (!res.ok) {
-    throw new Error(`Failed to fetch Google certs: ${res.status}`);
+    throw new Error(`Failed to fetch Google JWKS: ${res.status}`);
   }
-  const certs = (await res.json()) as Record<string, string>;
+  const jwks = (await res.json()) as { keys?: Array<any> };
+  if (!jwks || !Array.isArray(jwks.keys)) {
+    throw new Error('Malformed Google JWKS');
+  }
 
   // Respect Cache-Control: max-age when present, default 1h, cap 6h.
   let maxAgeSec = 3600;
@@ -56,8 +81,25 @@ async function getGoogleCerts(): Promise<Record<string, string>> {
   if (match) {
     maxAgeSec = Math.min(Math.max(parseInt(match[1], 10), 300), 21600);
   }
-  certCache = { expiresAt: now + maxAgeSec * 1000, certs };
-  return certs;
+
+  const keys = new Map<string, CryptoKey>();
+  for (const jwk of jwks.keys) {
+    if (!jwk?.kid || jwk.kty !== 'RSA' || !jwk.n || !jwk.e) continue;
+    try {
+      const key = await subtle().importKey(
+        'jwk',
+        { kty: 'RSA', n: jwk.n, e: jwk.e, alg: 'RS256', ext: true } as any,
+        { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+        false,
+        ['verify']
+      );
+      keys.set(String(jwk.kid), key);
+    } catch {
+      // Skip unusable keys; others may still verify.
+    }
+  }
+  keyCache = { expiresAt: now + maxAgeSec * 1000, keys };
+  return keys.get(kid) || null;
 }
 
 export interface VerifiedSession {
@@ -79,23 +121,25 @@ export async function verifyFirebaseIdToken(
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signatureB64] = parts;
-    const header = JSON.parse(base64UrlDecode(headerB64).toString('utf8')) as {
+    const header = JSON.parse(base64UrlToText(headerB64)) as {
       alg?: string;
       kid?: string;
     };
     if (header.alg !== 'RS256' || !header.kid) return null;
 
-    const certs = await getGoogleCerts();
-    const cert = certs[header.kid];
-    if (!cert) return null;
+    const key = await getGoogleKey(header.kid);
+    if (!key) return null;
 
-    const verifier = createVerify('RSA-SHA256');
-    verifier.update(`${headerB64}.${payloadB64}`);
-    verifier.end();
-    const valid = verifier.verify(cert, base64UrlDecode(signatureB64));
+    const data = new TextEncoder().encode(`${headerB64}.${payloadB64}`);
+    const valid = await subtle().verify(
+      'RSASSA-PKCS1-v1_5',
+      key,
+      base64UrlToBytes(signatureB64) as BufferSource,
+      data
+    );
     if (!valid) return null;
 
-    const payload = JSON.parse(base64UrlDecode(payloadB64).toString('utf8')) as {
+    const payload = JSON.parse(base64UrlToText(payloadB64)) as {
       aud?: string;
       iss?: string;
       sub?: string;
@@ -121,8 +165,12 @@ export async function verifyFirebaseIdToken(
       uid: payload.sub,
       email: typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '',
     };
-  } catch {
+  } catch (err) {
     // Any parsing/network/crypto failure → unauthenticated. Fail closed.
+    // Logged server-side so production failures stay diagnosable.
+    try {
+      console.error('[server-auth] verify failed:', err instanceof Error ? err.message : err);
+    } catch {}
     return null;
   }
 }
