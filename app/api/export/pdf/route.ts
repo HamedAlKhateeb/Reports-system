@@ -1,20 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildDocxDocument } from '@/lib/docx-builder';
 import { convertDocxToPdf, LibreOfficeNotFoundError } from '@/lib/pdf-generator';
+import { authorizeExport } from '@/lib/export-auth';
 import { ReportItem, ReportImageItem } from '@/lib/types';
 import { t } from '@/lib/i18n/dictionary';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { report, images } = body as {
+    const { report, images, shareToken } = body as {
       report: ReportItem;
       images: ReportImageItem[];
+      shareToken?: string;
     };
 
-    if (!report) {
-      return NextResponse.json({ error: 'Missing report data' }, { status: 400 });
-    }
+    const auth = await authorizeExport(report, shareToken, req);
+    if ('error' in auth) return auth.error;
 
     const docxBuffer = await buildDocxDocument(report, images || []);
     const rawTitle = (report.title || (report.language === 'ar' ? 'تقرير' : 'report')).trim();

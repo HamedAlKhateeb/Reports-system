@@ -1,20 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getReportById } from '@/lib/db';
 import { authenticateApiRequest } from '@/lib/api-auth';
+import { getVerifiedSessionUid } from '@/lib/server-auth';
 
-function getAuthenticatedUid(req: NextRequest): string | null {
-  const sessionCookie = req.cookies.get('__session')?.value;
-  if (sessionCookie && sessionCookie.trim()) {
-    return sessionCookie.trim();
-  }
-  return null;
+async function getAuthenticatedUid(req: NextRequest): Promise<string | null> {
+  // Phase 1.1 (B3): verified Firebase session only.
+  return getVerifiedSessionUid(req);
 }
 
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  let userUid = getAuthenticatedUid(req);
+  let userUid = await getAuthenticatedUid(req);
 
   if (!userUid && (req.headers.get('x-api-key') || req.headers.get('authorization'))) {
     const auth = await authenticateApiRequest(req);

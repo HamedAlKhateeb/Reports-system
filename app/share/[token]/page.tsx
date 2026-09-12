@@ -90,6 +90,9 @@ export default function SharedReportPage() {
         body: JSON.stringify({
           report,
           images,
+          // Phase 1.5 (B2): public-link export path — the server allows
+          // this only when report.isShared and the token matches.
+          shareToken: token,
         }),
       });
 

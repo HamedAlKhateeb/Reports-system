@@ -1,7 +1,7 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
+
     // Check if user is authenticated
     function isAuthenticated() {
       return request.auth != null;
@@ -11,17 +11,67 @@ service cloud.firestore {
       return isAuthenticated() && data.ownerUid == request.auth.uid;
     }
 
+    // Entities that historically used snake_case owner_id (projects,
+    // dashboards) — accept either field during the Phase-6 schema
+    // unification. Both must equal the caller when present.
+    function ownsFlexible(data) {
+      return isAuthenticated() && (
+        data.ownerUid == request.auth.uid || data.owner_id == request.auth.uid
+      );
+    }
+
     function ownsReport(reportId) {
-      return isAuthenticated()
+      return isAuthenticated() && reportId is string
         && get(/databases/$(database)/documents/reports/$(reportId)).data.ownerUid == request.auth.uid;
+    }
+
+    // Tables / report_issues / evidences carry a parent report_id
+    // (with legacy camelCase reportId fallback).
+    function parentReportId(data) {
+      return data.report_id is string ? data.report_id
+        : (data.reportId is string ? data.reportId : '');
+    }
+
+    function ownsParentReport(data) {
+      return ownsReport(parentReportId(data));
+    }
+
+    function ownsIssue(issueId) {
+      return isAuthenticated() && issueId is string
+        && get(/databases/$(database)/documents/issues/$(issueId)).data.ownerUid == request.auth.uid;
+    }
+
+    function ownsDashboard(dashboardId) {
+      return isAuthenticated() && dashboardId is string
+        && ownsFlexible(get(/databases/$(database)/documents/dashboards/$(dashboardId)).data);
+    }
+
+    function dashboardRefOf(data) {
+      return data.dashboard_id is string ? data.dashboard_id
+        : (data.dashboardId is string ? data.dashboardId : '');
+    }
+
+    function ownsWidget(data) {
+      return ownsDashboard(dashboardRefOf(data));
+    }
+
+    // Insights always carry dashboard_id/dashboardId at runtime (see
+    // getInsights/saveInsight); created_by is the fallback owner signal.
+    function ownsInsight(data) {
+      return isAuthenticated() && (
+        ownsDashboard(dashboardRefOf(data))
+        || (data.created_by is string && data.created_by == request.auth.uid)
+      );
     }
 
     // Reports collection & subcollections
     match /reports/{reportId} {
       // Anonymous reads are strictly limited to fetching a specific report explicitly made public (get).
-      // Listing or enumerating the collection is restricted to authenticated users (list).
+      // Phase 1.2 (B24): list is per-document owner-checked, so a
+      // collection scan only ever returns the caller's own reports —
+      // no cross-user enumeration.
       allow get: if owns(resource.data) || resource.data.isShared == true;
-      allow list: if isAuthenticated();
+      allow list: if owns(resource.data);
       allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
       allow update, delete: if owns(resource.data);
 
@@ -33,26 +83,42 @@ service cloud.firestore {
     }
 
     // Folders collection for hierarchical report organization
+    // Phase 1.2 (B4): was `allow read, write: if isAuthenticated()` —
+    // any user could read/rewrite anyone's folders.
     match /folders/{folderId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update, delete: if owns(resource.data);
     }
 
     // API Keys collection for AI agents and integrations
+    // Phase 1.2 (B4): scoped to the key owner. keyHash is never used for
+    // ownership here; lookup-by-hash happens server-side only.
     match /api_keys/{keyId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update, delete: if owns(resource.data);
     }
 
     // Counters collection for atomic report numbering
+    // Phase 1.2: client writes disabled — the current value is write-only
+    // dead state (never read for allocation; see Phase 2/B7 which replaces
+    // allocation with a transaction and will own this rule).
     match /counters/{counterId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow write: if false;
     }
 
     // Issues collection & comments subcollection
+    // Phase 1.2 (B4): scoped to the issue owner (was any-authenticated).
     match /issues/{issueId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if owns(resource.data);
+      allow create: if owns(request.resource.data);
+      allow update, delete: if owns(resource.data);
 
       match /comments/{commentId} {
-        allow read, write: if isAuthenticated();
+        allow read: if ownsIssue(issueId);
+        allow write: if ownsIssue(issueId);
       }
     }
 
@@ -68,48 +134,69 @@ service cloud.firestore {
     }
 
     // Projects collection
+    // Phase 1.2 (B4): scoped via owner_id/ownerUid (was any-authenticated).
     match /projects/{projectId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsFlexible(resource.data);
+      allow create: if ownsFlexible(request.resource.data);
+      allow update, delete: if ownsFlexible(resource.data);
     }
 
     // Report-Issue join collection
+    // Phase 1.2 (B4): scoped via the parent report (was any-authenticated).
     match /report_issues/{linkId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsParentReport(resource.data);
+      allow create: if ownsParentReport(request.resource.data);
+      allow update, delete: if ownsParentReport(resource.data);
     }
 
     // Evidences collection
+    // Phase 1.2 (B4): scoped via the parent report (was any-authenticated).
     match /evidences/{evidenceId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsParentReport(resource.data);
+      allow create: if ownsParentReport(request.resource.data);
+      allow update, delete: if ownsParentReport(resource.data);
     }
 
     // Structured tables collection
     match /tables/{tableId} {
       // Public sharing may fetch a table by its known id only; listing remains private.
-      allow get: if isAuthenticated()
-        || get(/databases/$(database)/documents/reports/$(resource.data.report_id)).data.isShared == true;
-      allow list: if isAuthenticated();
-      allow create: if ownsReport(request.resource.data.report_id);
-      allow update, delete: if ownsReport(resource.data.report_id);
+      // Phase 1.2 (B24): list now requires owning the parent report
+      // (was any-authenticated get/list).
+      allow get: if ownsParentReport(resource.data)
+        || get(/databases/$(database)/documents/reports/$(parentReportId(resource.data))).data.isShared == true;
+      allow list: if ownsParentReport(resource.data);
+      allow create: if ownsParentReport(request.resource.data);
+      allow update, delete: if ownsParentReport(resource.data);
     }
 
     // Dashboards & Widgets collection
+    // Phase 1.2 (B4): dashboards scoped to owner; widgets/insights scoped
+    // via their parent dashboard (were any-authenticated).
     match /dashboards/{dashboardId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsFlexible(resource.data);
+      allow create: if ownsFlexible(request.resource.data);
+      allow update, delete: if ownsFlexible(resource.data);
     }
 
     match /widgets/{widgetId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsWidget(resource.data);
+      allow create: if ownsWidget(request.resource.data);
+      allow update, delete: if ownsWidget(resource.data);
     }
 
     // Insights collection
     match /insights/{insightId} {
-      allow read, write: if isAuthenticated();
+      allow get, list: if ownsInsight(resource.data);
+      allow create: if ownsInsight(request.resource.data);
+      allow update, delete: if ownsInsight(resource.data);
     }
 
     // Audit events collection (append-only for actors)
+    // Phase 1.2 (B24): reads scoped to the actor; creates must be
+    // self-attributed (were any-authenticated read/create).
     match /audit_events/{eventId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow read: if isAuthenticated() && resource.data.actor_id == request.auth.uid;
+      allow create: if isAuthenticated() && request.resource.data.actor_id == request.auth.uid;
       allow update, delete: if false; // Immutable audit log!
     }
   }
