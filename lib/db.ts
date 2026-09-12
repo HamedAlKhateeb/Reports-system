@@ -56,13 +56,66 @@ function getLocal<T>(key: string, fallback: T): T {
   }
 }
 
-function setLocal<T>(key: string, val: T): void {
-  if (typeof window === 'undefined') return;
+/**
+ * Data-loss guard: detects quota exhaustion (QuotaExceededError — common
+ * when images are stored as data-URLs) instead of failing silently.
+ * Returns false when the write did NOT persist. Callers on the local-only
+ * path must surface this instead of reporting success.
+ */
+export function isQuotaExceededError(e: unknown): boolean {
+  const err = e as any;
+  if (!err) return false;
+  if (err.code === 22 || err.code === 1014) return true;
+  const name = String(err.name || '');
+  const msg = String(err.message || '').toLowerCase();
+  return (
+    name === 'QuotaExceededError' ||
+    name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+    msg.includes('quota') ||
+    msg.includes('exceed') ||
+    msg.includes('storage') && msg.includes('full')
+  );
+}
+
+function setLocal<T>(key: string, val: T): boolean {
+  if (typeof window === 'undefined') return true;
   try {
     localStorage.setItem(key, JSON.stringify(val));
+    return true;
   } catch (e) {
     console.error('Failed to save to localStorage', e);
+    try {
+      window.dispatchEvent(
+        new CustomEvent('local-storage-full', {
+          detail: { key, quota: isQuotaExceededError(e) },
+        })
+      );
+    } catch {}
+    return false;
   }
+}
+
+/**
+ * Scans this browser for reports stored under OTHER owner uids
+ * (e.g. after signing in with a different account/method than the one
+ * that created them). Used to warn instead of looking "deleted".
+ */
+export function findOrphanedReportOwners(currentUid: string | undefined): Array<{ ownerUid: string; count: number }> {
+  const out = new Map<string, number>();
+  if (typeof window === 'undefined' || !currentUid) return [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(LOCAL_REPORTS_KEY)) continue;
+      const list = getLocal<ReportItem[]>(key, []);
+      for (const r of list) {
+        if (r && r.ownerUid && r.ownerUid !== currentUid) {
+          out.set(r.ownerUid, (out.get(r.ownerUid) || 0) + 1);
+        }
+      }
+    }
+  } catch {}
+  return Array.from(out.entries()).map(([ownerUid, count]) => ({ ownerUid, count }));
 }
 
 export async function isUserAuthorized(email: string | null | undefined): Promise<boolean> {
@@ -661,11 +714,18 @@ export async function createReport(
     ...sanitizedData,
   };
 
-  // Save to user isolated storage
+  // Save to user isolated storage — this IS the source of truth on the
+  // local-only path, so a failed persist must throw loudly (otherwise the
+  // report exists only in memory and "disappears" on refresh).
   if (reportData.ownerUid) {
     const userReportsKey = `${LOCAL_REPORTS_KEY}_${reportData.ownerUid}`;
     const userReports = getLocal<ReportItem[]>(userReportsKey, []);
-    setLocal(userReportsKey, [newReport, ...userReports.filter((r) => r.id !== newReport.id)]);
+    const persisted = setLocal(userReportsKey, [newReport, ...userReports.filter((r) => r.id !== newReport.id)]);
+    if (!persisted) {
+      const err: any = new Error('Local storage is full — the report could not be saved on this browser.');
+      err.code = 'storage-full';
+      throw err;
+    }
   }
   return newReport;
 }
@@ -698,9 +758,11 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
   }
 
   let firestoreOk = true;
-  if (isFirebaseConfigured && db && auth?.currentUser) {
+  const fdb = isFirebaseConfigured && db && auth?.currentUser ? db : undefined;
+  const usedFirestore = !!fdb;
+  if (fdb) {
     try {
-      const docRef = doc(db, 'reports', id);
+      const docRef = doc(fdb, 'reports', id);
       await updateDoc(docRef, sanitizedPartial);
     } catch (e) {
       console.error('Failed to update report in Firestore', e);
@@ -708,7 +770,9 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
     }
   }
 
-  // Update in user isolated storage
+  // Update in user isolated storage (track success: on the local-only path
+  // this IS the source of truth — a failed persist must report failure).
+  let localOk = true;
   if (typeof window !== 'undefined') {
     try {
       for (let i = 0; i < localStorage.length; i++) {
@@ -718,7 +782,7 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
           const idx = list.findIndex((r) => r.id === id);
           if (idx !== -1) {
             list[idx] = { ...list[idx], ...sanitizedPartial };
-            setLocal(key, list);
+            if (!setLocal(key, list)) localOk = false;
           }
         }
       }
@@ -732,7 +796,7 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
   if (index !== -1) {
     ownerUid = ownerUid || reports[index].ownerUid;
     reports[index] = { ...reports[index], ...sanitizedPartial, updatedAt: now };
-    setLocal(LOCAL_REPORTS_KEY, reports);
+    if (!setLocal(LOCAL_REPORTS_KEY, reports)) localOk = false;
   }
 
   // Directly update user-specific store
@@ -744,14 +808,15 @@ export async function updateReport(id: string, partial: Partial<ReportItem>): Pr
       const uIdx = uReports.findIndex((r) => r.id === id);
       if (uIdx !== -1) {
         uReports[uIdx] = { ...uReports[uIdx], ...sanitizedPartial, updatedAt: now };
-        setLocal(userKey, uReports);
+        if (!setLocal(userKey, uReports)) localOk = false;
       }
     }
   }
 
   // Phase 2.2 (B8): report persistence truthfully — false when the number
-  // was rejected or the Firestore write failed (local mirrors still apply).
-  return valid && firestoreOk;
+  // was rejected, the Firestore write failed, or (local-only path) the
+  // local persist failed. Never report success for memory-only state.
+  return valid && (usedFirestore ? firestoreOk : localOk);
 }
 
 /**

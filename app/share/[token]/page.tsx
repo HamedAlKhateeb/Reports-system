@@ -21,6 +21,7 @@ import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
 import { evaluateFormula, formatCellDisplay } from '@/lib/grid/formula-parser';
 import { isCoveredByMerge, findMergeStart } from '@/lib/grid/merge-utils';
 import { chartDataTable } from '@/lib/charts/export-helpers';
+import { buildMindTrees, mindTreesToHtml } from '@/lib/mindmap';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { formatWhatsAppUrl } from '@/lib/contact-links';
@@ -670,6 +671,22 @@ function renderTipTapContentToHtml(
         }
       } catch {}
       return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${title}</div><div class="mt-1 text-[11px] text-muted-foreground">${type}</div><div class="mt-2 text-[11px] text-muted-foreground">${isAr ? 'رسم بياني تفاعلي داخل التقرير الأصلي' : 'Interactive chart in the original report'}</div>${chartTableHtml}</figure>`;
+    }
+
+    case 'reportMindmap': {
+      const title = String(node.attrs?.title || (isAr ? 'خريطة ذهنية' : 'Mind map'));
+      const caption = String(node.attrs?.caption || '').trim();
+      let bodyHtml = '';
+      try {
+        const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
+        bodyHtml = trees.length
+          ? mindTreesToHtml(trees, escapeHtml)
+          : `<div class="mt-1 text-[11px] text-muted-foreground">${isAr ? 'خريطة فارغة' : 'Empty map'}</div>`;
+      } catch {
+        bodyHtml = '';
+      }
+      const capHtml = caption ? `<div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(caption)}</div>` : '';
+      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">🧠 ${escapeHtml(title)}</div><div class="mt-2 text-start text-xs">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
     default:

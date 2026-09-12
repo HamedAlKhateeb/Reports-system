@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   Kanban,
   Plus,
@@ -341,19 +341,31 @@ export default function DashboardPage() {
     setSelectedIssue(null);
   };
 
-  // Filter issues
-  const filteredIssues = issues.filter((iss) => {
-    const matchesSearch =
-      (iss.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (iss.description || '').toLowerCase().includes(searchQuery.toLowerCase());
-    const normSev = normalizeSeverity(iss.severity);
-    const matchesSeverity =
-      severityFilter === 'all' ||
-      iss.severity === severityFilter ||
-      normSev === severityFilter ||
-      normSev === normalizeSeverity(severityFilter);
-    return matchesSearch && matchesSeverity;
-  });
+  // Filter issues (B18 perf: memoized — was re-filtered + lowercased on every render/keystroke)
+  const filteredIssues = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return issues.filter((iss) => {
+      const matchesSearch =
+        (iss.title || '').toLowerCase().includes(q) ||
+        (iss.description || '').toLowerCase().includes(q);
+      const normSev = normalizeSeverity(iss.severity);
+      const matchesSeverity =
+        severityFilter === 'all' ||
+        iss.severity === severityFilter ||
+        normSev === severityFilter ||
+        normSev === normalizeSeverity(severityFilter);
+      return matchesSearch && matchesSeverity;
+    });
+  }, [issues, searchQuery, severityFilter]);
+
+  // O(1) report lookup (B18 perf: was reports.find per row/card = O(N*M))
+  const reportById = useMemo(() => new Map(reports.map((r) => [r.id, r])), [reports]);
+
+  // Severity rank map built once (B18 perf: was rebuilt per column per render)
+  const severityRankMap = useMemo(
+    () => new Map<string, number>(severityConfig.map((c) => [c.id, c.order])),
+    [severityConfig]
+  );
 
   const columns: { status: IssueStatus; title: string; color: string; icon: React.ComponentType<{ className?: string }> }[] = [
     {
@@ -550,7 +562,7 @@ export default function DashboardPage() {
             </TableHeader>
             <TableBody>
               {filteredIssues.map((iss, idx) => {
-                const linked = reports.find((r) => r.id === iss.linkedReportId);
+                const linked = iss.linkedReportId ? reportById.get(iss.linkedReportId) : undefined;
                 return (
                   <TableRow key={iss.id} className="break-inside-avoid border-b border-slate-200">
                     <TableCell className="py-2 px-2 font-mono font-semibold">{idx + 1}</TableCell>
@@ -615,7 +627,7 @@ export default function DashboardPage() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden items-start">
           {columns.map((col) => {
             const Icon = col.icon;
-            const rankMap = new Map<string, number>(severityConfig.map((c) => [c.id, c.order]));
+            const rankMap = severityRankMap;
 
             const columnIssues = filteredIssues
               .filter((i) => isStatusInColumn(i.status, col.status))
@@ -663,7 +675,7 @@ export default function DashboardPage() {
                 {/* Cards Container with independent vertical scroll */}
                 <div className="kanban-card-list flex flex-col gap-3 pe-1.5">
                   {columnIssues.map((issue, idx) => {
-                    const linked = reports.find((r) => r.id === issue.linkedReportId);
+                    const linked = issue.linkedReportId ? reportById.get(issue.linkedReportId) : undefined;
                     return (
                       <IssueCard
                         key={issue.id}

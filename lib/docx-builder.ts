@@ -35,6 +35,7 @@ function imageDimensions(buf: Buffer): { width: number; height: number } {
 import { t, DICTIONARY } from './i18n/dictionary';
 import { getTableById } from './db';
 import { chartDataTable } from './charts/export-helpers';
+import { buildMindTrees, mindTreesToMarkdown } from './mindmap';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { filterUnplacedImages, fitImageBox } from './images-appendix';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
@@ -716,6 +717,43 @@ export async function buildDocxDocument(
           }
         } catch {
           // Title-only fallback (previous behavior).
+        }
+      } else if (node.type === 'reportMindmap') {
+        const title = String(node.attrs?.title || (isAr ? 'خريطة ذهنية' : 'Mind map'));
+        const caption = String(node.attrs?.caption || '').trim();
+        children.push(
+          new Paragraph({
+            children: [makeRun(`🧠 ${title}`, { bold: true, size: 24, color: theme.primary })],
+            alignment: AlignmentType.CENTER,
+            bidirectional: isAr,
+            spacing: { before: 160, after: 120 },
+          })
+        );
+        try {
+          const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
+          const body = trees.length ? mindTreesToMarkdown(trees) : (isAr ? '_خريطة فارغة_' : '_Empty map_');
+          for (const line of body.split('\n')) {
+            const depth = (line.match(/^  */)?.[0].length ?? 0) / 2;
+            const text = line.replace(/^[\s-•]+/, '').trim() || line.trim();
+            if (!text) continue;
+            children.push(
+              new Paragraph({
+                children: [makeRun(`${'  '.repeat(Math.min(depth, 5))}• ${text}`, { size: 20 })],
+                alignment: isAr ? AlignmentType.RIGHT : AlignmentType.LEFT,
+                bidirectional: isAr,
+              })
+            );
+          }
+        } catch {}
+        if (caption) {
+          children.push(
+            new Paragraph({
+              children: [makeRun(caption, { size: 20, color: '64748b' })],
+              alignment: AlignmentType.CENTER,
+              bidirectional: isAr,
+              spacing: { before: 40, after: 160 },
+            })
+          );
         }
       }
     }

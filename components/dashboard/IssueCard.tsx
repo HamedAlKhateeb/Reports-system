@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { memo, useState } from 'react';
 import { Link2, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -26,7 +26,8 @@ interface IssueCardProps {
   canMoveDown?: boolean;
 }
 
-export function IssueCard({
+// B18 perf: memoized — Kanban re-renders all cards on every keystroke/drag otherwise.
+export const IssueCard = memo(function IssueCard({
   issue,
   linkedReport,
   onClick,
@@ -182,4 +183,4 @@ export function IssueCard({
       )}
     </div>
   );
-}
+});

@@ -4,6 +4,7 @@ import { formatWhatsAppUrl } from './contact-links';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
 import { filterUnplacedImages } from './images-appendix';
 import { chartDataTable, escapeHtmlExport } from './charts/export-helpers';
+import { buildMindTrees, mindTreesToHtml } from './mindmap';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLINE_CSS } from './latex';
 
@@ -258,6 +259,22 @@ function tipTapNodeToHtml(
         chartTableHtml = '';
       }
       return `<figure class="report-chart-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">📊 ${title}</div><div style="font-size:11px;color:#64748b;">${type}</div>${chartTableHtml}</figure>`;
+    }
+
+    case 'reportMindmap': {
+      const title = String(node.attrs?.title || (isAr ? 'خريطة ذهنية' : 'Mind map'));
+      const caption = String(node.attrs?.caption || '').trim();
+      let bodyHtml = '';
+      try {
+        const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
+        bodyHtml = trees.length
+          ? mindTreesToHtml(trees, escapeHtmlExport)
+          : `<div style="font-size:11px;color:#64748b;">${isAr ? 'خريطة فارغة' : 'Empty map'}</div>`;
+      } catch {
+        bodyHtml = `<div style="font-size:11px;color:#64748b;">${isAr ? 'خريطة فارغة' : 'Empty map'}</div>`;
+      }
+      const capHtml = caption ? `<div style="font-size:11px;color:#64748b;">${escapeHtmlExport(caption)}</div>` : '';
+      return `<figure class="report-mindmap-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">🧠 ${escapeHtmlExport(title)}</div><div style="text-align:start;margin-top:8px;">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
     default:

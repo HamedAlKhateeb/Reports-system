@@ -3,6 +3,7 @@ import { t } from './i18n/dictionary';
 import { getTablesByReportId } from './db';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
 import { chartDataTable } from './charts/export-helpers';
+import { buildMindTrees, mindTreesToMarkdown } from './mindmap';
 import JSZip from 'jszip';
 
 /**
@@ -237,6 +238,19 @@ export function tipTapJsonToMarkdown(
           }
         } catch {}
         return `> 📊 **${title}** (${type})\n\n`;
+      }
+
+      case 'reportMindmap': {
+        const title = String(node.attrs?.title || 'Mind map');
+        const caption = String(node.attrs?.caption || '').trim();
+        let body = '';
+        try {
+          const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
+          body = trees.length ? mindTreesToMarkdown(trees) : (isAr ? '_خريطة فارغة_' : '_Empty map_');
+        } catch {
+          body = isAr ? '_خريطة فارغة_' : '_Empty map_';
+        }
+        return `> 🧠 **${title}**\n>\n${body.split('\n').map((l) => `> ${l}`).join('\n')}${caption ? `\n> ${caption}` : ''}\n\n`;
       }
 
       case 'latexInline': {
