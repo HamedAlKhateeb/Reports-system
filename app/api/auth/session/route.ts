@@ -13,15 +13,39 @@ import { verifyFirebaseIdToken } from '@/lib/server-auth';
  */
 
 const COOKIE_NAME = '__session';
-const MAX_AGE_SECONDS = 3600; // Firebase ID tokens live ~1 hour.
+const MAX_AGE_SECONDS = 3600; // Upper bound; Firebase ID tokens live ~1 hour.
+
+function tokenRemainingSeconds(idToken: string): number | null {
+  // Client already verified server-side — this only sizes Max-Age so the
+  // cookie never outlives the JWT it carries. Never throws.
+  try {
+    const part = idToken.split('.')[1];
+    if (!part) return null;
+    const norm = part.replace(/-/g, '+').replace(/_/g, '/');
+    const json = JSON.parse(
+      typeof Buffer !== 'undefined'
+        ? Buffer.from(norm, 'base64').toString('utf8')
+        : atob(norm)
+    ) as { exp?: number };
+    if (typeof json.exp !== 'number') return null;
+    return json.exp - Math.floor(Date.now() / 1000);
+  } catch {
+    return null;
+  }
+}
 
 function buildSessionCookie(idToken: string): string {
+  const remaining = tokenRemainingSeconds(idToken);
+  const maxAge =
+    remaining === null ? MAX_AGE_SECONDS : Math.min(Math.max(remaining, 60), MAX_AGE_SECONDS);
   const parts = [
     `${COOKIE_NAME}=${encodeURIComponent(idToken)}`,
     'Path=/',
-    `Max-Age=${MAX_AGE_SECONDS}`,
+    `Max-Age=${maxAge}`,
     'HttpOnly',
-    'SameSite=Strict',
+    // Lax (not Strict): page-gating cookie must survive top-level navigation
+    // from external links (email/WhatsApp) or users look "logged out".
+    'SameSite=Lax',
   ];
   // `Secure` would block the cookie on http://localhost dev, so only set it
   // outside development or when explicitly behind https.
@@ -69,7 +93,7 @@ export async function DELETE() {
     'Path=/',
     'Max-Age=0',
     'HttpOnly',
-    'SameSite=Strict',
+    'SameSite=Lax',
   ];
   if (process.env.NODE_ENV === 'production') {
     parts.push('Secure');

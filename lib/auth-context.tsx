@@ -84,6 +84,29 @@ async function mintServerSession(getToken: () => Promise<string>): Promise<boole
   }
 }
 
+/**
+ * Resilient mint: background tabs, sleep, and flaky networks routinely kill a
+ * single attempt — and a missed refresh used to mean a surprise "logout" an
+ * hour later (ID tokens live ~1h). Retries with backoff; records success time
+ * so focus/visibility handlers can top up a stale cookie.
+ */
+async function mintWithRetry(
+  getToken: () => Promise<string>,
+  recordSuccess?: () => void,
+  attempts = 3
+): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    if (i > 0) {
+      await new Promise((r) => setTimeout(r, 1500 * i));
+    }
+    if (await mintServerSession(getToken)) {
+      recordSuccess?.();
+      return true;
+    }
+  }
+  return false;
+}
+
 async function clearServerSession(): Promise<void> {
   try {
     await fetch('/api/auth/session', { method: 'DELETE' });
@@ -138,18 +161,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Periodic ID-token refresh so the HttpOnly `__session` cookie never goes
-  // stale while a Firebase user is active (tokens live ~1h).
+  // stale while a Firebase user is active (tokens live ~1h). Resilient:
+  // 30-min interval with force-refreshed tokens + retry, plus a top-up when
+  // the tab becomes visible/focused after >25 min (covers sleep/background
+  // throttling, the classic surprise-logout scenario).
+  const lastMintRef = React.useRef<number>(Date.now());
+  const markMinted = React.useCallback(() => {
+    lastMintRef.current = Date.now();
+  }, []);
   useEffect(() => {
     if (!user || !isFirebaseConfigured || !auth) return;
     if (!isServerVerifiableUid(user.uid)) return;
-    const timer = setInterval(() => {
+    const refresh = () => {
       const current = auth?.currentUser;
       if (current && current.uid === user.uid) {
-        void mintServerSession(() => current.getIdToken());
+        // Force-refresh: the cookie must carry a fresh 1h token, not a
+        // cached one minutes from expiry.
+        void mintWithRetry(() => current.getIdToken(true), markMinted);
       }
-    }, 50 * 60 * 1000);
-    return () => clearInterval(timer);
-  }, [user]);
+    };
+    const topUpIfStale = () => {
+      if (Date.now() - lastMintRef.current > 25 * 60 * 1000) refresh();
+    };
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') topUpIfStale();
+    };
+    const timer = setInterval(refresh, 30 * 60 * 1000);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+    if (typeof window !== 'undefined') window.addEventListener('focus', topUpIfStale);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+      if (typeof window !== 'undefined') window.removeEventListener('focus', topUpIfStale);
+    };
+  }, [user, markMinted]);
 
   useEffect(() => {
     if (isFirebaseConfigured && auth) {
@@ -170,7 +215,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             };
             setUser(currentAuthUser);
             syncSessionCookie(currentAuthUser);
-            void mintServerSession(() => result.user.getIdToken());
+            void mintWithRetry(() => result.user.getIdToken());
           }
         })
         .catch((e) => {
@@ -191,7 +236,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           };
           setUser(currentAuthUser);
           syncSessionCookie(currentAuthUser);
-          void mintServerSession(() => fbUser.getIdToken());
+          void mintWithRetry(() => fbUser.getIdToken());
           if (typeof window !== 'undefined') {
             localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
           }
@@ -587,7 +632,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       };
       setUser(updatedAuthUser);
       syncSessionCookie(updatedAuthUser);
-      void mintServerSession(() => fbUser.getIdToken());
+      void mintWithRetry(() => fbUser.getIdToken());
       if (typeof window !== 'undefined') {
         localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(updatedAuthUser));
       }
