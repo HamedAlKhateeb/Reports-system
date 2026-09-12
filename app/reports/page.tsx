@@ -246,21 +246,19 @@ export default function ReportsPage() {
     }
     try {
       setLoading(true);
-      const [reportsData, foldersData] = await Promise.all([
-        getReports(user.uid),
+      // Perf: single reports fan-out — split active/archived locally instead of
+      // fetching getReports() twice (each call fans out to shared+folder queries).
+      const [allReports, foldersData] = await Promise.all([
+        getReports(user.uid, undefined, { includeArchived: true }),
         getFolders(user.uid),
       ]);
-      setReports(reportsData);
+      setReports(allReports.filter((r) => !isArchivedReport(r)));
       setFolders(foldersData);
       // Orphaned-identity check: data under OTHER uids looks "deleted".
       try {
         setOrphanInfo(findOrphanedReportOwners(user.uid));
       } catch {}
-      // Archive badge count (cheap: same fetch shape as the archive view).
-      try {
-        const all = await getReports(user.uid, undefined, { includeArchived: true });
-        setArchivedReports(all.filter(isArchivedReport));
-      } catch {}
+      setArchivedReports(allReports.filter(isArchivedReport));
     } catch (err) {
       console.error('Failed to load reports and folders', err);
     } finally {
@@ -274,6 +272,15 @@ export default function ReportsPage() {
     setCustomTemplates(getCustomTemplates(user?.uid));
 
     const handleReportsChanged = () => {
+      // Perf: collapse back-to-back report events into one reload.
+      const now = Date.now();
+      const last = (handleReportsChanged as any).__last || 0;
+      if (now - last < 400) {
+        clearTimeout((handleReportsChanged as any).__timer);
+        (handleReportsChanged as any).__timer = setTimeout(loadData, 400);
+        return;
+      }
+      (handleReportsChanged as any).__last = now;
       loadData();
     };
 

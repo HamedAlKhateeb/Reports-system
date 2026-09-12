@@ -106,23 +106,32 @@ export default function DashboardPage() {
       setLoading(false);
       return;
     }
+    // Perf: collapse refetch storms (issue-created → issue-updated → report-updated
+    // can fire back-to-back; each loadData is 2 Firestore fan-outs).
+    const now = Date.now();
+    const last = (loadData as any).__lastRun || 0;
+    if ((loadData as any).__inFlight) return;
+    if (now - last < 400) {
+      clearTimeout((loadData as any).__timer);
+      (loadData as any).__timer = setTimeout(() => { (loadData as any).__lastRun = 0; loadData(); }, 400);
+      return;
+    }
+    (loadData as any).__inFlight = true;
+    (loadData as any).__lastRun = now;
     try {
       setLoading(true);
-      const [fetchedIssues, fetchedReports] = await Promise.all([
-        getIssues(user.uid),
-        getReports(user.uid),
-      ]);
-      setIssues(fetchedIssues);
+      const fetchedReports = await getReports(user.uid);
+      // Perf: single issues fan-out — split active/archived locally instead of
+      // fetching getIssues() twice (each call re-runs getReports internally).
+      const allIssues = await getIssues(user.uid, undefined, { includeArchived: true });
+      setIssues(allIssues.filter((i) => !isArchivedIssue(i)));
       setReports(fetchedReports);
       setSeverityConfig(getSeverityConfig(user.uid));
-      // Archive badge count.
-      try {
-        const all = await getIssues(user.uid, undefined, { includeArchived: true });
-        setArchivedIssues(all.filter(isArchivedIssue));
-      } catch {}
+      setArchivedIssues(allIssues.filter(isArchivedIssue));
     } catch (err) {
       console.error('Failed to load dashboard data', err);
     } finally {
+      (loadData as any).__inFlight = false;
       setLoading(false);
     }
   }, [user, authLoading]);
