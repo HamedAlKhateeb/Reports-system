@@ -49,6 +49,8 @@ import {
   updateFolder,
   deleteFolderSafe,
   moveReportToFolder,
+  inviteToFolder,
+  revokeFolderInvite,
 } from '@/lib/db';
 import { ReportItem, FolderItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -87,6 +89,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { FolderTreeView } from '@/components/reports/FolderTreeView';
 import { FolderBreadcrumb } from '@/components/reports/FolderBreadcrumb';
 import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
+import { InviteDialog } from '@/components/collaboration/InviteDialog';
 
 const COLOR_PRESETS = [
   '#2E4034', // Forest Olive
@@ -134,6 +137,11 @@ export default function ReportsPage() {
 
   const [folderToDelete, setFolderToDelete] = useState<FolderItem | null>(null);
   const [deletingFolder, setDeletingFolder] = useState(false);
+
+  // Collaboration (folder invites) state
+  const [folderToShare, setFolderToShare] = useState<FolderItem | null>(null);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   const [itemToMove, setItemToMove] = useState<
     | { type: 'report'; item: ReportItem }
@@ -420,6 +428,65 @@ export default function ReportsPage() {
     }
   };
 
+  // Collaboration: folder invites (owner only — enforced in db + rules)
+  const describeInviteError = (code?: string): string => {
+    if (isAr) {
+      if (code === 'invalid-email') return 'بريد إلكتروني غير صالح.';
+      if (code === 'cannot-invite-self') return 'لا يمكنك دعوة نفسك.';
+      if (code === 'forbidden') return 'فقط مالك المجلد يمكنه إدارة الدعوات.';
+      return 'فشل حفظ الدعوة. تحقق من الاتصال وحاول مجددًا.';
+    }
+    if (code === 'invalid-email') return 'Invalid email address.';
+    if (code === 'cannot-invite-self') return 'You cannot invite yourself.';
+    if (code === 'forbidden') return 'Only the folder owner can manage invites.';
+    return 'Failed to save the invite. Check your connection and retry.';
+  };
+
+  const refreshFolders = async () => {
+    const updated = await getFolders(user?.uid);
+    setFolders(updated);
+    if (folderToShare) {
+      const fresh = updated.find((f) => f.id === folderToShare.id) || null;
+      setFolderToShare(fresh);
+    }
+  };
+
+  const handleInviteToFolder = async (email: string) => {
+    if (!folderToShare || !user) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    try {
+      const res = await inviteToFolder(folderToShare.id, email, user.uid);
+      if (!res.ok) {
+        setInviteError(describeInviteError(res.error));
+        return;
+      }
+      await refreshFolders();
+    } catch (err: any) {
+      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const handleRevokeFolderInvite = async (email: string) => {
+    if (!folderToShare || !user) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    try {
+      const res = await revokeFolderInvite(folderToShare.id, email, user.uid);
+      if (!res.ok) {
+        setInviteError(describeInviteError(res.error));
+        return;
+      }
+      await refreshFolders();
+    } catch (err: any) {
+      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
   const handleDropReportOnFolder = async (reportId: string, targetFolderId: string | null) => {
     try {
       await moveReportToFolder(reportId, targetFolderId);
@@ -584,6 +651,7 @@ export default function ReportsPage() {
               folders={folders}
               reports={reports}
               selectedFolderId={selectedFolderId}
+              currentUid={user?.uid}
               onSelectFolder={(id) => {
                 setSelectedFolderId(id);
                 setSearchQuery('');
@@ -598,6 +666,10 @@ export default function ReportsPage() {
               }}
               onDeleteFolder={(f) => {
                 setFolderToDelete(f);
+              }}
+              onShareFolder={(f) => {
+                setInviteError(null);
+                setFolderToShare(f);
               }}
               onDropReportOnFolder={handleDropReportOnFolder}
               onNewReportInFolder={handleCreateReportInFolder}
@@ -829,14 +901,6 @@ export default function ReportsPage() {
                               </DropdownMenuItem>
 
                               <DropdownMenuItem
-                                onClick={() => setItemToMove({ type: 'report', item: report })}
-                                className="gap-2 cursor-pointer text-xs font-medium"
-                              >
-                                <Move className="size-3.5 text-muted-foreground" />
-                                <span>{isAr ? 'نقل إلى مجلد...' : 'Move to folder...'}</span>
-                              </DropdownMenuItem>
-
-                              <DropdownMenuItem
                                 onClick={(e) => handleCopyLink(e, report.id)}
                                 className="gap-2 cursor-pointer text-xs font-medium"
                               >
@@ -857,15 +921,28 @@ export default function ReportsPage() {
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
 
-                            <DropdownMenuSeparator />
+                            {/* Collaboration: move/delete stay owner-only (rules deny otherwise) */}
+                            {report.ownerUid === user?.uid && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => setItemToMove({ type: 'report', item: report })}
+                                  className="gap-2 cursor-pointer text-xs font-medium"
+                                >
+                                  <Move className="size-3.5 text-muted-foreground" />
+                                  <span>{isAr ? 'نقل إلى مجلد...' : 'Move to folder...'}</span>
+                                </DropdownMenuItem>
 
-                            <DropdownMenuItem
-                              onClick={(e) => handleDelete(e, report.id)}
-                              className="gap-2 cursor-pointer text-xs font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
-                            >
-                              <Trash2 className="size-3.5" />
-                              <span>{t('delete')}</span>
-                            </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+
+                                <DropdownMenuItem
+                                  onClick={(e) => handleDelete(e, report.id)}
+                                  className="gap-2 cursor-pointer text-xs font-medium text-destructive focus:text-destructive focus:bg-destructive/10"
+                                >
+                                  <Trash2 className="size-3.5" />
+                                  <span>{t('delete')}</span>
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
 
@@ -1104,6 +1181,24 @@ export default function ReportsPage() {
           reportToMove={itemToMove.type === 'report' ? itemToMove.item : null}
           folderToMove={itemToMove.type === 'folder' ? itemToMove.item : null}
           onConfirmMove={handleConfirmMoveModal}
+        />
+      )}
+
+      {/* Collaboration: folder invites (owner only — enforced in db + rules) */}
+      {folderToShare && (
+        <InviteDialog
+          isOpen={Boolean(folderToShare)}
+          onClose={() => {
+            setFolderToShare(null);
+            setInviteError(null);
+          }}
+          subjectName={folderToShare.name}
+          kind="folder"
+          emails={folderToShare.sharedWithEmails || []}
+          busy={inviteBusy}
+          error={inviteError}
+          onInvite={handleInviteToFolder}
+          onRevoke={handleRevokeFolderInvite}
         />
       )}
 

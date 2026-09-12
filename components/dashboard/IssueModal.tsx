@@ -129,6 +129,9 @@ export function IssueModal({
   const statuses: IssueStatus[] = ['open', 'in_progress', 'done'];
   const severities: IssueSeverity[] = ['critical', 'major', 'medium', 'normal', 'minor'];
   const linkedReport = reports.find((r) => r.id === linkedReportId);
+  // Collaboration: ownership/linkage management + delete stay owner-only
+  // (rules deny otherwise); editing fields and commenting stay open.
+  const isIssueOwner = !!user && issue.ownerUid === user.uid;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -147,16 +150,18 @@ export function IssueModal({
           </div>
 
           <div className="flex items-center gap-1">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={handleDelete}
-              className="size-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              title={t('delete')}
-            >
-              <Trash2 className="size-4" />
-            </Button>
+            {isIssueOwner && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={handleDelete}
+                className="size-8 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                title={t('delete')}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            )}
           </div>
         </DialogHeader>
 
@@ -223,12 +228,14 @@ export function IssueModal({
               </FieldLabel>
               <select
                 value={linkedReportId}
+                disabled={!isIssueOwner}
                 onChange={(e) => {
                   const rId = e.target.value;
                   setLinkedReportId(rId);
                   handleFieldChange({ linkedReportId: rId || null });
                 }}
-                className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+                title={isIssueOwner ? undefined : (lang === 'ar' ? 'فقط مالك المشكلة يمكنه تغيير الارتباط' : 'Only the issue owner can change the linkage')}
               >
                 <option value="">{t('noneLinked')}</option>
                 {reports.map((r) => (

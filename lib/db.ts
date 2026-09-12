@@ -412,12 +412,13 @@ export function sortReportsNewestFirst(list: ReportItem[]): ReportItem[] {
   });
 }
 
-export async function getReports(userUid?: string): Promise<ReportItem[]> {
+export async function getReports(userUid?: string, userEmail?: string): Promise<ReportItem[]> {
   // CRITICAL SECURITY FIX: Never return reports if userUid is missing!
   // An unauthenticated request must ALWAYS return an empty list []!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
+  const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
@@ -437,6 +438,40 @@ export async function getReports(userUid?: string): Promise<ReportItem[]> {
         ...d.data(),
       })) as ReportItem[];
 
+      // Collaboration: reports shared directly + reports inside folders
+      // the user owns or is invited to (current AND future reports —
+      // resolved dynamically, no fan-out).
+      if (email) {
+        try {
+          const sharedQ = query(
+            collection(db, 'reports'),
+            where('sharedWithEmails', 'array-contains', email)
+          );
+          const sharedSnap = await getDocs(sharedQ);
+          sharedSnap.docs.forEach((d) => {
+            list.push({ id: d.id, ...(d.data() as object) } as ReportItem);
+          });
+        } catch {}
+        try {
+          const folders = await getFolders(userUid, email);
+          const extraFolderIds: string[] = [];
+          folders.forEach((f) => {
+            if (extraFolderIds.indexOf(f.id) === -1) extraFolderIds.push(f.id);
+          });
+          // Reports in others' shared folders AND reports collaborators
+          // created inside our own folders.
+          for (let i = 0; i < extraFolderIds.length; i += 30) {
+            const chunk = extraFolderIds.slice(i, i + 30);
+            if (chunk.length === 0) continue;
+            const fq = query(collection(db, 'reports'), where('folderId', 'in', chunk));
+            const fsnap = await getDocs(fq);
+            fsnap.docs.forEach((d) => {
+              list.push({ id: d.id, ...(d.data() as object) } as ReportItem);
+            });
+          }
+        } catch {}
+      }
+
       // Merge with user-isolated local cache (if any created offline/recently)
       const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
       const localReports = getLocal<ReportItem[]>(userReportsKey, []);
@@ -454,14 +489,46 @@ export async function getReports(userUid?: string): Promise<ReportItem[]> {
     }
   }
 
-  // Isolated local storage strictly for this userUid
+  // Isolated local storage strictly for this userUid (+ local shares by email
+  // + folder inheritance: reports inside visible folders).
   const userReportsKey = `${LOCAL_REPORTS_KEY}_${userUid}`;
   const reports = getLocal<ReportItem[]>(userReportsKey, []);
-  return sortReportsNewestFirst(reports.filter((r) => r.ownerUid === userUid));
+  const globalReports = getLocal<ReportItem[]>(LOCAL_REPORTS_KEY, []);
+  const merged = new Map<string, ReportItem>();
+  reports.forEach((r) => merged.set(r.id, r));
+  let visibleFolderIds: Set<string> | null = null;
+  if (email) {
+    try {
+      const folderList = await getFolders(userUid, email);
+      visibleFolderIds = new Set(folderList.map((f) => f.id));
+    } catch {
+      visibleFolderIds = new Set();
+    }
+    globalReports.forEach((r) => {
+      if (r.ownerUid !== userUid && isEmailInvited(r.sharedWithEmails, email)) merged.set(r.id, r);
+      else if (
+        r.ownerUid !== userUid &&
+        r.folderId &&
+        visibleFolderIds!.has(r.folderId) &&
+        !merged.has(r.id)
+      ) {
+        merged.set(r.id, r);
+      }
+    });
+  }
+  return sortReportsNewestFirst(
+    Array.from(merged.values()).filter(
+      (r) =>
+        r.ownerUid === userUid ||
+        (email && isEmailInvited(r.sharedWithEmails, email)) ||
+        (email && !!r.folderId && !!visibleFolderIds && visibleFolderIds.has(r.folderId))
+    )
+  );
 }
 
-export async function getReportById(id: string, userUid?: string): Promise<ReportItem | null> {
+export async function getReportById(id: string, userUid?: string, userEmail?: string): Promise<ReportItem | null> {
   if (!id) return null;
+  const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
   if (isFirebaseConfigured && db) {
     try {
@@ -471,6 +538,17 @@ export async function getReportById(id: string, userUid?: string): Promise<Repor
         // Check authorization: must be owned by userUid OR be a shared report (isShared: true)
         if (data.isShared || (userUid && data.ownerUid === userUid)) {
           return data;
+        }
+        // Collaboration: invited email on the report or on its folder.
+        if (email && isEmailInvited(data.sharedWithEmails, email)) return data;
+        if (email && data.folderId) {
+          try {
+            const folderSnap = await getDoc(doc(db, 'folders', data.folderId));
+            if (folderSnap.exists()) {
+              const folder = { id: folderSnap.id, ...folderSnap.data() } as FolderItem;
+              if (isEmailInvited(folder.sharedWithEmails, email)) return data;
+            }
+          } catch {}
         }
         // If neither shared nor owned by userUid, forbid access!
         if (userUid && data.ownerUid && data.ownerUid !== userUid) {
@@ -494,6 +572,7 @@ export async function getReportById(id: string, userUid?: string): Promise<Repor
     const uReports = getLocal<ReportItem[]>(userReportsKey, []);
     const uFound = uReports.find((r) => r.id === id);
     if (uFound && (uFound.ownerUid === userUid || uFound.isShared)) return uFound;
+    if (uFound && email && isEmailInvited(uFound.sharedWithEmails, email)) return uFound;
   }
 
   // Search global fallback strictly checking ownership or sharing
@@ -502,6 +581,14 @@ export async function getReportById(id: string, userUid?: string): Promise<Repor
   if (found) {
     if (found.isShared || (userUid && found.ownerUid === userUid)) {
       return found;
+    }
+    if (email && isEmailInvited(found.sharedWithEmails, email)) return found;
+    // Collaboration: folder inheritance (local mode).
+    if (email && userUid && found.folderId) {
+      try {
+        const folderList = await getFolders(userUid, email);
+        if (folderList.some((f) => f.id === found.folderId)) return found;
+      } catch {}
     }
     return null;
   }
@@ -1073,11 +1160,12 @@ function sortIssuesByOrder(list: IssueItem[], userUid?: string): IssueItem[] {
   });
 }
 
-export async function getIssues(userUid?: string): Promise<IssueItem[]> {
+export async function getIssues(userUid?: string, userEmail?: string): Promise<IssueItem[]> {
   // CRITICAL SECURITY FIX: Never return issues if userUid is missing!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
+  const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
@@ -1087,6 +1175,23 @@ export async function getIssues(userUid?: string): Promise<IssueItem[]> {
     return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid), userUid);
   }
 
+  // Collaboration: ids of reports this user may see (owned + shared).
+  // Used to include issues linked to shared reports (any owner).
+  let accessibleReportIds: Set<string> | null = null;
+  const resolveAccessibleIds = async (): Promise<Set<string>> => {
+    if (accessibleReportIds) return accessibleReportIds;
+    accessibleReportIds = new Set<string>();
+    try {
+      const reports = await getReports(userUid, email);
+      reports.forEach((r) => accessibleReportIds!.add(r.id));
+    } catch {}
+    return accessibleReportIds;
+  };
+  const isLinkedAccessible = (i: IssueItem, ids: Set<string>): boolean => {
+    const linked = i.linkedReportId || (i as any).reportId;
+    return !!linked && ids.has(linked);
+  };
+
   if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
       const q = query(collection(db, 'issues'), where('ownerUid', '==', userUid));
@@ -1095,16 +1200,52 @@ export async function getIssues(userUid?: string): Promise<IssueItem[]> {
         id: d.id,
         ...d.data(),
       })) as IssueItem[];
-      return sortIssuesByOrder(issues, userUid);
+      // Collaboration: issues on shared reports (any owner).
+      if (email) {
+        try {
+          const ids = await resolveAccessibleIds();
+          const linkedIds = Array.from(ids);
+          for (let i = 0; i < linkedIds.length; i += 30) {
+            const chunk = linkedIds.slice(i, i + 30);
+            if (chunk.length === 0) continue;
+            const lq = query(collection(db, 'issues'), where('linkedReportId', 'in', chunk));
+            const lsnap = await getDocs(lq);
+            lsnap.docs.forEach((d) => {
+              issues.push({ id: d.id, ...(d.data() as object) } as IssueItem);
+            });
+          }
+        } catch {}
+      }
+      // De-duplicate by id, then keep own + linked-accessible only.
+      const seen = new Map<string, IssueItem>();
+      issues.forEach((iss) => seen.set(iss.id, iss));
+      const ids = await resolveAccessibleIds();
+      const scoped = Array.from(seen.values()).filter(
+        (iss) => iss.ownerUid === userUid || isLinkedAccessible(iss, ids)
+      );
+      return sortIssuesByOrder(scoped, userUid);
     } catch (e) {
       console.warn('Firestore getIssues failed, using local storage fallback', e);
     }
   }
 
-  // Local storage strictly isolated per user UID
+  // Local storage strictly isolated per user UID (+ shared by link)
   const userIssuesKey = `${LOCAL_ISSUES_KEY}_${userUid}`;
   const issues = getLocal<IssueItem[]>(userIssuesKey, []);
-  return sortIssuesByOrder(issues.filter((i) => i.ownerUid === userUid), userUid);
+  const globalIssues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+  const merged = new Map<string, IssueItem>();
+  issues.forEach((i) => merged.set(i.id, i));
+  if (email) {
+    const ids = await resolveAccessibleIds();
+    globalIssues.forEach((i) => {
+      if (i.ownerUid !== userUid && isLinkedAccessible(i, ids)) merged.set(i.id, i);
+    });
+  }
+  const ids = await resolveAccessibleIds();
+  return sortIssuesByOrder(
+    Array.from(merged.values()).filter((i) => i.ownerUid === userUid || isLinkedAccessible(i, ids)),
+    userUid
+  );
 }
 
 export async function reorderIssues(
@@ -1491,11 +1632,12 @@ export async function getReportByShareToken(
 // FOLDERS MANAGEMENT
 // ==========================================
 
-export async function getFolders(userUid?: string): Promise<FolderItem[]> {
+export async function getFolders(userUid?: string, userEmail?: string): Promise<FolderItem[]> {
   // CRITICAL SECURITY FIX: Never return folders if userUid is missing!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
+  const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
@@ -1513,6 +1655,23 @@ export async function getFolders(userUid?: string): Promise<FolderItem[]> {
         id: d.id,
         ...d.data(),
       })) as FolderItem[];
+      // Collaboration: folders shared with this user (email).
+      if (email) {
+        try {
+          const sharedQ = query(
+            collection(db, 'folders'),
+            where('sharedWithEmails', 'array-contains', email)
+          );
+          const sharedSnap = await getDocs(sharedQ);
+          const seen = new Set(list.map((f) => f.id));
+          sharedSnap.docs.forEach((d) => {
+            if (!seen.has(d.id)) {
+              seen.add(d.id);
+              list.push({ id: d.id, ...(d.data() as object) } as FolderItem);
+            }
+          });
+        } catch {}
+      }
       return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
       console.warn('Firestore getFolders failed, using local storage fallback', e);
@@ -1521,11 +1680,22 @@ export async function getFolders(userUid?: string): Promise<FolderItem[]> {
 
   const userKey = `${LOCAL_FOLDERS_KEY}_${userUid}`;
   const folders = getLocal<FolderItem[]>(userKey, []);
-  return [...folders.filter((f) => f.ownerUid === userUid)].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const globalFolders = getLocal<FolderItem[]>(LOCAL_FOLDERS_KEY, []);
+  const merged = new Map<string, FolderItem>();
+  folders.forEach((f) => merged.set(f.id, f));
+  if (email) {
+    globalFolders.forEach((f) => {
+      if (f.ownerUid !== userUid && isEmailInvited(f.sharedWithEmails, email)) merged.set(f.id, f);
+    });
+  }
+  return Array.from(merged.values())
+    .filter((f) => f.ownerUid === userUid || (email && isEmailInvited(f.sharedWithEmails, email)))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
-export async function getFolderById(id: string, userUid?: string): Promise<FolderItem | null> {
+export async function getFolderById(id: string, userUid?: string, userEmail?: string): Promise<FolderItem | null> {
   if (!id) return null;
+  const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
   if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
@@ -1533,6 +1703,8 @@ export async function getFolderById(id: string, userUid?: string): Promise<Folde
       if (snap.exists()) {
         const data = { id: snap.id, ...snap.data() } as FolderItem;
         if (userUid && data.ownerUid && data.ownerUid !== userUid) {
+          // Collaboration: invited email may still read.
+          if (email && isEmailInvited(data.sharedWithEmails, email)) return data;
           return null;
         }
         return data;
@@ -1546,6 +1718,11 @@ export async function getFolderById(id: string, userUid?: string): Promise<Folde
     const folders = getLocal<FolderItem[]>(`${LOCAL_FOLDERS_KEY}_${userUid}`, []);
     const found = folders.find((f) => f.id === id && f.ownerUid === userUid);
     if (found) return found;
+  }
+  if (email) {
+    const globalFolders = getLocal<FolderItem[]>(LOCAL_FOLDERS_KEY, []);
+    const shared = globalFolders.find((f) => f.id === id && isEmailInvited(f.sharedWithEmails, email));
+    if (shared) return shared;
   }
 
   return null;
@@ -1653,11 +1830,161 @@ export async function updateFolder(id: string, partial: Partial<FolderItem>): Pr
   }
 }
 
+// ==========================================
+// COLLABORATION (INVITES BY EMAIL)
+// ==========================================
+//
+// Sharing key = the collaborator's lowercase account EMAIL (no users
+// directory exists; Firestore rules match request.auth.token.email).
+// - Report invite  → access to that one report (read/write, no delete,
+//   no share-management).
+// - Folder invite  → access to every report directly inside the folder,
+//   current AND future (resolved dynamically at read time — subfolders
+//   are NOT included).
+// - Issues/comments/images/tables follow the report: collaborators see
+//   and edit only what is linked to reports they can access.
+
+const LOCAL_AUTH_USER_KEY = 'review_app_auth_user';
+
+/** Normalize + validate an invite email. Returns null when invalid. */
+export function normalizeShareEmail(email: unknown): string | null {
+  const v = String(email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return null;
+  return v;
+}
+
+/** Best-effort current user email (Firebase, else the stored session). */
+export function currentUserEmail(): string {
+  try {
+    const fb = auth?.currentUser?.email;
+    if (fb && fb.trim()) return fb.trim().toLowerCase();
+  } catch {}
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(LOCAL_AUTH_USER_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.email) return String(parsed.email).trim().toLowerCase();
+      }
+    } catch {}
+  }
+  return '';
+}
+
+export function isEmailInvited(
+  sharedWithEmails: string[] | undefined,
+  email: string
+): boolean {
+  if (!email || !Array.isArray(sharedWithEmails)) return false;
+  const norm = email.trim().toLowerCase();
+  return sharedWithEmails.some((e) => String(e || '').trim().toLowerCase() === norm);
+}
+
+/**
+ * Pure access check for a report when the (optional) folder is already
+ * loaded. Owner always passes. Shared-link (isShared) is intentionally
+ * NOT access here — it is anonymous, not collaboration.
+ */
+export function canAccessReport(
+  report: ReportItem | null | undefined,
+  userUid: string | undefined,
+  userEmail: string,
+  folder?: FolderItem | null
+): boolean {
+  if (!report || !userUid) return false;
+  if (report.ownerUid === userUid) return true;
+  if (isEmailInvited(report.sharedWithEmails, userEmail)) return true;
+  if (report.folderId && folder && folder.id === report.folderId) {
+    if (folder.ownerUid === userUid) return true;
+    if (isEmailInvited(folder.sharedWithEmails, userEmail)) return true;
+  }
+  return false;
+}
+
+/** Owner-only gate for managing invites on a report/folder. */
+function isShareManager(ownerUid: string | undefined, requesterUid: string | undefined): boolean {
+  return !!ownerUid && !!requesterUid && ownerUid === requesterUid;
+}
+
+async function writeReportShares(reportId: string, emails: string[]): Promise<boolean> {
+  const clean = Array.from(new Set(emails.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)));
+  return updateReport(reportId, { sharedWithEmails: clean });
+}
+
+async function writeFolderShares(folderId: string, emails: string[]): Promise<boolean> {
+  const clean = Array.from(new Set(emails.map((e) => String(e || '').trim().toLowerCase()).filter(Boolean)));
+  try {
+    await updateFolder(folderId, { sharedWithEmails: clean });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function inviteToReport(
+  reportId: string,
+  email: unknown,
+  requesterUid: string
+): Promise<{ ok: boolean; error?: string }> {
+  const norm = normalizeShareEmail(email);
+  if (!norm) return { ok: false, error: 'invalid-email' };
+  if (norm === currentUserEmail()) return { ok: false, error: 'cannot-invite-self' };
+  const rep = await getReportById(reportId, requesterUid);
+  if (!rep || !isShareManager(rep.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
+  const ok = await writeReportShares(reportId, [...(rep.sharedWithEmails || []), norm]);
+  return ok ? { ok: true } : { ok: false, error: 'save-failed' };
+}
+
+export async function revokeReportInvite(
+  reportId: string,
+  email: unknown,
+  requesterUid: string
+): Promise<{ ok: boolean; error?: string }> {
+  const norm = normalizeShareEmail(email);
+  if (!norm) return { ok: false, error: 'invalid-email' };
+  const rep = await getReportById(reportId, requesterUid);
+  if (!rep || !isShareManager(rep.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
+  const ok = await writeReportShares(
+    reportId,
+    (rep.sharedWithEmails || []).filter((e) => e !== norm)
+  );
+  return ok ? { ok: true } : { ok: false, error: 'save-failed' };
+}
+
+export async function inviteToFolder(
+  folderId: string,
+  email: unknown,
+  requesterUid: string
+): Promise<{ ok: boolean; error?: string }> {
+  const norm = normalizeShareEmail(email);
+  if (!norm) return { ok: false, error: 'invalid-email' };
+  if (norm === currentUserEmail()) return { ok: false, error: 'cannot-invite-self' };
+  const folder = await getFolderById(folderId, requesterUid);
+  if (!folder || !isShareManager(folder.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
+  const ok = await writeFolderShares(folderId, [...(folder.sharedWithEmails || []), norm]);
+  return ok ? { ok: true } : { ok: false, error: 'save-failed' };
+}
+
+export async function revokeFolderInvite(
+  folderId: string,
+  email: unknown,
+  requesterUid: string
+): Promise<{ ok: boolean; error?: string }> {
+  const norm = normalizeShareEmail(email);
+  if (!norm) return { ok: false, error: 'invalid-email' };
+  const folder = await getFolderById(folderId, requesterUid);
+  if (!folder || !isShareManager(folder.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
+  const ok = await writeFolderShares(
+    folderId,
+    (folder.sharedWithEmails || []).filter((e) => e !== norm)
+  );
+  return ok ? { ok: true } : { ok: false, error: 'save-failed' };
+}
+
 /**
  * Checks whether moving folderId into targetParentId would create a circular reference.
  * Returns TRUE if a cycle would be created (ILLEGAL MOVE), FALSE if safe.
- */
-export function wouldCreateFolderCycle(
+ */export function wouldCreateFolderCycle(
   folderId: string,
   targetParentId: string | null,
   allFolders: FolderItem[]

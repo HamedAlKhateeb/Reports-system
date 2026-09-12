@@ -11,6 +11,7 @@ import {
   Edit2,
   Trash2,
   Move,
+  UserPlus,
   Home,
   Layers,
   Check,
@@ -37,8 +38,11 @@ interface FolderTreeViewProps {
   onRenameFolder: (folder: FolderItem) => void;
   onMoveFolder: (folder: FolderItem) => void;
   onDeleteFolder: (folder: FolderItem) => void;
+  onShareFolder?: (folder: FolderItem) => void;
   onDropReportOnFolder: (reportId: string, targetFolderId: string | null) => void;
   onNewReportInFolder?: (folderId: string) => void;
+  /** Current user uid — owner-only actions (rename/move/delete/share) hide otherwise. */
+  currentUid?: string;
 }
 
 export function FolderTreeView({
@@ -50,8 +54,10 @@ export function FolderTreeView({
   onRenameFolder,
   onMoveFolder,
   onDeleteFolder,
+  onShareFolder,
   onDropReportOnFolder,
   onNewReportInFolder,
+  currentUid,
 }: FolderTreeViewProps) {
   const { lang } = useLanguage();
   const isAr = lang === 'ar';
@@ -119,6 +125,8 @@ export function FolderTreeView({
           const reportCount = getFolderReportCount(f.id);
 
           const ArrowIcon = isExpanded ? ChevronDown : isAr ? ChevronLeftIcon : ChevronRight;
+          // Collaboration: structural actions stay owner-only (rules deny otherwise).
+          const isOwned = !currentUid || !f.ownerUid || f.ownerUid === currentUid;
 
           return (
             <React.Fragment key={f.id}>
@@ -208,37 +216,58 @@ export function FolderTreeView({
                         <FolderPlus className="h-3.5 w-3.5 text-emerald-600" />
                         <span>{isAr ? 'مجلد فرعي جديد' : 'New Subfolder'}</span>
                       </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onRenameFolder(f);
-                        }}
-                        className="cursor-pointer gap-2"
-                      >
-                        <Edit2 className="h-3.5 w-3.5 text-blue-600" />
-                        <span>{isAr ? 'إعادة تسمية' : 'Rename'}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onMoveFolder(f);
-                        }}
-                        className="cursor-pointer gap-2"
-                      >
-                        <Move className="h-3.5 w-3.5 text-amber-600" />
-                        <span>{isAr ? 'نقل المجلد' : 'Move Folder'}</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onDeleteFolder(f);
-                        }}
-                        className="cursor-pointer gap-2 text-rose-600 focus:text-rose-600 focus:bg-rose-50 dark:focus:bg-rose-950/40"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        <span>{isAr ? 'حذف المجلد' : 'Delete'}</span>
-                      </DropdownMenuItem>
+                      {isOwned && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRenameFolder(f);
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <Edit2 className="h-3.5 w-3.5 text-blue-600" />
+                          <span>{isAr ? 'إعادة تسمية' : 'Rename'}</span>
+                        </DropdownMenuItem>
+                      )}
+                      {isOwned && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onMoveFolder(f);
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <Move className="h-3.5 w-3.5 text-amber-600" />
+                          <span>{isAr ? 'نقل المجلد' : 'Move Folder'}</span>
+                        </DropdownMenuItem>
+                      )}
+                      {onShareFolder && isOwned && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onShareFolder(f);
+                          }}
+                          className="cursor-pointer gap-2"
+                        >
+                          <UserPlus className="h-3.5 w-3.5 text-teal-600" />
+                          <span>
+                            {isAr ? 'مشاركة المجلد' : 'Share Folder'}
+                            {(f.sharedWithEmails?.length || 0) > 0 ? ` (${f.sharedWithEmails!.length})` : ''}
+                          </span>
+                        </DropdownMenuItem>
+                      )}
+                      {isOwned && <DropdownMenuSeparator />}
+                      {isOwned && (
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteFolder(f);
+                          }}
+                          className="cursor-pointer gap-2 text-rose-600 focus:text-rose-600 focus:bg-rose-50 dark:focus:bg-rose-950/40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>{isAr ? 'حذف المجلد' : 'Delete'}</span>
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>

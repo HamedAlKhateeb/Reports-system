@@ -10,18 +10,46 @@ service firebase.storage {
       return firestore.get(/databases/(default)/documents/reports/$(reportId)).data;
     }
 
+    function callerEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function hasCallerEmail(data) {
+      return isAuthenticated()
+        && request.auth.token.email is string
+        && data.sharedWithEmails is list
+        && callerEmail() in data.sharedWithEmails;
+    }
+
+    // Collaboration: owner, direct invitee, owned folder, or invited folder.
+    function canReadReport(data) {
+      return isAuthenticated() && (
+        data.ownerUid == request.auth.uid
+        || hasCallerEmail(data)
+        || data.isShared == true
+      );
+    }
+
+    function folderOf(data) {
+      return firestore.get(/databases/(default)/documents/folders/$(data.folderId)).data;
+    }
+
+    function canWriteReport(data) {
+      return isAuthenticated() && (
+        data.ownerUid == request.auth.uid
+        || hasCallerEmail(data)
+        || (data.folderId is string
+          && (folderOf(data).ownerUid == request.auth.uid || hasCallerEmail(folderOf(data))))
+      );
+    }
+
     // Phase 1.3 (B5): was `allow read, write: if isAuthenticated()` —
     // any signed-in user could read/overwrite ANY report's images.
-    // Writes require owning the parent report; reads additionally allow
-    // explicitly shared (public-link) reports. Matches the Firestore
-    // `reports/{id}/images` subcollection rule.
+    // Collaborators may upload (edit); reads additionally allow
+    // explicitly shared (public-link) reports.
     match /reports/{reportId}/images/{fileName} {
-      allow read: if isAuthenticated() && (
-        reportOf(reportId).ownerUid == request.auth.uid
-        || reportOf(reportId).isShared == true
-      );
-      allow write: if isAuthenticated()
-        && reportOf(reportId).ownerUid == request.auth.uid;
+      allow read: if canReadReport(reportOf(reportId));
+      allow write: if canWriteReport(reportOf(reportId));
     }
   }
 }
