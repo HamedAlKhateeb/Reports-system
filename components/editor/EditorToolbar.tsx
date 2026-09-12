@@ -43,6 +43,7 @@ import {
   ArrowRightLeft,
   ArrowLeftRight,
   Maximize2,
+  Network,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,7 @@ import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { TableEntity } from '@/lib/types';
 import { saveTable } from '@/lib/db';
+import { seedMindmap, newMindId } from '@/lib/mindmap';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 
@@ -985,6 +987,46 @@ export function EditorToolbar({
             aria-label={lang === 'ar' ? 'رسم بياني' : 'Chart'}
           >
             <BarChart3 className="h-4 w-4" />
+          </Button>
+        </div>
+
+        {/* Mind Map Button — inserts an editable React-Flow mind-map block */}
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (!editor) return;
+              try {
+                const seed = seedMindmap(lang === 'ar');
+                (editor.chain().focus() as any).setReportMindmap({
+                  mindmapId: newMindId('mm'),
+                  title: lang === 'ar' ? 'خريطة ذهنية' : 'Mind map',
+                  caption: '',
+                  nodes: seed.nodes,
+                  edges: seed.edges,
+                  height: 400,
+                  width: 100,
+                  alignment: 'center',
+                  background: 'default',
+                }).run();
+                toast.success(lang === 'ar' ? 'تم إدراج خريطة ذهنية' : 'Mind map inserted');
+              } catch (err) {
+                console.error('Insert mindmap failed:', err);
+                toast.error(lang === 'ar' ? 'فشل إدراج الخريطة الذهنية' : 'Failed to insert mind map');
+              }
+            }}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive('reportMindmap')
+                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            )}
+            title={lang === 'ar' ? 'إدراج خريطة ذهنية' : 'Insert mind map'}
+            aria-label={lang === 'ar' ? 'خريطة ذهنية' : 'Mind map'}
+          >
+            <Network className="h-4 w-4" />
           </Button>
         </div>
 

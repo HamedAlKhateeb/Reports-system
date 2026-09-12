@@ -12,9 +12,11 @@ import Link from '@tiptap/extension-link';
 import TextAlign from '@tiptap/extension-text-align';
 import Underline from '@tiptap/extension-underline';
 import TextDirection from './TextDirectionExtension';
+import { ResetEmptyHeading } from './ResetEmptyHeading';
 import { ReportImage } from './ReportImageNode';
 import { SmartTableNode } from './SmartTableNode';
 import { ReportChart } from './ReportChartNode';
+import { ReportMindmap } from './ReportMindmapNode';
 import { LatexInline } from './LatexInlineNode';
 import { convertLatexDelimitersToNodes } from '@/lib/latex';
 import { ChartBuilderPanel } from './ChartBuilderPanel';
@@ -121,6 +123,8 @@ export function TipTapEditor({
   const { t, lang } = useLanguage();
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Live word/character counter (footer bar below the editor — never overlaps writing).
+  const [stats, setStats] = useState({ words: 0, chars: 0 });
   const [isSticky, setIsSticky] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{ isOpen: boolean; x: number; y: number }>({
@@ -391,6 +395,7 @@ export function TipTapEditor({
       ReportImage,
       SmartTableNode,
       ReportChart,
+      ReportMindmap,
       LatexInline,
       TextColor,
       TextHighlight,
@@ -401,6 +406,7 @@ export function TipTapEditor({
         alignments: ['left', 'center', 'right', 'justify'],
       }),
       TextDirection,
+      ResetEmptyHeading,
     ],
     content: (() => {
       try {
@@ -459,6 +465,26 @@ export function TipTapEditor({
         return false;
       },
       handleKeyDown: (view, event) => {
+        // GUARD: Backspace/Delete must never silently remove an image or mind-map.
+        // Both are atom block nodes: pressing Backspace with one selected would
+        // delete it instantly (then autosave persists the loss). Deletion is only
+        // allowed through the element toolbar's trash button with confirmation.
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+          try {
+            const sel: any = view?.state?.selection;
+            const selectedNode = sel?.node;
+            if (selectedNode?.type?.name === 'reportImage' || selectedNode?.type?.name === 'reportMindmap') {
+              event.preventDefault();
+              toast.error(
+                reportLanguage === 'ar'
+                  ? 'لحماية المحتوى: احذف الصور والخرائط الذهنية بزر سلة المهملات في شريط العنصر (مع التأكيد)، وليس بزر الرجوع.'
+                  : 'Content protected: delete images and mind maps with the trash button on the element toolbar (with confirmation), not Backspace.'
+              );
+              return true; // handled — node stays intact
+            }
+          } catch {}
+        }
+
         // PRESERVE BUILT-IN TABLE TAB BEHAVIOR:
         // When pressing Tab or Shift+Tab inside a table cell, let TipTap's table extension
         // navigate cells or automatically append a new row at the end of the table.
@@ -654,6 +680,14 @@ export function TipTapEditor({
       if (onContentChange) {
         onContentChange(json);
       }
+      try {
+        const text: string = ed.getText() || '';
+        const trimmed = text.trim();
+        setStats({
+          words: trimmed ? trimmed.split(/\s+/).length : 0,
+          chars: text.replace(/\s/g, '').length,
+        });
+      } catch {}
       triggerAutosave(json);
     },
     onBlur: ({ editor: ed }) => {
@@ -673,6 +707,19 @@ export function TipTapEditor({
       onEditorReady(editor);
     }
   }, [editor, onEditorReady]);
+
+  // Initial word/character count once the editor is ready.
+  useEffect(() => {
+    if (!editor) return;
+    try {
+      const text: string = editor.getText() || '';
+      const trimmed = text.trim();
+      setStats({
+        words: trimmed ? trimmed.split(/\s+/).length : 0,
+        chars: text.replace(/\s/g, '').length,
+      });
+    } catch {}
+  }, [editor]);
 
   // Listen for AI Agent report content mutation events and revert events
   useEffect(() => {
@@ -1366,6 +1413,20 @@ export function TipTapEditor({
           <EditorContent editor={editor} />
           <TableFillHandle editor={editor} />
         </div>
+      </div>
+
+      {/* Live word/character counter — footer bar below the editor, never overlaps writing */}
+      <div
+        className="flex items-center justify-end gap-3 rounded-b-xl border-t border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground sm:px-4"
+        aria-live="polite"
+      >
+        <span className="font-semibold tabular-nums">
+          {reportLanguage === 'ar' ? `كلمات: ${stats.words}` : `Words: ${stats.words}`}
+        </span>
+        <span aria-hidden="true" className="opacity-40">•</span>
+        <span className="tabular-nums">
+          {reportLanguage === 'ar' ? `أحرف: ${stats.chars}` : `Characters: ${stats.chars}`}
+        </span>
       </div>
 
       {/* Interactive Right-Click Context Menu */}
