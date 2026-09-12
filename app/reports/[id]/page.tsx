@@ -57,6 +57,8 @@ import {
   getFolders,
   getReportIssues,
   getProjectById,
+  isReportNumberTaken,
+  isValidReportNumber,
   DEFAULT_PROJECT_ID,
 } from '@/lib/db';
 import {
@@ -136,6 +138,30 @@ export default function ReportDetailPage() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  // Phase 2.2 (B8): explicit save status — a failed save must never look
+  // like a success. `lastFailedSaveRef` holds a retry closure for the banner.
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const lastFailedSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const savedClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markSaved = useCallback(() => {
+    setSaveStatus('saved');
+    setSaveError(null);
+    lastFailedSaveRef.current = null;
+    if (savedClearTimer.current) clearTimeout(savedClearTimer.current);
+    savedClearTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
+  }, []);
+  const markSaveFailed = useCallback(
+    (message: string, retry: () => Promise<void>) => {
+      setSaveStatus('error');
+      setSaveError(message);
+      lastFailedSaveRef.current = retry;
+    },
+    []
+  );
+  const saveFailedMessage = lang === 'ar'
+    ? 'فشل حفظ التقرير — تحقق من الاتصال ثم أعد المحاولة. التعديلات المحلية ما زالت ظاهرة لكنها غير محفوظة على الخادم.'
+    : 'Failed to save the report — check your connection and retry. Local edits are still visible but not saved on the server.';
   const latestContentRef = useRef<any>(null);
   const liveEditorRef = useRef<any>(null);
 
@@ -427,35 +453,61 @@ export default function ReportDetailPage() {
   const handleEditorSave = async (contentJson: any) => {
     latestContentRef.current = contentJson;
     updateActiveReportContent(contentJson);
-    await updateReport(reportId, { contentJson });
-    setReport((prev) => (prev ? { ...prev, contentJson } : null));
-    // refresh images in case a new image was uploaded
-    const updatedImages = await getReportImages(reportId);
-    setImages(updatedImages);
+    setSaveStatus('saving');
+    setSaveError(null);
+    try {
+      const ok = await updateReport(reportId, { contentJson });
+      if (!ok) throw new Error(saveFailedMessage);
+      setReport((prev) => (prev ? { ...prev, contentJson } : null));
+      // refresh images in case a new image was uploaded
+      const updatedImages = await getReportImages(reportId);
+      setImages(updatedImages);
+      markSaved();
+    } catch (err: any) {
+      console.error('Editor save failed:', err);
+      markSaveFailed(err?.message || saveFailedMessage, () => handleEditorSave(contentJson));
+    }
   };
+
+  // Phase 2.1 (B7): strict number validation — positive integer and unique
+  // within the user's scope. Invalid/duplicates revert with a visible error.
+  const resolveValidReportNumber = useCallback(async (): Promise<{ ok: boolean; numVal: number | string }> => {
+    const raw = reportNumber;
+    if (!isValidReportNumber(raw)) {
+      setSaveStatus('error');
+      setSaveError(
+        lang === 'ar'
+          ? `رقم التقرير غير صالح ("${String(raw)}") — يجب أن يكون عددًا صحيحًا موجبًا. تمت إعادة القيمة السابقة.`
+          : `Invalid report number ("${String(raw)}") — it must be a positive integer. Reverted to the previous value.`
+      );
+      if (report) setReportNumber(report.reportNumber ?? 1);
+      lastFailedSaveRef.current = null;
+      return { ok: false, numVal: report?.reportNumber ?? 1 };
+    }
+    const numVal = Number(raw);
+    if (report && (await isReportNumberTaken(user?.uid, numVal, reportId))) {
+      setSaveStatus('error');
+      setSaveError(
+        lang === 'ar'
+          ? `رقم التقرير #${numVal} مستخدم بالفعل في تقرير آخر — اختر رقمًا غير مستخدم. تمت إعادة القيمة السابقة.`
+          : `Report #${numVal} is already used by another report — pick an unused number. Reverted to the previous value.`
+      );
+      setReportNumber(report.reportNumber ?? 1);
+      lastFailedSaveRef.current = null;
+      return { ok: false, numVal: report.reportNumber ?? 1 };
+    }
+    return { ok: true, numVal };
+  }, [report, reportId, reportNumber, lang, user?.uid]);
 
   // Update metadata
   const handleMetaBlur = async () => {
     if (!report) return;
-    const numVal = Number(reportNumber) || reportNumber;
-    await updateReport(reportId, {
-      title,
-      reportNumber: numVal,
-      author,
-      authorTitle,
-      organization,
-      signatureData,
-      themeColor,
-      backgroundColor,
-      contactLinks,
-      systemUnderReview,
-      language: reportLanguage,
-      customFields,
-      customFooterFields,
-    });
-    if (report) {
-      setReport({
-        ...report,
+    const { ok, numVal } = await resolveValidReportNumber();
+    if (!ok) return;
+    setSaveStatus('saving');
+    setSaveError(null);
+    try {
+      const success = await updateReport(reportId, {
         title,
         reportNumber: numVal,
         author,
@@ -470,12 +522,36 @@ export default function ReportDetailPage() {
         customFields,
         customFooterFields,
       });
+      if (!success) throw new Error(saveFailedMessage);
+      if (report) {
+        setReport({
+          ...report,
+          title,
+          reportNumber: numVal,
+          author,
+          authorTitle,
+          organization,
+          signatureData,
+          themeColor,
+          backgroundColor,
+          contactLinks,
+          systemUnderReview,
+          language: reportLanguage,
+          customFields,
+          customFooterFields,
+        });
+      }
+      markSaved();
+    } catch (err: any) {
+      console.error('Metadata save failed:', err);
+      markSaveFailed(err?.message || saveFailedMessage, () => handleMetaBlur());
     }
   };
 
   const handleSaveImmediately = useCallback(async () => {
     if (!report) return;
-    const numVal = Number(reportNumber) || reportNumber;
+    const { ok, numVal } = await resolveValidReportNumber();
+    if (!ok) return;
     const content = latestContentRef.current || report.contentJson;
     const updatedData = {
       title,
@@ -493,11 +569,19 @@ export default function ReportDetailPage() {
       customFields,
       customFooterFields,
     };
-    await updateReport(reportId, updatedData);
-    setReport((prev) => (prev ? { ...prev, ...updatedData } : null));
+    setSaveStatus('saving');
+    setSaveError(null);
+    try {
+      const success = await updateReport(reportId, updatedData);
+      if (!success) throw new Error(saveFailedMessage);
+      setReport((prev) => (prev ? { ...prev, ...updatedData } : null));
+      markSaved();
+    } catch (err: any) {
+      console.error('Immediate save failed:', err);
+      markSaveFailed(err?.message || saveFailedMessage, () => handleSaveImmediately());
+    }
   }, [
     report,
-    reportNumber,
     reportId,
     title,
     author,
@@ -511,6 +595,10 @@ export default function ReportDetailPage() {
     reportLanguage,
     customFields,
     customFooterFields,
+    markSaved,
+    markSaveFailed,
+    saveFailedMessage,
+    resolveValidReportNumber,
   ]);
 
   const handleAddCustomField = () => {
@@ -823,6 +911,62 @@ export default function ReportDetailPage() {
           >
             ×
           </button>
+        </div>
+      )}
+
+      {/* Phase 2.2 (B8): explicit save status — saving / saved / failed+retry */}
+      {saveStatus !== 'idle' && (
+        <div
+          role="status"
+          className={cn(
+            'mb-6 rounded-lg border p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs',
+            saveStatus === 'error'
+              ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100'
+              : saveStatus === 'saved'
+                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100'
+                : 'border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-900 dark:text-sky-100'
+          )}
+        >
+          <div className="flex items-center gap-2">
+            {saveStatus === 'saving' && <Clock className="h-4 w-4 animate-spin shrink-0" />}
+            {saveStatus === 'saved' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+            {saveStatus === 'error' && <AlertCircle className="h-4 w-4 shrink-0" />}
+            <span className="font-medium">
+              {saveStatus === 'saving' && (lang === 'ar' ? 'جاري حفظ التقرير...' : 'Saving report...')}
+              {saveStatus === 'saved' && (lang === 'ar' ? 'تم حفظ التقرير بنجاح.' : 'Report saved successfully.')}
+              {saveStatus === 'error' && (saveError || saveFailedMessage)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+            {saveStatus === 'error' && lastFailedSaveRef.current && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const retry = lastFailedSaveRef.current;
+                  lastFailedSaveRef.current = null;
+                  setSaveError(null);
+                  if (retry) void retry();
+                }}
+                className="h-7 text-xs font-semibold gap-1.5"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>{lang === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
+              </Button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSaveStatus('idle');
+                setSaveError(null);
+                lastFailedSaveRef.current = null;
+              }}
+              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5"
+              title={lang === 'ar' ? 'إخفاء' : 'Dismiss'}
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
 

@@ -101,12 +101,15 @@ service cloud.firestore {
     }
 
     // Counters collection for atomic report numbering
-    // Phase 1.2: client writes disabled — the current value is write-only
-    // dead state (never read for allocation; see Phase 2/B7 which replaces
-    // allocation with a transaction and will own this rule).
+    // Phase 2.1 (B7): each user owns exactly one counter document,
+    // `counters/reports_{uid}`, advanced inside a transaction by
+    // allocateReportNumber(). The legacy global `counters/reports` is
+    // no longer written by clients (kept readable for diagnostics).
     match /counters/{counterId} {
       allow read: if isAuthenticated();
-      allow write: if false;
+      allow write: if isAuthenticated()
+        && counterId == 'reports_' + request.auth.uid
+        && request.resource.data.ownerUid == request.auth.uid;
     }
 
     // Issues collection & comments subcollection
