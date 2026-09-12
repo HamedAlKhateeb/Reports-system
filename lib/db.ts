@@ -1585,6 +1585,27 @@ export async function getIssuesByReportId(
   userUid?: string,
   opts?: ScopeOpts
 ): Promise<IssueItem[]> {
+  // Perf: targeted queries instead of a full getIssues() fan-out (which itself
+  // re-runs getReports). Falls back to the full scan only for the local-only
+  // path and legacy `reportId`-field matches.
+  const visibleIssue = (i: IssueItem): boolean =>
+    !!opts?.includeArchived || !isArchivedIssue(i);
+  if (isFirebaseConfigured && db && auth?.currentUser && reportId) {
+    try {
+      const found = new Map<string, IssueItem>();
+      try {
+        const snap = await getDocs(query(collection(db, 'issues'), where('linkedReportId', '==', reportId)));
+        snap.docs.forEach((d) => found.set(d.id, { id: d.id, ...(d.data() as object) } as IssueItem));
+      } catch {}
+      try {
+        const legacy = await getDocs(query(collection(db, 'issues'), where('reportId', '==', reportId)));
+        legacy.docs.forEach((d) => {
+          if (!found.has(d.id)) found.set(d.id, { id: d.id, ...(d.data() as object) } as IssueItem);
+        });
+      } catch {}
+      if (found.size > 0) return Array.from(found.values()).filter(visibleIssue);
+    } catch {}
+  }
   const all = await getIssues(userUid, undefined, opts);
   return all.filter((i) => i.linkedReportId === reportId || (i as any).reportId === reportId);
 }

@@ -555,6 +555,17 @@ export default function ReportDetailPage() {
     };
 
     const handleIssuesChanged = () => {
+      // Perf: collapse back-to-back issue events (each reload is a query round-trip).
+      const now = Date.now();
+      const last = (handleIssuesChanged as any).__last || 0;
+      if (now - last < 400) {
+        clearTimeout((handleIssuesChanged as any).__timer);
+        (handleIssuesChanged as any).__timer = setTimeout(() => {
+          getIssuesByReportId(reportId).then(setLinkedIssues).catch(() => {});
+        }, 400);
+        return;
+      }
+      (handleIssuesChanged as any).__last = now;
       getIssuesByReportId(reportId).then(setLinkedIssues).catch(() => {});
     };
 

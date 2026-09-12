@@ -27,6 +27,7 @@ import {
   AlertTriangle,
   Keyboard,
   Building2,
+  DatabaseBackup,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -64,8 +65,9 @@ import {
 import { cn } from '@/lib/utils';
 import { KeyboardShortcutsSettings } from '@/components/settings/KeyboardShortcutsSettings';
 import { OrganizationDefaultsSettings } from '@/components/settings/OrganizationDefaultsSettings';
+import { BackupSettings } from '@/components/settings/BackupSettings';
 
-export type SettingsTab = 'general' | 'organization' | 'ai' | 'api-keys' | 'contact' | 'shortcuts';
+export type SettingsTab = 'general' | 'organization' | 'ai' | 'api-keys' | 'contact' | 'shortcuts' | 'backup';
 
 export default function SettingsPage() {
   const { lang, setLang, defaultReportLang, setDefaultReportLang, t } = useLanguage();
@@ -96,7 +98,7 @@ export default function SettingsPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const hash = window.location.hash.replace('#', '') as SettingsTab;
-      if (['general', 'organization', 'ai', 'api-keys', 'contact', 'shortcuts'].includes(hash)) {
+      if (['general', 'organization', 'ai', 'api-keys', 'contact', 'shortcuts', 'backup'].includes(hash)) {
         setActiveTab(hash);
       }
     }
@@ -393,6 +395,11 @@ export default function SettingsPage() {
       id: 'shortcuts' as const,
       label: lang === 'ar' ? 'اختصارات لوحة المفاتيح' : 'Keyboard Shortcuts',
       icon: Keyboard,
+    },
+    {
+      id: 'backup' as const,
+      label: lang === 'ar' ? 'النسخ الاحتياطي' : 'Backup',
+      icon: DatabaseBackup,
     },
   ];
 
@@ -1400,6 +1407,9 @@ export default function SettingsPage() {
               <KeyboardShortcutsSettings />
             </div>
           )}
+
+          {/* TAB 6: Backup & Restore */}
+          {activeTab === 'backup' && <BackupSettings />}
         </main>
       </div>
     </div>
