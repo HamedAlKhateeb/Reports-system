@@ -949,6 +949,33 @@ export async function updateImageFileName(
     images[idx].fileName = fileName;
     setLocal(LOCAL_IMAGES_KEY, images);
   }
+
+  // Phase 4.3 (B16): propagate the new fileName into embedded reportImage
+  // nodes so every matching key (id/src/fileName/seq) stays consistent
+  // after a rename — otherwise the appendix could list the image again.
+  // Best-effort: a rename must never fail because of this sync.
+  try {
+    const uid = auth?.currentUser?.uid;
+    const rep = await getReportById(reportId, uid);
+    if (rep?.contentJson) {
+      let changed = false;
+      const visit = (node: any): void => {
+        if (!node) return;
+        if (
+          node.type === 'reportImage' &&
+          node.attrs &&
+          String(node.attrs.imageId || '') === imageId &&
+          node.attrs.fileName !== fileName
+        ) {
+          node.attrs = { ...node.attrs, fileName };
+          changed = true;
+        }
+        if (Array.isArray(node.content)) node.content.forEach(visit);
+      };
+      visit(rep.contentJson);
+      if (changed) await updateReport(reportId, { contentJson: rep.contentJson });
+    }
+  } catch {}
 }
 
 export async function deleteReportImage(

@@ -11,6 +11,7 @@ declare module '@tiptap/core' {
         title?: string;
         sourceTableId: string;
         sourceKind?: 'smart' | 'native';
+        sourceFingerprint?: string;
         categoryColumn: string;
         valueColumns: string[] | string;
         xAxisName?: string;
@@ -52,6 +53,7 @@ export const ReportChart = Node.create({
       title: { default: '' },
       sourceTableId: { default: '' },
       sourceKind: { default: 'smart' },
+      sourceFingerprint: { default: '' },
       categoryColumn: { default: '' },
       valueColumns: { default: [] },
       xAxisName: { default: '' },
@@ -76,6 +78,7 @@ export const ReportChart = Node.create({
             title: el.getAttribute('data-title') || '',
             sourceTableId: el.getAttribute('data-source-table') || '',
             sourceKind: (el.getAttribute('data-source-kind') as any) || 'smart',
+            sourceFingerprint: el.getAttribute('data-source-fingerprint') || '',
             categoryColumn: el.getAttribute('data-category') || '',
             valueColumns: parseValueColumns(el.getAttribute('data-series')),
             xAxisName: el.getAttribute('data-x-name') || '',
@@ -104,6 +107,7 @@ export const ReportChart = Node.create({
         'data-title': HTMLAttributes.title,
         'data-source-table': HTMLAttributes.sourceTableId,
         'data-source-kind': HTMLAttributes.sourceKind,
+        'data-source-fingerprint': HTMLAttributes.sourceFingerprint || '',
         'data-category': HTMLAttributes.categoryColumn,
         'data-series': series,
         'data-x-name': HTMLAttributes.xAxisName,

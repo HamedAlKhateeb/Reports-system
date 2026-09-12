@@ -21,7 +21,7 @@ import { ChartBuilderPanel } from './ChartBuilderPanel';
 import { ImportModal } from './ImportModal';
 import type { ImportKind } from '@/lib/import/validation';
 import { getTablesByReportId } from '@/lib/db';
-import { extractNativeTables } from '@/lib/charts/engine';
+import { extractNativeTables, nativeFingerprint } from '@/lib/charts/engine';
 import { newChartId, normalizeChartType } from '@/lib/charts/types';
 import { schemaFromCreateParams } from '@/lib/charts/ai-tools';
 import { TextColor, TextHighlight } from './CustomColorMarks';
@@ -1024,12 +1024,21 @@ export function TipTapEditor({
             return;
           }
           const schema = schemaFromCreateParams(p, newChartId());
+          // Phase 4.4 (B17): stamp native fingerprint like the builder does.
+          let aiFingerprint = '';
+          try {
+            if (schema.source.kind === 'native') {
+              const aiNatives = extractNativeTables(ed.getJSON?.());
+              aiFingerprint = nativeFingerprint(aiNatives.find((n) => n.key === schema.source.tableId) || null);
+            }
+          } catch {}
           (ed.chain().focus() as any).setReportChart({
             chartId: schema.chartId,
             type: schema.type,
             title: schema.title || '',
             sourceTableId: schema.source.tableId,
             sourceKind: schema.source.kind,
+            sourceFingerprint: aiFingerprint,
             categoryColumn: schema.source.categoryColumn,
             valueColumns: schema.source.valueColumns,
             showLegend: true,
@@ -1071,6 +1080,17 @@ export function TipTapEditor({
             sourceTableId: p.source_table,
             sourceKind: String(p.source_table).startsWith('native:') ? 'native' : 'smart',
           };
+          // Phase 4.4 (B17): refresh the fingerprint on source switch.
+          try {
+            if (patch.sourceKind === 'native') {
+              const swNatives = extractNativeTables(ed.getJSON?.());
+              patch.sourceFingerprint = nativeFingerprint(
+                swNatives.find((n) => n.key === p.source_table) || null
+              );
+            } else {
+              patch.sourceFingerprint = '';
+            }
+          } catch {}
           if (p.category !== undefined) patch.categoryColumn = p.category;
           if (p.series !== undefined) patch.valueColumns = p.series;
           ed.chain().focus().updateReportChart(p.chartId, patch).run();

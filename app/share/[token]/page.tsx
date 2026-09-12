@@ -20,6 +20,7 @@ import { renderLatexToHtml, renderTextWithLatexToHtml } from '@/lib/latex';
 import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
 import { evaluateFormula, formatCellDisplay } from '@/lib/grid/formula-parser';
 import { isCoveredByMerge, findMergeStart } from '@/lib/grid/merge-utils';
+import { chartDataTable } from '@/lib/charts/export-helpers';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { formatWhatsAppUrl } from '@/lib/contact-links';
@@ -460,16 +461,17 @@ function renderTipTapContentToHtml(
   isAr: boolean,
   images: ReportImageItem[] = [],
   theme: { primary: string; accent: string; light: string; border: string },
-  smartTables: Record<string, TableEntity> = {}
+  smartTables: Record<string, TableEntity> = {},
+  docRef?: any
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, node)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       return `<p class="mb-3 leading-relaxed">${content || '&nbsp;'}</p>`;
     }
 
@@ -511,7 +513,7 @@ function renderTipTapContentToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       if (level === 1) {
         return `<h2 class="text-xl font-bold mt-6 mb-3 pb-2 border-b" style="color: ${theme.primary}; border-color: ${theme.border};">${content}</h2>`;
       }
@@ -522,22 +524,22 @@ function renderTipTapContentToHtml(
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       return `<ul class="list-disc ps-6 mb-4 space-y-1">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       return `<ol class="list-decimal ps-6 mb-4 space-y-1">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       return `<li>${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       return `<blockquote class="border-s-4 ps-4 py-1 my-3 rounded italic text-muted-foreground" style="border-color: ${theme.primary}; background-color: ${theme.light};">${content}</blockquote>`;
     }
 
@@ -573,7 +575,7 @@ function renderTipTapContentToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables)).join('');
+          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables, docRef)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let severityBg = '';
@@ -654,12 +656,25 @@ function renderTipTapContentToHtml(
     case 'reportChart': {
       const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
       const type = node.attrs?.type || 'bar';
-      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${title}</div><div class="mt-1 text-[11px] text-muted-foreground">${type}</div><div class="mt-2 text-[11px] text-muted-foreground">${isAr ? 'رسم بياني تفاعلي داخل التقرير الأصلي' : 'Interactive chart in the original report'}</div></figure>`;
+      // Phase 4.4 (B17): render the data table under the title.
+      let chartTableHtml = '';
+      try {
+        const table = chartDataTable(node, docRef, smartTables, 50, isAr ? 'البند' : 'Item');
+        if (!table.broken && table.rows.length > 0) {
+          const thead = `<thead><tr>${table.headers.map((h) => `<th class="border p-2 text-xs text-start" style="border-color: ${theme.border}; background-color: ${theme.primary}; color: #fff;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+          const tbody = `<tbody>${table.rows.map((r) => `<tr>${r.map((c) => `<td class="border p-2 text-xs align-top" style="border-color: ${theme.border};">${escapeHtml(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+          const more = table.truncated
+            ? `<div class="mt-1 text-[11px] text-muted-foreground">... ${isAr ? 'و' : 'and'} ${table.totalRows - table.rows.length} ${isAr ? 'صفوف أخرى' : 'more rows'}</div>`
+            : '';
+          chartTableHtml = `<div class="overflow-x-auto my-3 rounded-lg border" style="border-color: ${theme.border};"><table class="w-full border-collapse text-xs" dir="${isAr ? 'rtl' : 'ltr'}">${thead}${tbody}</table>${more}</div>`;
+        }
+      } catch {}
+      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${title}</div><div class="mt-1 text-[11px] text-muted-foreground">${type}</div><div class="mt-2 text-[11px] text-muted-foreground">${isAr ? 'رسم بياني تفاعلي داخل التقرير الأصلي' : 'Interactive chart in the original report'}</div>${chartTableHtml}</figure>`;
     }
 
     default:
       if (node.content) {
-        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables)).join('');
+        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
       }
       return '';
   }

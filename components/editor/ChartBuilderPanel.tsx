@@ -11,6 +11,7 @@ import {
   detectNativeColumns,
   detectSmartColumns,
   extractNativeTables,
+  nativeFingerprint,
   resolveFromNative,
   resolveFromSmart,
   type NativeTableInfo,
@@ -221,12 +222,19 @@ export function ChartBuilderPanel({ editor, reportId, editChartId, presetSource,
 
   const handleSave = () => {
     if (!editor) return;
+    // Phase 4.4 (B17): stamp the native source fingerprint so later
+    // table insertions rebind by content instead of breaking by position.
+    const fingerprint =
+      (activeSource?.kind || 'smart') === 'native'
+        ? nativeFingerprint(natives.find((x) => x.key === sourceId) || null)
+        : '';
     if (isEdit && editChartId) {
       editor.chain().focus().updateReportChart(editChartId, {
         type: chartType,
         title,
         sourceTableId: sourceId,
         sourceKind: activeSource?.kind || 'smart',
+        sourceFingerprint: fingerprint,
         categoryColumn: category,
         valueColumns: series,
         xAxisName: xName,
@@ -245,6 +253,7 @@ export function ChartBuilderPanel({ editor, reportId, editChartId, presetSource,
           title: title || (activeSource?.name || ''),
           sourceTableId: sourceId,
           sourceKind: activeSource?.kind || 'smart',
+          sourceFingerprint: fingerprint,
           categoryColumn: category,
           valueColumns: series,
           xAxisName: xName,
@@ -264,6 +273,7 @@ export function ChartBuilderPanel({ editor, reportId, editChartId, presetSource,
             title: title || (activeSource?.name || ''),
             sourceTableId: sourceId,
             sourceKind: activeSource?.kind || 'smart',
+            sourceFingerprint: fingerprint,
             categoryColumn: category,
             valueColumns: series,
             xAxisName: xName,
