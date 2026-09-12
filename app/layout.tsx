@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import 'katex/dist/katex.min.css';
+// Required for the report mind-map (React Flow): without it the canvas has
+// no pane/viewport styles and pan/zoom/selection appear broken.
+import '@xyflow/react/dist/style.css';
 import { LanguageProvider } from '@/lib/i18n/LanguageContext';
 import { ThemeProvider } from '@/lib/theme-context';
 import { AuthProvider } from '@/lib/auth-context';

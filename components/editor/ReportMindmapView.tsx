@@ -806,8 +806,8 @@ export function ReportMindmapView(props: NodeViewProps) {
         {/* Footer hint */}
         <div className="border-t border-border bg-card/60 px-3 py-1.5 text-[11px] text-muted-foreground">
           {isAr
-            ? 'حدد عقدة لتعديل نصها ولونها وشكلها ولون الخط وحجمه • اسحب من النقاط للربط • زر ترتيب يعيد التوسيط'
-            : 'Select a node to edit its text, colors, shape and font • Drag from dots to connect • Arrange re-centers'}
+            ? 'اسحب الخلفية للتحرك • عجلة الفأرة للتقريب • حدد عقدة لتعديل نصها ولونها وشكلها • اسحب من النقاط للربط • زر ترتيب يعيد التوسيط'
+            : 'Drag the background to pan • Scroll to zoom • Select a node to edit its text, colors and shape • Drag from dots to connect • Arrange re-centers'}
           <span className="font-mono text-muted-foreground/70"> · {nodes.length} {isAr ? 'عقدة' : 'nodes'}</span>
           {copyFeedback && (
             <span className="ms-2 inline-flex items-center gap-1 font-medium text-emerald-600">

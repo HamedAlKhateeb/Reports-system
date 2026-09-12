@@ -447,7 +447,7 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().toggleUnderline().run()}
+            onClick={() => useSmart ? sendSmartCommand('style-underline') : editor.chain().focus().toggleUnderline().run()}
             className={cn(
               "h-8 w-8 rounded-lg underline underline-offset-2",
               editor.isActive('underline')
