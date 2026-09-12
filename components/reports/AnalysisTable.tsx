@@ -26,6 +26,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { toast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
@@ -79,6 +80,7 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
 
   // Modal state for Add/Edit row
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [confirmNode, askConfirm] = useConfirm();
   const [editingRow, setEditingRow] = useState<AnalysisTableRow | null>(null);
   const [formCategory, setFormCategory] = useState('');
   const [formTitle, setFormTitle] = useState('');
@@ -424,7 +426,7 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
   };
 
   const handleDeleteRow = async (rowId: string) => {
-    if (!confirm(isAr ? 'هل أنت متأكد من حذف هذا البند من جدول التحليل؟' : 'Delete this row from the analysis table?')) {
+    if (!(await askConfirm(isAr ? 'هل أنت متأكد من حذف هذا البند من جدول التحليل؟' : 'Delete this row from the analysis table?'))) {
       return;
     }
     const filtered = rows.filter((r) => r.id !== rowId);
@@ -887,6 +889,7 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
           </form>
         </DialogContent>
       </Dialog>
+      {confirmNode}
     </section>
   );
 }

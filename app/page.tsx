@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { PageLoading } from '@/components/ui/loading';
 
 export default function HomePage() {
   const router = useRouter();
@@ -20,7 +21,7 @@ export default function HomePage() {
 
   return (
     <div className="flex h-screen w-full items-center justify-center">
-      <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
+      <PageLoading />
     </div>
   );
 }

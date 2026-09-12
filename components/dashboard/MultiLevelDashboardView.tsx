@@ -53,6 +53,8 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { normalizeSeverity, normalizeStatus, isDoneStatus } from '@/lib/i18n/dictionary';
 import { InsightHelpPopover } from '@/components/ui/InsightHelpPopover';
 import { Button } from '@/components/ui/button';
+import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { PageLoading } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
@@ -724,7 +726,7 @@ export function MultiLevelDashboardView({ userUid }: MultiLevelDashboardViewProp
       {/* Loading state */}
       {loading ? (
         <div className="flex h-64 w-full items-center justify-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#2E4034] border-t-transparent" />
+          <PageLoading />
         </div>
       ) : (
         <>
@@ -921,26 +923,31 @@ export function MultiLevelDashboardView({ userUid }: MultiLevelDashboardViewProp
 
           {/* Empty Widgets Banner */}
           {widgets.length === 0 && (
-            <div className="p-12 text-center rounded-2xl border border-dashed border-border bg-card/50 space-y-3">
-              <BarChart3 className="h-10 w-10 text-muted-foreground mx-auto" />
-              <h3 className="text-sm font-bold text-foreground">
-                {isAr ? 'لا توجد مؤشرات في هذه اللوحة حتى الآن' : 'No widgets in this dashboard yet'}
-              </h3>
-              <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                {isAr
-                  ? 'يمكنك إضافة مؤشرات جديدة من خلال فحص المشاكل أو تصدير الجداول مباشرة إلى هذه اللوحة.'
-                  : 'Add widgets by inspecting report tables or issues.'}
-              </p>
-              <Button
-                type="button"
-                onClick={handleOpenAddWidget}
-                size="sm"
-                className="h-8 text-xs bg-[#2E4034] text-white hover:bg-[#24382F]"
-              >
-                <Plus className="h-3.5 w-3.5 me-1" />
-                <span>{isAr ? 'إضافة أول مؤشر' : 'Add First Widget'}</span>
-              </Button>
-            </div>
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <BarChart3 />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {isAr ? 'لا توجد مؤشرات في هذه اللوحة حتى الآن' : 'No widgets in this dashboard yet'}
+                </EmptyTitle>
+                <EmptyDescription>
+                  {isAr
+                    ? 'يمكنك إضافة مؤشرات جديدة من خلال فحص المشاكل أو تصدير الجداول مباشرة إلى هذه اللوحة.'
+                    : 'Add widgets by inspecting report tables or issues.'}
+                </EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  type="button"
+                  onClick={handleOpenAddWidget}
+                  size="sm"
+                >
+                  <Plus data-icon="inline-start" />
+                  <span>{isAr ? 'إضافة أول مؤشر' : 'Add First Widget'}</span>
+                </Button>
+              </EmptyContent>
+            </Empty>
           )}
 
           {/* Automated Intelligence Insights Section */}

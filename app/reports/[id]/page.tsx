@@ -100,6 +100,8 @@ import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -126,7 +128,7 @@ const TipTapEditor = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex h-96 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#2E4034] border-t-transparent" />
+        <PageLoading />
       </div>
     ),
   }
@@ -373,7 +375,7 @@ export default function ReportDetailPage() {
 
   const handleRevokeShareLink = async () => {
     if (!report) return;
-    if (!confirm(lang === 'ar' ? 'هل أنت متأكد من إلغاء المشاركة؟ سيتوقف الرابط القديم عن العمل فوراً.' : 'Are you sure you want to revoke this link? The current link will immediately stop working.')) {
+    if (!(await askConfirm(lang === 'ar' ? 'هل أنت متأكد من إلغاء المشاركة؟ سيتوقف الرابط القديم عن العمل فوراً.' : 'Are you sure you want to revoke this link? The current link will immediately stop working.'))) {
       return;
     }
     try {
@@ -423,9 +425,10 @@ export default function ReportDetailPage() {
 
   // Archive lifecycle (owner only — enforced in db + rules).
   const [archiving, setArchiving] = useState(false);
+  const [confirmNode, askConfirm] = useConfirm();
   const handleArchiveReport = async () => {
     if (!report || !user) return;
-    if (!confirm(lang === 'ar' ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.')) {
+    if (!(await askConfirm(lang === 'ar' ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.'))) {
       return;
     }
     try {
@@ -898,7 +901,7 @@ export default function ReportDetailPage() {
   if (loading || !report) {
     return (
       <div className="flex h-screen w-full items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-teal-600 border-t-transparent" />
+        <PageLoading />
       </div>
     );
   }
@@ -1737,6 +1740,7 @@ export default function ReportDetailPage() {
           }}
         />
       )}
+      {confirmNode}
     </div>
   );
 }

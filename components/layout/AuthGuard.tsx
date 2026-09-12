@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Mail, RefreshCw, LogOut, CheckCircle2, Clock, ShieldAlert, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 
 export function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -71,10 +72,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-olive-700 border-t-transparent" />
-          <p className="text-sm font-medium text-muted-foreground">{t('loading')}</p>
-        </div>
+        <PageLoading label={t('loading')} className="flex-col" spinnerClassName="size-10" />
       </div>
     );
   }

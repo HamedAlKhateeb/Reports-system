@@ -3,6 +3,7 @@
 import React from 'react';
 import dynamic from 'next/dynamic';
 import { ReportItem } from '@/lib/types';
+import { PageLoading } from '@/components/ui/loading';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 
 const TipTapEditor = dynamic(
@@ -11,7 +12,7 @@ const TipTapEditor = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex h-96 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-[#2E4034] border-t-transparent" />
+        <PageLoading />
       </div>
     ),
   }
