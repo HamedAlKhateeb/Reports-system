@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { getVerifiedSessionUid } from '@/lib/server-auth';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -266,6 +267,19 @@ export async function POST(req: NextRequest) {
 
     if (!messages || messages.length === 0) {
       return NextResponse.json({ error: 'No messages provided' }, { status: 400 });
+    }
+
+    // Phase 1.6 (B6): close the anonymous LLM proxy. A verified Firebase
+    // session is required before any provider call (including server-side
+    // keys). Residual: activeContext/context is still client-supplied and
+    // used as prompt context only after auth — it is never treated as an
+    // ownership proof; server-side context rebuild is follow-up work.
+    const sessionUid = await getVerifiedSessionUid(req);
+    if (!sessionUid) {
+      return NextResponse.json(
+        { error: 'Authentication required to use the AI assistant.' },
+        { status: 401 }
+      );
     }
 
     // Enterprise Rate Limiting Protection (45 requests / min per IP)

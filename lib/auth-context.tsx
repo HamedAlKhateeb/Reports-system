@@ -44,21 +44,94 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const LOCAL_AUTH_USER_KEY = 'review_app_auth_user';
 const LOCAL_REGISTERED_USERS_KEY = 'review_app_registered_users';
 const SESSION_COOKIE_NAME = '__session';
+// Non-HttpOnly page-gating marker for guest/local/demo users. Value is the
+// constant 'guest' (no identity). API routes reject it with 401 — identity
+// for these accounts lives only in this browser's localStorage.
+const LOCAL_SESSION_COOKIE = '__session_local';
+
+function isServerVerifiableUid(uid: string): boolean {
+  return (
+    !uid.startsWith('guest_') &&
+    uid !== 'guest_user_session' &&
+    !uid.startsWith('usr_') &&
+    !uid.startsWith('user_') &&
+    uid !== 'google_demo_user'
+  );
+}
+
+async function mintServerSession(getToken: () => Promise<string>): Promise<void> {
+  try {
+    const idToken = await getToken();
+    await fetch('/api/auth/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
+    });
+  } catch {
+    // Offline / server unreachable: client keeps working from localStorage,
+    // server routes will return 401 until the next successful mint.
+  }
+}
+
+async function clearServerSession(): Promise<void> {
+  try {
+    await fetch('/api/auth/session', { method: 'DELETE' });
+  } catch {
+    // Best effort — HttpOnly cookie can only be cleared by the server.
+  }
+  if (typeof document !== 'undefined') {
+    document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+    document.cookie = `${LOCAL_SESSION_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Sync session cookie for Next.js Middleware
-  const syncSessionCookie = (userObj: AuthUser | null) => {
+  // Sync session cookie for Next.js Middleware + API routes (Phase 1.1/B3).
+  // Firebase users: the server mints an HttpOnly cookie holding the verified
+  // ID token (short-lived, refreshed periodically). Legacy raw-uid cookies
+  // are rejected server-side, so we proactively expire any stale one.
+  // Guest/local/demo users: marker cookie only (page shell gating);
+  // every privileged API route returns 401 for them by design.
+  const syncSessionCookie = (
+    userObj: AuthUser | null,
+    getToken?: () => Promise<string>
+  ) => {
     if (typeof document === 'undefined') return;
-    if (userObj) {
-      document.cookie = `${SESSION_COOKIE_NAME}=${userObj.uid}; path=/; max-age=604800; SameSite=Lax`;
-    } else {
-      document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+    if (!userObj) {
+      void clearServerSession();
+      return;
     }
+    if (
+      getToken &&
+      isServerVerifiableUid(userObj.uid) &&
+      isFirebaseConfigured
+    ) {
+      void mintServerSession(getToken);
+      document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+      document.cookie = `${LOCAL_SESSION_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+      return;
+    }
+    document.cookie = `${LOCAL_SESSION_COOKIE}=guest; path=/; max-age=604800; SameSite=Lax`;
+    document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
   };
+
+  // Periodic ID-token refresh so the HttpOnly `__session` cookie never goes
+  // stale while a Firebase user is active (tokens live ~1h).
+  useEffect(() => {
+    if (!user || !isFirebaseConfigured || !auth) return;
+    if (!isServerVerifiableUid(user.uid)) return;
+    const timer = setInterval(() => {
+      const current = auth?.currentUser;
+      if (current && current.uid === user.uid) {
+        void mintServerSession(() => current.getIdToken());
+      }
+    }, 50 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [user]);
 
   useEffect(() => {
     if (isFirebaseConfigured && auth) {
@@ -75,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               emailVerified: result.user.emailVerified,
             };
             setUser(currentAuthUser);
-            syncSessionCookie(currentAuthUser);
+            syncSessionCookie(currentAuthUser, () => result.user.getIdToken());
           }
         })
         .catch((e) => {
@@ -95,7 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             emailVerified: fbUser.emailVerified,
           };
           setUser(currentAuthUser);
-          syncSessionCookie(currentAuthUser);
+          syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
           if (typeof window !== 'undefined') {
             localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
           }
@@ -183,7 +256,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             emailVerified: fbUser.emailVerified, // false until clicked
           };
           setUser(currentAuthUser);
-          syncSessionCookie(currentAuthUser);
+          syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
           if (typeof window !== 'undefined') {
             localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
           }
@@ -259,7 +332,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           emailVerified: fbUser.emailVerified,
         };
         setUser(currentAuthUser);
-        syncSessionCookie(currentAuthUser);
+        syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
         if (typeof window !== 'undefined') {
           localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
         }
@@ -377,7 +450,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           emailVerified: fbUser.emailVerified ?? true,
         };
         setUser(currentAuthUser);
-        syncSessionCookie(currentAuthUser);
+        syncSessionCookie(currentAuthUser, () => fbUser.getIdToken());
         if (typeof window !== 'undefined') {
           localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(currentAuthUser));
         }
@@ -444,7 +517,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         emailVerified: fbUser.emailVerified,
       };
       setUser(updatedAuthUser);
-      syncSessionCookie(updatedAuthUser);
+      syncSessionCookie(updatedAuthUser, () => fbUser.getIdToken());
       if (typeof window !== 'undefined') {
         localStorage.setItem(LOCAL_AUTH_USER_KEY, JSON.stringify(updatedAuthUser));
       }

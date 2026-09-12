@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createMarkdownZip } from '@/lib/markdown-export';
+import { authorizeExport } from '@/lib/export-auth';
 import { ReportItem, ReportImageItem } from '@/lib/types';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { report, images } = body as {
+    const { report, images, shareToken } = body as {
       report: ReportItem;
       images: ReportImageItem[];
+      shareToken?: string;
     };
 
-    if (!report) {
-      return NextResponse.json({ error: 'Missing report data' }, { status: 400 });
-    }
+    const auth = await authorizeExport(report, shareToken, req);
+    if ('error' in auth) return auth.error;
 
     const zipBlob = await createMarkdownZip(report, images || []);
     const buffer = Buffer.from(await zipBlob.arrayBuffer());

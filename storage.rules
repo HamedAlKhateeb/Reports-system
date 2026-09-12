@@ -1,14 +1,27 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    
+
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    // Only allow authenticated users to upload or read report images
+    function reportOf(reportId) {
+      return firestore.get(/databases/(default)/documents/reports/$(reportId)).data;
+    }
+
+    // Phase 1.3 (B5): was `allow read, write: if isAuthenticated()` —
+    // any signed-in user could read/overwrite ANY report's images.
+    // Writes require owning the parent report; reads additionally allow
+    // explicitly shared (public-link) reports. Matches the Firestore
+    // `reports/{id}/images` subcollection rule.
     match /reports/{reportId}/images/{fileName} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        reportOf(reportId).ownerUid == request.auth.uid
+        || reportOf(reportId).isShared == true
+      );
+      allow write: if isAuthenticated()
+        && reportOf(reportId).ownerUid == request.auth.uid;
     }
   }
 }
