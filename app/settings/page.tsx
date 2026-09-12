@@ -30,6 +30,7 @@ import {
   DatabaseBackup,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -66,6 +67,7 @@ import { cn } from '@/lib/utils';
 import { KeyboardShortcutsSettings } from '@/components/settings/KeyboardShortcutsSettings';
 import { OrganizationDefaultsSettings } from '@/components/settings/OrganizationDefaultsSettings';
 import { BackupSettings } from '@/components/settings/BackupSettings';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 
 export type SettingsTab = 'general' | 'organization' | 'ai' | 'api-keys' | 'contact' | 'shortcuts' | 'backup';
 
@@ -76,6 +78,7 @@ export default function SettingsPage() {
   const { user, isGuest } = useAuth();
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [confirmNode, askConfirm] = useConfirm();
   const [contactLinks, setContactLinks] = useState<ContactLinkItem[]>([]);
   const [providerConfig, setProviderConfig] = useState<AiProviderConfig>({
     provider: 'gemini',
@@ -229,11 +232,11 @@ export default function SettingsPage() {
 
   const handleRevokeApiKey = async (keyId: string) => {
     if (
-      !confirm(
+      !(await askConfirm(
         lang === 'ar'
           ? 'هل أنت متأكد من إلغاء هذا المفتاح نهائياً؟ سيتوقف الوكيل عن الوصول فوراً ولن يمكن استعادته.'
           : 'Are you sure you want to permanently revoke this API key? The agent will lose access immediately.'
-      )
+      ))
     ) {
       return;
     }
@@ -1119,11 +1122,21 @@ export default function SettingsPage() {
                         {/* Keys List */}
                         <div className="mt-5 space-y-2.5 min-w-0">
                           {apiKeys.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-border p-5 text-center text-xs text-muted-foreground">
-                              {lang === 'ar'
-                                ? 'لا توجد مفاتيح API نشطة حالياً. اضغط على "توليد مفتاح جديد" لإنشاء مفتاح للوكيل الذكي.'
-                                : 'No active API keys found. Click "Generate Key" to create one for your AI agent.'}
-                            </div>
+                            <Empty>
+                              <EmptyHeader>
+                                <EmptyMedia variant="icon">
+                                  <Key />
+                                </EmptyMedia>
+                                <EmptyTitle>
+                                  {lang === 'ar' ? 'لا توجد مفاتيح نشطة' : 'No active API keys'}
+                                </EmptyTitle>
+                                <EmptyDescription>
+                                  {lang === 'ar'
+                                    ? 'لا توجد مفاتيح API لوكلائك بعد. اضغط "إنشاء مفتاح" لإنشاء واحد لوكيل الذكاء الاصطناعي.'
+                                    : 'No active API keys found. Click "Generate Key" to create one for your AI agent.'}
+                                </EmptyDescription>
+                              </EmptyHeader>
+                            </Empty>
                           ) : (
                             apiKeys.map((k) => {
                               const isKeyPaused = k.status === 'paused';
@@ -1412,6 +1425,7 @@ export default function SettingsPage() {
           {activeTab === 'backup' && <BackupSettings />}
         </main>
       </div>
+      {confirmNode}
     </div>
   );
 }

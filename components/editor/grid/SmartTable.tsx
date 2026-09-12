@@ -71,6 +71,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 
@@ -1470,8 +1471,7 @@ export function SmartTable({
   if (loading) {
     return (
       <div className="p-8 border border-border/80 rounded-xl bg-card flex flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-[#2E4034] border-t-transparent" />
-        <span>{isAr ? 'جاري تحميل الجدول...' : 'Loading Table...'}</span>
+        <PageLoading label={isAr ? 'جاري تحميل الجدول...' : 'Loading Table...'} className="flex-col" spinnerClassName="size-6" />
       </div>
     );
   }

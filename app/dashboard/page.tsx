@@ -34,6 +34,7 @@ import {
   IssueStatus,
 } from '@/lib/i18n/dictionary';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -694,7 +695,7 @@ export default function DashboardPage() {
       {/* Kanban Board Columns */}
       {loading ? (
         <div className="flex h-64 items-center justify-center">
-          <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <PageLoading />
         </div>
       ) : showArchived ? (
         /* Archive lifecycle: flat list of archived issues (restore/delete in modal) */

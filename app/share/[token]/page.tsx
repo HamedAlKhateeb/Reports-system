@@ -26,6 +26,7 @@ import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { formatWhatsAppUrl } from '@/lib/contact-links';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -127,10 +128,7 @@ export default function SharedReportPage() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
-        <div className="flex flex-col items-center gap-3">
-          <div className="h-9 w-9 animate-spin rounded-full border-4 border-[#2E4034] border-t-transparent" />
-          <p className="text-xs font-medium text-muted-foreground">جاري تحميل التقرير...</p>
-        </div>
+        <PageLoading label="جاري تحميل التقرير..." className="flex-col" spinnerClassName="size-9" />
       </div>
     );
   }

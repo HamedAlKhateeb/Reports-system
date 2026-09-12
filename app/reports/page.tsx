@@ -69,6 +69,8 @@ import {
   CustomTemplateItem,
 } from '@/lib/custom-templates';
 import { Button } from '@/components/ui/button';
+import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -129,6 +131,7 @@ export default function ReportsPage() {
   const [creating, setCreating] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [confirmNode, askConfirm] = useConfirm();
   // Orphaned identities: reports stored under OTHER uids on this browser.
   const [orphanInfo, setOrphanInfo] = useState<Array<{ ownerUid: string; count: number }>>([]);
   const [copiedReportId, setCopiedReportId] = useState<string | null>(null);
@@ -180,7 +183,7 @@ export default function ReportsPage() {
     e.preventDefault();
     e.stopPropagation();
     if (!user) return;
-    if (!confirm(isAr ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.')) {
+    if (!(await askConfirm(isAr ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.'))) {
       return;
     }
     try {
@@ -457,7 +460,7 @@ export default function ReportsPage() {
     e.stopPropagation();
     setDeleteError(null);
 
-    if (!confirm(t('deleteReportConfirm'))) {
+    if (!(await askConfirm(t('deleteReportConfirm')))) {
       return;
     }
 
@@ -942,20 +945,24 @@ export default function ReportsPage() {
               ))}
             </div>
           ) : filteredReports.length === 0 ? (
-            <Card className="flex flex-col items-center justify-center border-dashed p-12 text-center">
-              <FileText className="size-12 text-muted-foreground/50 mb-3" />
-              <p className="text-base font-medium text-foreground">
-                {isSearching
-                  ? isAr
-                    ? 'لم يتم العثور على أي تقارير تطابق بحثك'
-                    : 'No reports match your search'
-                  : currentFolder
-                  ? isAr
-                    ? `المجلد "${currentFolder.name}" فارغ حالياً`
-                    : `Folder "${currentFolder.name}" is currently empty`
-                  : t('noReportsFound')}
-              </p>
-              <div className="mt-4 flex items-center gap-2">
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <FileText />
+                </EmptyMedia>
+                <EmptyTitle>
+                  {isSearching
+                    ? isAr
+                      ? 'لم يتم العثور على أي تقارير تطابق بحثك'
+                      : 'No reports match your search'
+                    : currentFolder
+                    ? isAr
+                      ? `المجلد "${currentFolder.name}" فارغ حالياً`
+                      : `Folder "${currentFolder.name}" is currently empty`
+                    : t('noReportsFound')}
+                </EmptyTitle>
+              </EmptyHeader>
+              <EmptyContent>
                 <Button
                   type="button"
                   size="sm"
@@ -964,8 +971,8 @@ export default function ReportsPage() {
                   <Plus data-icon="inline-start" />
                   <span>{t('createNewReport')}</span>
                 </Button>
-              </div>
-            </Card>
+              </EmptyContent>
+            </Empty>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {filteredReports.map((report) => {
@@ -1547,20 +1554,22 @@ export default function ReportsPage() {
                               size="icon"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (
-                                  confirm(
-                                    isAr
-                                      ? 'هل أنت متأكد من حذف هذا القالب المخصص نهائياً؟'
-                                      : 'Are you sure you want to delete this custom template?'
-                                  )
-                                ) {
-                                  deleteCustomTemplate(ct.id, user?.uid);
-                                  const updated = getCustomTemplates(user?.uid);
-                                  setCustomTemplates(updated);
-                                  if (selectedCustomTemplateId === ct.id) {
-                                    setSelectedCustomTemplateId(updated[0]?.id || null);
+                                void (async () => {
+                                  if (
+                                    await askConfirm(
+                                      isAr
+                                        ? 'هل أنت متأكد من حذف هذا القالب المخصص نهائياً؟'
+                                        : 'Are you sure you want to delete this custom template?'
+                                    )
+                                  ) {
+                                    deleteCustomTemplate(ct.id, user?.uid);
+                                    const updated = getCustomTemplates(user?.uid);
+                                    setCustomTemplates(updated);
+                                    if (selectedCustomTemplateId === ct.id) {
+                                      setSelectedCustomTemplateId(updated[0]?.id || null);
+                                    }
                                   }
-                                }
+                                })();
                               }}
                               className="size-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                               title={isAr ? 'حذف القالب' : 'Delete Template'}
@@ -1610,6 +1619,7 @@ export default function ReportsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirmNode}
     </div>
   );
 }

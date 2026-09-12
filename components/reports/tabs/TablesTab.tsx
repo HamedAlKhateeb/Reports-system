@@ -18,6 +18,7 @@ import {
   Table as TableIcon,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import { getTablesByReportId, saveTable, updateReport } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
@@ -296,8 +297,7 @@ export function TablesTab({
       {/* Main Content Area */}
       {loading ? (
         <div className="p-12 text-center text-xs text-muted-foreground border border-border rounded-xl bg-card">
-          <div className="h-6 w-6 mx-auto mb-2 animate-spin rounded-full border-2 border-[#2E4034] border-t-transparent" />
-          <span>{isAr ? 'جاري تحميل الجداول...' : 'Loading tables...'}</span>
+          <PageLoading label={isAr ? 'جاري تحميل الجداول...' : 'Loading tables...'} className="flex-col" spinnerClassName="size-6" />
         </div>
       ) : activeTable ? (
         isEmbedded ? (

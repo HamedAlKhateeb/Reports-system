@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { PageLoading } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
@@ -87,8 +88,7 @@ export function OrganizationDefaultsSettings() {
   if (loading) {
     return (
       <Card className="p-8 text-center text-xs text-muted-foreground border-border bg-card">
-        <div className="h-6 w-6 mx-auto mb-2 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-        <span>{isAr ? 'جاري تحميل إعدادات المؤسسة...' : 'Loading organization defaults...'}</span>
+        <PageLoading label={isAr ? 'جاري تحميل الإعدادات الافتراضية...' : 'Loading organization defaults...'} className="flex-col" spinnerClassName="size-6" />
       </Card>
     );
   }

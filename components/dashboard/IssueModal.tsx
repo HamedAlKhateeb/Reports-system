@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { FieldLabel } from '@/components/ui/field';
@@ -62,6 +63,7 @@ export function IssueModal({
   const [loadingComments, setLoadingComments] = useState(true);
   const [submittingComment, setSubmittingComment] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [confirmNode, askConfirm] = useConfirm();
 
   // Editable fields
   const [title, setTitle] = useState(issue.title);
@@ -124,7 +126,7 @@ export function IssueModal({
   };
 
   const handleDelete = async () => {
-    if (!confirm(t('deleteIssueConfirm'))) return;
+    if (!(await askConfirm(t('deleteIssueConfirm')))) return;
     await deleteIssue(issue.id);
     onDeleted(issue.id);
     onClose();
@@ -133,7 +135,7 @@ export function IssueModal({
   // Archive lifecycle (owner only — enforced in db + rules).
   const handleArchive = async () => {
     if (!user) return;
-    if (!confirm(lang === 'ar' ? 'أرشفة هذه المشكلة؟ ستختفي من اللوحة ويمكن استعادتها لاحقًا.' : 'Archive this issue? It will leave the board and can be restored later.')) {
+    if (!(await askConfirm(lang === 'ar' ? 'أرشفة هذه المشكلة؟ ستختفي من اللوحة ويمكن استعادتها لاحقًا.' : 'Archive this issue? It will leave the board and can be restored later.'))) {
       return;
     }
     try {
@@ -168,6 +170,7 @@ export function IssueModal({
   const isIssueOwner = !!user && issue.ownerUid === user.uid;
 
   return (
+    <>
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
         {/* Modal Header */}
@@ -418,5 +421,7 @@ export function IssueModal({
         </div>
       </DialogContent>
     </Dialog>
+    {confirmNode}
+    </>
   );
 }
