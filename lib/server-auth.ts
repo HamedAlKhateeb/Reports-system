@@ -62,6 +62,8 @@ async function getGoogleCerts(): Promise<Record<string, string>> {
 
 export interface VerifiedSession {
   uid: string;
+  /** Lowercase verified email (may be '' when the provider omits it). */
+  email: string;
 }
 
 /**
@@ -97,6 +99,7 @@ export async function verifyFirebaseIdToken(
       aud?: string;
       iss?: string;
       sub?: string;
+      email?: string;
       exp?: number;
       iat?: number;
       auth_time?: number;
@@ -114,7 +117,10 @@ export async function verifyFirebaseIdToken(
       return null;
     }
 
-    return { uid: payload.sub };
+    return {
+      uid: payload.sub,
+      email: typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '',
+    };
   } catch {
     // Any parsing/network/crypto failure → unauthenticated. Fail closed.
     return null;
@@ -127,18 +133,28 @@ export function isGuestSessionMarker(value: string | null | undefined): boolean 
 }
 
 /**
- * Returns the verified Firebase uid for this request, or null.
+ * Returns the verified Firebase session (uid + email) for this request.
  * Reads ONLY the `__session` cookie (expected: Firebase ID token).
  * Raw-uid legacy cookies (no dots) and guest markers are rejected here —
  * guests/local users are intentionally server-anonymous (localStorage only).
  */
-export async function getVerifiedSessionUid(
+export async function getVerifiedSession(
   req: NextRequest
-): Promise<string | null> {
+): Promise<VerifiedSession | null> {
   const session = req.cookies.get('__session')?.value;
   if (!session) return null;
   if (isGuestSessionMarker(session)) return null;
   if (session.split('.').length !== 3) return null; // legacy raw-uid → reject
-  const verified = await verifyFirebaseIdToken(session);
+  return verifyFirebaseIdToken(session);
+}
+
+/**
+ * Returns the verified Firebase uid for this request, or null.
+ * (Thin wrapper kept for existing callers that only need the uid.)
+ */
+export async function getVerifiedSessionUid(
+  req: NextRequest
+): Promise<string | null> {
+  const verified = await getVerifiedSession(req);
   return verified?.uid ?? null;
 }

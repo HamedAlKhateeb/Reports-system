@@ -12,6 +12,7 @@ import {
   FileDown,
   Globe,
   User as UserIcon,
+  UserPlus,
   Cpu,
   Layers,
   Check,
@@ -54,6 +55,8 @@ import {
   getIssuesByReportId,
   createOrUpdateShareToken,
   revokeShareToken,
+  inviteToReport,
+  revokeReportInvite,
   getFolders,
   getReportIssues,
   getProjectById,
@@ -75,6 +78,7 @@ import {
   ReportIssueItem,
 } from '@/lib/types';
 import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
+import { InviteDialog } from '@/components/collaboration/InviteDialog';
 import { AnalysisTable } from '@/components/reports/AnalysisTable';
 import { CandidateReviewModal } from '@/components/reports/CandidateReviewModal';
 import { DiscrepancyInspectorModal } from '@/components/reports/DiscrepancyInspectorModal';
@@ -290,6 +294,63 @@ export default function ReportDetailPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharingAction, setSharingAction] = useState(false);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
+
+  // Collaboration (invites) states
+  const [showInviteDialog, setShowInviteDialog] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const isReportOwner = !!report && !!user && report.ownerUid === user.uid;
+
+  const describeInviteError = (code?: string): string => {
+    if (lang === 'ar') {
+      if (code === 'invalid-email') return 'بريد إلكتروني غير صالح.';
+      if (code === 'cannot-invite-self') return 'لا يمكنك دعوة نفسك.';
+      if (code === 'forbidden') return 'فقط مالك التقرير يمكنه إدارة الدعوات.';
+      return 'فشل حفظ الدعوة. تحقق من الاتصال وحاول مجددًا.';
+    }
+    if (code === 'invalid-email') return 'Invalid email address.';
+    if (code === 'cannot-invite-self') return 'You cannot invite yourself.';
+    if (code === 'forbidden') return 'Only the report owner can manage invites.';
+    return 'Failed to save the invite. Check your connection and retry.';
+  };
+
+  const handleInviteCollaborator = async (email: string) => {
+    if (!report || !user) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    try {
+      const res = await inviteToReport(report.id, email, user.uid);
+      if (!res.ok) {
+        setInviteError(describeInviteError(res.error));
+        return;
+      }
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) setReport(updated);
+    } catch (err: any) {
+      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const handleRevokeCollaborator = async (email: string) => {
+    if (!report || !user) return;
+    setInviteBusy(true);
+    setInviteError(null);
+    try {
+      const res = await revokeReportInvite(report.id, email, user.uid);
+      if (!res.ok) {
+        setInviteError(describeInviteError(res.error));
+        return;
+      }
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) setReport(updated);
+    } catch (err: any) {
+      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
+    } finally {
+      setInviteBusy(false);
+    }
+  };
 
   const handleCreateShareLink = async () => {
     if (!report) return;
@@ -780,21 +841,31 @@ export default function ReportDetailPage() {
             </Link>
           </Button>
 
-          {/* Folder Selector */}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowFolderModal(true)}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold text-muted-foreground hover:text-foreground shadow-2xs"
-            title={lang === 'ar' ? 'نقل التقرير إلى مجلد' : 'Move report to folder'}
-          >
-            <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-            <span>
-              {folders.find((f) => f.id === report.folderId)?.name ||
-                (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
+          {/* Folder Selector (owner only — collaborators cannot move) */}
+          {isReportOwner ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowFolderModal(true)}
+              className="h-9 gap-1.5 rounded-lg text-xs font-semibold text-muted-foreground hover:text-foreground shadow-2xs"
+              title={lang === 'ar' ? 'نقل التقرير إلى مجلد' : 'Move report to folder'}
+            >
+              <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
+              <span>
+                {folders.find((f) => f.id === report.folderId)?.name ||
+                  (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
+              </span>
+            </Button>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 h-9 px-2 text-xs font-semibold text-muted-foreground">
+              <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
+              <span>
+                {folders.find((f) => f.id === report.folderId)?.name ||
+                  (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
+              </span>
             </span>
-          </Button>
+          )}
         </div>
 
         {/* Export & Action Buttons with Unified Styling */}
@@ -1275,6 +1346,40 @@ export default function ReportDetailPage() {
               </div>
             </div>
 
+            {/* Collaboration: invite registered users (owner only) */}
+            {isReportOwner && (
+              <div className="mb-4 flex items-center justify-between rounded-xl border border-border/80 bg-muted/30 p-3">
+                <div className="text-xs">
+                  <div className="font-bold text-foreground">
+                    {lang === 'ar' ? 'المتعاونون' : 'Collaborators'}
+                    {(report.sharedWithEmails?.length || 0) > 0 && (
+                      <span className="ms-1.5 rounded-full bg-teal-100 dark:bg-teal-900 px-2 py-0.5 text-[10px] font-bold text-teal-700 dark:text-teal-300">
+                        {report.sharedWithEmails!.length}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    {lang === 'ar'
+                      ? 'دعوة بالبريد لعرض التقرير وتعديله والتعليق على مشاكله'
+                      : 'Invite by email to view, edit and comment on issues'}
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setInviteError(null);
+                    setShowInviteDialog(true);
+                  }}
+                  className="h-8 text-xs shrink-0"
+                >
+                  <UserPlus className="h-3.5 w-3.5 me-1" />
+                  <span>{lang === 'ar' ? 'إدارة الدعوات' : 'Manage invites'}</span>
+                </Button>
+              </div>
+            )}
+
             {report.isShared && report.shareToken ? (
               <div className="space-y-4">
                 <div className="flex items-center justify-between rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-3 text-xs">
@@ -1330,17 +1435,23 @@ export default function ReportDetailPage() {
                 </div>
 
                 <div className="flex items-center justify-between pt-2 border-t border-border">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    disabled={sharingAction}
-                    onClick={handleRevokeShareLink}
-                    className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
-                  >
-                    <Trash2 className="h-3.5 w-3.5 me-1" />
-                    <span>{lang === 'ar' ? 'إلغاء المشاركة (Revoke)' : 'Revoke Link'}</span>
-                  </Button>
+                  {isReportOwner ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={sharingAction}
+                      onClick={handleRevokeShareLink}
+                      className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
+                    >
+                      <Trash2 className="h-3.5 w-3.5 me-1" />
+                      <span>{lang === 'ar' ? 'إلغاء المشاركة (Revoke)' : 'Revoke Link'}</span>
+                    </Button>
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">
+                      {lang === 'ar' ? 'تمت مشاركة هذا التقرير معك من مالكه.' : 'This report was shared with you by its owner.'}
+                    </span>
+                  )}
 
                   <div className="flex items-center gap-2">
                     <Button
@@ -1370,7 +1481,7 @@ export default function ReportDetailPage() {
                   </div>
                 </div>
               </div>
-            ) : (
+            ) : isReportOwner ? (
               <div className="space-y-4">
                 <div className="rounded-xl border border-dashed border-border p-4 text-center">
                   <p className="text-xs text-muted-foreground leading-relaxed mb-3">
@@ -1401,6 +1512,26 @@ export default function ReportDetailPage() {
                   </Button>
                 </div>
               </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-dashed border-border p-4 text-center">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {lang === 'ar'
+                      ? 'هذا التقرير خاص. فقط مالكه يمكنه إنشاء رابط مشاركة عام.'
+                      : 'This report is private. Only its owner can create a public link.'}
+                  </p>
+                </div>
+                <div className="flex justify-end pt-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowShareModal(false)}
+                  >
+                    {lang === 'ar' ? 'إغلاق' : 'Close'}
+                  </Button>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -1414,6 +1545,24 @@ export default function ReportDetailPage() {
           reportToMove={report}
           folders={folders}
           onConfirmMove={handleMoveReportToFolder}
+        />
+      )}
+
+      {/* Collaboration invites (owner only) */}
+      {showInviteDialog && report && (
+        <InviteDialog
+          isOpen={showInviteDialog}
+          onClose={() => {
+            setShowInviteDialog(false);
+            setInviteError(null);
+          }}
+          subjectName={report.title}
+          kind="report"
+          emails={report.sharedWithEmails || []}
+          busy={inviteBusy}
+          error={inviteError}
+          onInvite={handleInviteCollaborator}
+          onRevoke={handleRevokeCollaborator}
         />
       )}
 

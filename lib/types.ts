@@ -92,6 +92,13 @@ export interface ReportItem {
   shareToken?: string | null; // Unguessable random token for public read-only web view
   isShared?: boolean;         // Whether web sharing is active
   sharedAt?: string | null;   // When the report was last shared
+  /**
+   * Collaboration (invites): lowercase emails of registered users granted
+   * read/write access to this report (owner always has access implicitly).
+   * Folder-level invites resolve dynamically at read time, so reports added
+   * to a shared folder later are covered automatically.
+   */
+  sharedWithEmails?: string[];
   systemUnderReview?: string;
   fieldOverrides?: Record<string, FieldOverride>; // Non-destructive tracking of applied defaults
   contentJson?: any; // TipTap JSON
@@ -106,6 +113,12 @@ export interface FolderItem {
   parentId: string | null; // null for root level
   color?: string;          // Optional accent color
   ownerUid?: string;
+  /**
+   * Collaboration (invites): lowercase emails granted access to this folder
+   * AND every report inside it — current and future (resolved dynamically,
+   * no fan-out needed). Subfolders are NOT implicitly included.
+   */
+  sharedWithEmails?: string[];
   createdAt: string;
   updatedAt: string;
 }

@@ -1,6 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { getVerifiedSessionUid } from './server-auth';
+import { getVerifiedSession } from './server-auth';
 import type { ReportItem } from './types';
 
 /**
@@ -10,7 +10,8 @@ import type { ReportItem } from './types';
  *
  * Two allowed paths:
  * 1. Owner path: verified session uid === body.report.ownerUid.
- * 2. Public-link path: body.report.isShared === true AND the caller presents
+ * 2. Collaborator path: verified session email ∈ body.report.sharedWithEmails.
+ * 3. Public-link path: body.report.isShared === true AND the caller presents
  *    the report's own shareToken (bearer). Used by /share/[token] export.
  * Everything else → 401/403.
  *
@@ -45,8 +46,8 @@ export async function authorizeExport(
     };
   }
   if (isShareExportAllowed(report, shareToken)) return { uid: 'share-link' };
-  const uid = await getVerifiedSessionUid(req);
-  if (!uid) {
+  const session = await getVerifiedSession(req);
+  if (!session) {
     return {
       error: NextResponse.json(
         { error: 'Authentication required to export this report.' },
@@ -54,13 +55,21 @@ export async function authorizeExport(
       ),
     };
   }
+  const uid = session.uid;
   if (!report.ownerUid || report.ownerUid !== uid) {
-    return {
-      error: NextResponse.json(
-        { error: 'You do not own this report.' },
-        { status: 403 }
-      ),
-    };
+    // Collaboration: invited email may export.
+    const invited =
+      !!session.email &&
+      Array.isArray(report.sharedWithEmails) &&
+      report.sharedWithEmails.some((e) => String(e || '').trim().toLowerCase() === session.email);
+    if (!invited) {
+      return {
+        error: NextResponse.json(
+          { error: 'You do not have access to this report.' },
+          { status: 403 }
+        ),
+      };
+    }
   }
   return { uid };
 }

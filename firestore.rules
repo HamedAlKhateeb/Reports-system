@@ -11,6 +11,82 @@ service cloud.firestore {
       return isAuthenticated() && data.ownerUid == request.auth.uid;
     }
 
+    // Collaboration (invites by email). Sharing key = lowercase account
+    // email (no users directory; matched against the verified token email).
+    function callerEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function hasCallerEmail(data) {
+      return isAuthenticated()
+        && request.auth.token.email is string
+        && data.sharedWithEmails is list
+        && callerEmail() in data.sharedWithEmails;
+    }
+
+    function isFolderCollaborator(folderId) {
+      return isAuthenticated() && folderId is string && folderId.size() > 0
+        && hasCallerEmail(get(/databases/$(database)/documents/folders/$(folderId)).data);
+    }
+
+    function isFolderOwner(folderId) {
+      return isAuthenticated() && folderId is string && folderId.size() > 0
+        && get(/databases/$(database)/documents/folders/$(folderId)).data.ownerUid == request.auth.uid;
+    }
+
+    // Report read: owner, direct invitee, public link, or via folder
+    // (owned folder, or invited folder — current AND future reports).
+    function canReadReport(data) {
+      return owns(data)
+        || hasCallerEmail(data)
+        || data.isShared == true
+        || (data.folderId is string && (isFolderOwner(data.folderId) || isFolderCollaborator(data.folderId)));
+    }
+
+    // Report write: owner has full rights; collaborators may edit content
+    // but NEVER ownership/sharing/placement/numbering fields.
+    function collaboratorSafeReportUpdate() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+        ['ownerUid', 'sharedWithEmails', 'isShared', 'shareToken', 'sharedAt', 'folderId', 'reportNumber']
+      );
+    }
+
+    function canWriteReport(data) {
+      return owns(data)
+        || (hasCallerEmail(data) && collaboratorSafeReportUpdate())
+        || ((data.folderId is string && isFolderCollaborator(data.folderId)) && collaboratorSafeReportUpdate());
+    }
+
+    // Issue's parent report id (either link field).
+    function issueReportId(data) {
+      return data.linkedReportId is string ? data.linkedReportId
+        : (data.reportId is string ? data.reportId : '');
+    }
+
+    function reportDataOf(reportId) {
+      return get(/databases/$(database)/documents/reports/$(reportId)).data;
+    }
+
+    function canReadIssue(data) {
+      return owns(data)
+        || (issueReportId(data) != '' && canReadReport(reportDataOf(issueReportId(data))));
+    }
+
+    function collaboratorSafeIssueUpdate() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+        ['ownerUid', 'linkedReportId', 'reportId']
+      );
+    }
+
+    function canWriteIssue(data) {
+      return owns(data)
+        || (issueReportId(data) != '' && (
+          hasCallerEmail(reportDataOf(issueReportId(data)))
+          || (reportDataOf(issueReportId(data)).folderId is string
+            && isFolderCollaborator(reportDataOf(issueReportId(data)).folderId))
+        ) && collaboratorSafeIssueUpdate());
+    }
+
     // Entities that historically used snake_case owner_id (projects,
     // dashboards) — accept either field during the Phase-6 schema
     // unification. Both must equal the caller when present.
@@ -67,28 +143,31 @@ service cloud.firestore {
     // Reports collection & subcollections
     match /reports/{reportId} {
       // Anonymous reads are strictly limited to fetching a specific report explicitly made public (get).
-      // Phase 1.2 (B24): list is per-document owner-checked, so a
-      // collection scan only ever returns the caller's own reports —
-      // no cross-user enumeration.
-      allow get: if owns(resource.data) || resource.data.isShared == true;
-      allow list: if owns(resource.data);
+      // Collaboration: list also returns invited + folder-visible reports
+      // (per-document checks — no cross-user enumeration).
+      allow get: if canReadReport(resource.data);
+      allow list: if canReadReport(resource.data);
       allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
-      allow update, delete: if owns(resource.data);
+      allow update: if owns(resource.data) || canWriteReport(resource.data);
+      allow delete: if owns(resource.data);
 
       match /images/{imageId} {
-        allow read: if ownsReport(reportId)
-          || get(/databases/$(database)/documents/reports/$(reportId)).data.isShared == true;
-        allow write: if ownsReport(reportId);
+        // Collaboration: readers read; editors (owner or collaborator)
+        // may add/replace; deleting stays owner-only (like tables/issues).
+        allow read: if canReadReport(get(/databases/$(database)/documents/reports/$(reportId)).data);
+        allow create, update: if owns(get(/databases/$(database)/documents/reports/$(reportId)).data)
+          || canWriteReport(get(/databases/$(database)/documents/reports/$(reportId)).data);
+        allow delete: if owns(get(/databases/$(database)/documents/reports/$(reportId)).data);
       }
     }
 
     // Folders collection for hierarchical report organization
-    // Phase 1.2 (B4): was `allow read, write: if isAuthenticated()` —
-    // any user could read/rewrite anyone's folders.
+    // Collaboration: invited emails may READ the folder (needed to resolve
+    // folder-level report access). All writes stay owner-only.
     match /folders/{folderId} {
-      allow get, list: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update, delete: if owns(resource.data);
+      allow get, list: if ownsFlexible(resource.data) || hasCallerEmail(resource.data);
+      allow create: if ownsFlexible(request.resource.data);
+      allow update, delete: if ownsFlexible(resource.data);
     }
 
     // API Keys collection for AI agents and integrations
@@ -113,15 +192,25 @@ service cloud.firestore {
     }
 
     // Issues collection & comments subcollection
-    // Phase 1.2 (B4): scoped to the issue owner (was any-authenticated).
+    // Collaboration: users with access to the LINKED report (B: only issues
+    // linked to accessible reports are visible) may read/comment/edit, but
+    // never reassign ownership/linkage, and never delete (owner-only).
     match /issues/{issueId} {
-      allow get, list: if owns(resource.data);
-      allow create: if owns(request.resource.data);
-      allow update, delete: if owns(resource.data);
+      allow get, list: if canReadIssue(resource.data);
+      allow create: if owns(request.resource.data)
+        || (issueReportId(request.resource.data) != ''
+          && (hasCallerEmail(reportDataOf(issueReportId(request.resource.data)))
+            || (reportDataOf(issueReportId(request.resource.data)).folderId is string
+              && isFolderCollaborator(reportDataOf(issueReportId(request.resource.data)).folderId))));
+      allow update: if owns(resource.data) || canWriteIssue(resource.data);
+      allow delete: if owns(resource.data);
 
       match /comments/{commentId} {
-        allow read: if ownsIssue(issueId);
-        allow write: if ownsIssue(issueId);
+        allow read: if canReadIssue(get(/databases/$(database)/documents/issues/$(issueId)).data);
+        allow create: if canReadIssue(get(/databases/$(database)/documents/issues/$(issueId)).data);
+        allow update, delete: if isAuthenticated()
+          && resource.data.authorUid == request.auth.uid
+          && canReadIssue(get(/databases/$(database)/documents/issues/$(issueId)).data);
       }
     }
 
@@ -161,15 +250,16 @@ service cloud.firestore {
     }
 
     // Structured tables collection
+    // Collaboration: same report-level access as the parent report
+    // (read + edit, never delete — owner-only).
     match /tables/{tableId} {
       // Public sharing may fetch a table by its known id only; listing remains private.
-      // Phase 1.2 (B24): list now requires owning the parent report
-      // (was any-authenticated get/list).
-      allow get: if ownsParentReport(resource.data)
-        || get(/databases/$(database)/documents/reports/$(parentReportId(resource.data))).data.isShared == true;
-      allow list: if ownsParentReport(resource.data);
-      allow create: if ownsParentReport(request.resource.data);
-      allow update, delete: if ownsParentReport(resource.data);
+      allow get: if canReadReport(reportDataOf(parentReportId(resource.data)));
+      allow list: if canReadReport(reportDataOf(parentReportId(resource.data)));
+      allow create: if canReadReport(reportDataOf(parentReportId(request.resource.data)));
+      allow update: if ownsParentReport(resource.data)
+        || canWriteReport(reportDataOf(parentReportId(resource.data)));
+      allow delete: if ownsParentReport(resource.data);
     }
 
     // Dashboards & Widgets collection
