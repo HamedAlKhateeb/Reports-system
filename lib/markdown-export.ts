@@ -1,7 +1,7 @@
 import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { getTablesByReportId } from './db';
-import { evaluateFormula } from './grid/formula-parser';
+import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
 import JSZip from 'jszip';
 
 /**
@@ -192,13 +192,13 @@ export function tipTapJsonToMarkdown(
           if (typeof raw === 'string' && raw.startsWith('=')) {
             try {
               const v = evaluateFormula(raw, evalMap);
-              return String(v ?? '');
+              return formatCellDisplay(v);
             } catch (err) {
               console.error('Markdown export formula evaluation failed:', err);
               return '#ERROR!';
             }
           }
-          return String(raw ?? '');
+          return formatCellDisplay(raw);
         };
 
         const colNames = tbl.columns_data.map((c: any) => (c.name || c.id).replace(/\|/g, '\\|'));

@@ -18,7 +18,8 @@ import {
 import { getReportByShareToken, getTableById } from '@/lib/db';
 import { renderLatexToHtml, renderTextWithLatexToHtml } from '@/lib/latex';
 import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
-import { evaluateFormula } from '@/lib/grid/formula-parser';
+import { evaluateFormula, formatCellDisplay } from '@/lib/grid/formula-parser';
+import { isCoveredByMerge, findMergeStart } from '@/lib/grid/merge-utils';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { formatWhatsAppUrl } from '@/lib/contact-links';
@@ -620,9 +621,10 @@ function renderTipTapContentToHtml(
           const rowNum = rowIndex + 1;
           const values = table.columns_data.map((column) => {
             const coord = `${column.id}${rowNum}`.toUpperCase();
-            const isCovered = mergedList.some((m) => m.end === coord && m.start !== coord);
+            // Phase 3.1 (B9): point-in-rect coverage.
+            const isCovered = isCoveredByMerge(coord, mergedList, table.columns_data || []);
             if (isCovered) return '';
-            const merge = mergedList.find((m) => m.start === coord);
+            const merge = findMergeStart(coord, mergedList);
             const colSpanAttr = merge?.colSpan && merge.colSpan > 1 ? ` colspan="${merge.colSpan}"` : '';
             const rowSpanAttr = merge?.rowSpan && merge.rowSpan > 1 ? ` rowspan="${merge.rowSpan}"` : '';
             const raw = row[column.id];
@@ -642,7 +644,7 @@ function renderTipTapContentToHtml(
               cellFormat?.italic ? 'font-style: italic;' : '',
               cellFormat?.underline ? 'text-decoration: underline;' : '',
             ].join(' ');
-            return `<td class="border p-2 text-xs align-top"${colSpanAttr}${rowSpanAttr} style="border-color: ${theme.border}; text-align: ${align};${styleAttrs ? ' ' + styleAttrs : ''}">${escapeHtml(String(value ?? ''))}</td>`;
+            return `<td class="border p-2 text-xs align-top"${colSpanAttr}${rowSpanAttr} style="border-color: ${theme.border}; text-align: ${align};${styleAttrs ? ' ' + styleAttrs : ''}">${escapeHtml(formatCellDisplay(value))}</td>`;
           }).join('');
           return `<tr>${values}</tr>`;
         }).join('');

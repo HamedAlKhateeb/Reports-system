@@ -139,6 +139,17 @@ export function expandRange(rangeStr: string): string[] {
 }
 
 /**
+ * Phase 3.2 (B10): returns true when the token ending at `endPos` in
+ * `formula` is a function call, i.e. the next non-space char is `(`.
+ * Guards remappers against rewriting names like LOG10 as cell refs.
+ */
+export function isFunctionCallAt(formula: string, endPos: number): boolean {
+  let i = endPos;
+  while (i < formula.length && /\s/.test(formula[i])) i++;
+  return formula[i] === '(';
+}
+
+/**
  * Adjusts relative cell references in a formula string when copied or dragged by (dRow, dCol).
  * Absolute references ($A$1) are preserved unchanged.
  */
@@ -148,7 +159,10 @@ export function adjustFormula(formula: string, dRow: number, dCol: number): stri
   // Regex matches cell references like $A$1, A$1, $A1, A1, with optional range colons
   const cellRegex = /(\$?)([A-Za-z]+)(\$?)([0-9]+)/g;
 
-  return formula.replace(cellRegex, (match, colPrefix, colLetters, rowPrefix, rowDigits) => {
+  return formula.replace(cellRegex, (match, colPrefix, colLetters, rowPrefix, rowDigits, offset, full) => {
+    // Phase 3.2 (B10): never rewrite function names containing digits
+    // (LOG10, ...). A letters+digits token followed by `(` is a call.
+    if (isFunctionCallAt(full, offset + match.length)) return match;
     const isColAbsolute = colPrefix === '$';
     const isRowAbsolute = rowPrefix === '$';
 
@@ -216,7 +230,9 @@ export function remapFormulaRefs(
   const cellRegex = /(\$?)([A-Za-z]+)(\$?)([0-9]+)/g;
   working = working.replace(
     cellRegex,
-    (match, colPrefix: string, colLetters: string, rowPrefix: string, rowDigits: string) => {
+    (match, colPrefix: string, colLetters: string, rowPrefix: string, rowDigits: string, offset: number, full: string) => {
+      // Phase 3.2 (B10): same function-call guard as adjustFormula.
+      if (isFunctionCallAt(full, offset + match.length)) return match;
       const colIdx = colNameToIndex(colLetters);
       const rowNum = parseInt(rowDigits, 10);
       if (colIdx < 0 || rowNum < 1 || !parseCellRef(colLetters + rowDigits)) {
@@ -234,6 +250,50 @@ export function remapFormulaRefs(
   // Restore quoted strings.
   working = working.replace(/§S(\d+)§/g, (_m, i: string) => strings[parseInt(i, 10)] ?? '');
   return working;
+}
+
+/**
+ * Phase 3.2 (B10) — legacy-damage scanner (mandatory regression step).
+ *
+ * The pre-fix remapper rewrote digit-bearing function names (LOG10 → LOG11
+ * etc.) whenever a row/column insert/delete/transpose touched the table.
+ * Intent cannot be recovered automatically (LOG11 may be original or
+ * corrupted), so this flags every formula containing such tokens for
+ * MANUAL review: open the flagged cell, compare against the source data,
+ * and re-type the function name if it was shifted.
+ */
+export interface RemapSuspect {
+  tableId: string;
+  coord: string;
+  formula: string;
+  suspectToken: string;
+}
+
+const SUSPECT_FN_RE = /([A-Za-z]+\d+)\s*\(/g;
+
+export function findRemapSuspects(
+  formulas: Array<{ tableId: string; coord: string; formula: unknown }>
+): RemapSuspect[] {
+  const out: RemapSuspect[] = [];
+  for (const f of formulas) {
+    if (typeof f.formula !== 'string' || !f.formula.startsWith('=')) continue;
+    // Ignore quoted string literals — same protection as the remapper.
+    const dequoted = f.formula.replace(/"[^"]*"/g, '""');
+    SUSPECT_FN_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = SUSPECT_FN_RE.exec(dequoted)) !== null) {
+      // A genuine cell ref can never be followed by `(`; the tokenizer
+      // treats that as FUNCTION — so any such token is either a real
+      // digit-function (verify!) or remap damage (fix!).
+      out.push({
+        tableId: f.tableId,
+        coord: f.coord,
+        formula: f.formula,
+        suspectToken: m[1].toUpperCase(),
+      });
+    }
+  }
+  return out;
 }
 
 // ==========================================
@@ -581,6 +641,9 @@ export class FormulaEvaluator {
     if (t.type === 'OPERATOR' && (t.value === '+' || t.value === '-')) {
       const op = this.consume().value;
       const val = this.parsePrimary();
+      // Phase 3.2 (B10): propagate error sentinels like every other
+      // operator (was: -Number('#DIV/0!') => NaN).
+      if (isFormulaError(val)) return val;
       return op === '-' ? -Number(val) : Number(val);
     }
 
@@ -797,4 +860,15 @@ export function evaluateFormula(
       : (c: string) => cells[c.toUpperCase()];
   const evaluator = new FormulaEvaluator(getVal);
   return evaluator.evaluate(formulaStr);
+}
+
+/**
+ * Phase 3.3 (B11) — the ONE display formatter for evaluated cell values.
+ * Every surface (SmartTable, ExcelGridEditor, share page, DOCX, PDF,
+ * Markdown) renders through this so the same value can never display
+ * differently per surface. Semantics: null/undefined → '', else String().
+ */
+export function formatCellDisplay(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  return String(value);
 }
