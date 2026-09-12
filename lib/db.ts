@@ -201,6 +201,11 @@ export async function getNextReportNumber(userUid?: string): Promise<number> {
 /**
  * Phase 2.1 (B7) — single atomic allocator for report numbers.
  *
+ * SCOPE DECISION (per plan §2.1): numbers are unique PER USER (ownerUid),
+ * not globally. Rationale: every list/sort/display surface is per-user,
+ * Phase-1 rules forbid cross-user listing, and a global counter would leak
+ * existence/counts across users. Each user owns `counters/reports_{uid}`.
+ *
  * Firestore path: a per-user counter document `counters/reports_{uid}` is
  * advanced inside a transaction together with an in-transaction max-scan of
  * the user's reports, so concurrent creators always get distinct numbers
