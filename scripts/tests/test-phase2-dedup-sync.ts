@@ -201,7 +201,7 @@ async function runPhase2Tests() {
   );
   assert.strictEqual(mergeRes.success, true);
 
-  const issuesPostMerge = await getIssues(testUser);
+  const issuesPostMerge = await getIssues(testUser, undefined, { includeArchived: true });
   const archivedDup = issuesPostMerge.find((i) => i.id === dupIssue.id);
   assert(archivedDup?.archived_at || (archivedDup as any)?.archivedAt, 'Merged duplicate must be soft-archived');
 

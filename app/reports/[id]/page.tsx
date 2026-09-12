@@ -41,6 +41,8 @@ import {
   SlidersHorizontal,
   ScanSearch,
   RotateCcw,
+  Archive,
+  ArchiveRestore,
   LayoutDashboard,
   AlertOctagon,
   BarChart3,
@@ -57,6 +59,9 @@ import {
   revokeShareToken,
   inviteToReport,
   revokeReportInvite,
+  archiveReport,
+  unarchiveReport,
+  isArchivedReport,
   getFolders,
   getReportIssues,
   getProjectById,
@@ -392,6 +397,46 @@ export default function ReportDetailPage() {
     }
     setCopiedShareLink(true);
     setTimeout(() => setCopiedShareLink(false), 2000);
+  };
+
+  // Archive lifecycle (owner only — enforced in db + rules).
+  const [archiving, setArchiving] = useState(false);
+  const handleArchiveReport = async () => {
+    if (!report || !user) return;
+    if (!confirm(lang === 'ar' ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.')) {
+      return;
+    }
+    try {
+      setArchiving(true);
+      const res = await archiveReport(report.id, user.uid);
+      if (!res.ok) {
+        alert(lang === 'ar' ? 'فشل الأرشفة.' : 'Archive failed.');
+        return;
+      }
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) {
+        setReport(updated);
+        setLinkedIssues(await getIssuesByReportId(report.id, user.uid).catch(() => []));
+      }
+    } finally {
+      setArchiving(false);
+    }
+  };
+
+  const handleUnarchiveReport = async () => {
+    if (!report || !user) return;
+    try {
+      setArchiving(true);
+      const res = await unarchiveReport(report.id, user.uid);
+      if (!res.ok) {
+        alert(lang === 'ar' ? 'فشل الاستعادة.' : 'Restore failed.');
+        return;
+      }
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) setReport(updated);
+    } finally {
+      setArchiving(false);
+    }
   };
 
   const handleMoveReportToFolder = async (targetFolderId: string | null) => {
@@ -923,6 +968,22 @@ export default function ReportDetailPage() {
             )}
           </Button>
 
+          {/* Archive lifecycle (owner only) */}
+          {isReportOwner && !isArchivedReport(report) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleArchiveReport()}
+              disabled={archiving}
+              className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
+              title={lang === 'ar' ? 'أرشفة التقرير' : 'Archive report'}
+            >
+              <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+              <span>{lang === 'ar' ? 'أرشفة' : 'Archive'}</span>
+            </Button>
+          )}
+
           <Button
             type="button"
             variant="outline"
@@ -1038,6 +1099,34 @@ export default function ReportDetailPage() {
               ×
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Archive lifecycle banner */}
+      {report && isArchivedReport(report) && (
+        <div className="mb-6 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/40 p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs">
+          <div className="flex items-center gap-2 text-amber-950 dark:text-amber-100">
+            <Archive className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
+            <span className="font-medium">
+              {lang === 'ar'
+                ? 'هذا التقرير مؤرشف — مخفي من القوائم والمؤشرات. يمكنك استعادته أو حذفه نهائيًا من صفحة التقارير.'
+                : 'This report is archived — hidden from lists and metrics. You can restore it or delete it permanently from the reports page.'}
+            </span>
+          </div>
+          {isReportOwner && (
+            <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void handleUnarchiveReport()}
+                disabled={archiving}
+                className="h-7 text-xs font-semibold gap-1.5 border-amber-400 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 shadow-2xs"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                <span>{lang === 'ar' ? 'استعادة من الأرشيف' : 'Restore from archive'}</span>
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

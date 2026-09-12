@@ -14,8 +14,9 @@ import {
   SlidersHorizontal,
   BarChart3,
   Sparkles,
+  Archive,
 } from 'lucide-react';
-import { getIssues, getReports, updateIssue, createIssue, reorderIssues, getSeverityConfig } from '@/lib/db';
+import { getIssues, getReports, updateIssue, createIssue, reorderIssues, getSeverityConfig, isArchivedIssue } from '@/lib/db';
 import { IssueItem, ReportItem, SeverityConfigItem } from '@/lib/types';
 import { IssueCard } from '@/components/dashboard/IssueCard';
 import { IssueModal } from '@/components/dashboard/IssueModal';
@@ -63,6 +64,29 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
 
+  // Archive lifecycle: archived issues leave the board; toggle views them.
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedIssues, setArchivedIssues] = useState<IssueItem[]>([]);
+
+  const loadArchived = useCallback(async () => {
+    if (authLoading || !user) {
+      setArchivedIssues([]);
+      return;
+    }
+    try {
+      const all = await getIssues(user.uid, undefined, { includeArchived: true });
+      setArchivedIssues(all.filter(isArchivedIssue));
+    } catch (err) {
+      console.error('Failed to load archived issues', err);
+    }
+  }, [user, authLoading]);
+
+  const toggleArchived = async (on: boolean) => {
+    setShowArchived(on);
+    setSearchQuery('');
+    if (on) await loadArchived();
+  };
+
   // Modals
   const [selectedIssue, setSelectedIssue] = useState<IssueItem | null>(null);
   const [showNewModal, setShowNewModal] = useState(false);
@@ -91,6 +115,11 @@ export default function DashboardPage() {
       setIssues(fetchedIssues);
       setReports(fetchedReports);
       setSeverityConfig(getSeverityConfig(user.uid));
+      // Archive badge count.
+      try {
+        const all = await getIssues(user.uid, undefined, { includeArchived: true });
+        setArchivedIssues(all.filter(isArchivedIssue));
+      } catch {}
     } catch (err) {
       console.error('Failed to load dashboard data', err);
     } finally {
@@ -329,7 +358,23 @@ export default function DashboardPage() {
 
   // Update issue handler
   const handleIssueUpdated = (updated: IssueItem) => {
-    setIssues((prev) => prev.map((i) => (i.id === updated.id ? updated : i)));
+    if (isArchivedIssue(updated)) {
+      // Just archived from the modal: leave the board, join the archive list.
+      setIssues((prev) => prev.filter((i) => i.id !== updated.id));
+      setArchivedIssues((prev) => {
+        const without = prev.filter((i) => i.id !== updated.id);
+        return [...without, updated];
+      });
+    } else {
+      setIssues((prev) => {
+        const exists = prev.some((i) => i.id === updated.id);
+        return exists
+          ? prev.map((i) => (i.id === updated.id ? updated : i))
+          : [...prev, updated];
+      });
+      // Just restored from the modal: leave the archive list.
+      setArchivedIssues((prev) => prev.filter((i) => i.id !== updated.id));
+    }
     if (selectedIssue && selectedIssue.id === updated.id) {
       setSelectedIssue(updated);
     }
@@ -338,6 +383,7 @@ export default function DashboardPage() {
   // Delete issue handler
   const handleIssueDeleted = (id: string) => {
     setIssues((prev) => prev.filter((i) => i.id !== id));
+    setArchivedIssues((prev) => prev.filter((i) => i.id !== id));
     setSelectedIssue(null);
   };
 
@@ -437,6 +483,24 @@ export default function DashboardPage() {
           >
             <Plus data-icon="inline-start" />
             <span>{t('addNewIssue')}</span>
+          </Button>
+
+          {/* Archive lifecycle view toggle */}
+          <Button
+            type="button"
+            variant={showArchived ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => void toggleArchived(!showArchived)}
+            className="text-xs font-semibold"
+            title={lang === 'ar' ? 'عرض المشاكل المؤرشفة' : 'View archived issues'}
+          >
+            <Archive data-icon="inline-start" />
+            <span>{lang === 'ar' ? 'الأرشيف' : 'Archive'}</span>
+            {archivedIssues.length > 0 && (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+                {archivedIssues.length}
+              </span>
+            )}
           </Button>
         </div>
       </div>
@@ -610,6 +674,56 @@ export default function DashboardPage() {
       {loading ? (
         <div className="flex h-64 items-center justify-center">
           <div className="size-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        </div>
+      ) : showArchived ? (
+        /* Archive lifecycle: flat list of archived issues (restore/delete in modal) */
+        <div className="rounded-xl border border-border p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-2 font-bold text-foreground text-sm">
+              <Archive className="size-4" />
+              <span>{lang === 'ar' ? 'المشاكل المؤرشفة' : 'Archived issues'}</span>
+            </div>
+            <Badge variant="secondary" className="px-2 py-0.5 text-xs font-bold">
+              {archivedIssues.length}
+            </Badge>
+          </div>
+          {archivedIssues.length === 0 ? (
+            <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-border text-xs text-muted-foreground italic">
+              {lang === 'ar' ? 'لا توجد مشاكل مؤرشفة' : 'No archived issues'}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {archivedIssues
+                .filter((iss) => {
+                  const q = searchQuery.toLowerCase();
+                  return (
+                    (iss.title || '').toLowerCase().includes(q) ||
+                    (iss.description || '').toLowerCase().includes(q)
+                  );
+                })
+                .map((issue) => {
+                  const linked = reports.find((r) => r.id === issue.linkedReportId);
+                  return (
+                    <IssueCard
+                      key={issue.id}
+                      issue={issue}
+                      linkedReport={linked}
+                      onClick={() => setSelectedIssue(issue)}
+                      onDragStart={() => {}}
+                      onDragOverCard={() => {}}
+                      onDragLeaveCard={() => {}}
+                      onDropOnCard={() => {}}
+                      isDragOverTarget={false}
+                      dropPosition={null}
+                      canMoveUp={false}
+                      canMoveDown={false}
+                      onMoveUp={() => {}}
+                      onMoveDown={() => {}}
+                    />
+                  );
+                })}
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 print:hidden items-start">

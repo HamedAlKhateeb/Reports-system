@@ -173,3 +173,5 @@ runCollaborationTests().catch((err) => {
   console.error('Collaboration suite crashed:', err);
   process.exit(1);
 });
+
+export {};
