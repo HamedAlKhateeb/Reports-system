@@ -39,7 +39,6 @@ import {
   CheckCircle2,
   Copy,
   SlidersHorizontal,
-  ScanSearch,
   RotateCcw,
   Archive,
   ArchiveRestore,
@@ -47,7 +46,6 @@ import {
   AlertOctagon,
   BarChart3,
   Settings,
-  Scale,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
@@ -119,6 +117,7 @@ import { saveCustomTemplate } from '@/lib/custom-templates';
 import { useAuth } from '@/lib/auth-context';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { ContactLinkItem, getReportContactLinks, formatWhatsAppUrl } from '@/lib/contact-links';
+import { buildReportEmail } from '@/lib/email-share';
 import { cn } from '@/lib/utils';
 import { useAIContext } from '@/lib/ai-context';
 
@@ -285,7 +284,7 @@ export default function ReportDetailPage() {
       setShowCandidateModal(true);
     } catch (err: any) {
       console.error('Candidate scan error:', err);
-      alert((lang === 'ar' ? 'فشل فحص المرشحين: ' : 'Candidate scan failed: ') + err.message);
+      alert((lang === 'ar' ? 'فشل فحص التشابه: ' : 'Similarity check failed: ') + err.message);
     } finally {
       setIsScanningCandidates(false);
     }
@@ -1040,35 +1039,6 @@ export default function ReportDetailPage() {
             <span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span>
           </Button>
 
-          {/* Quick inspection actions — Candidate Inspection and Problem
-              (Matching) Inspection side by side, no dropdown. Logic and
-              handlers unchanged; full controls live in the
-              "المشاكل والمطابقة" tab Action Center. */}
-          <div className="flex flex-wrap items-center gap-2" role="group" aria-label={lang === 'ar' ? 'فحص التقرير' : 'Inspect report'}>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleScanCandidates}
-              disabled={isScanningCandidates}
-              className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-primary/40 text-primary hover:bg-primary/10 shadow-2xs"
-              title={lang === 'ar' ? 'فحص المرشحين' : 'Candidate Inspection — scan candidates'}
-            >
-              <ScanSearch className={cn("h-3.5 w-3.5 text-primary", (isScanningCandidates) && "animate-spin")} />
-              <span>{isScanningCandidates ? (lang === 'ar' ? 'جاري الفحص...' : 'Scanning...') : (lang === 'ar' ? 'فحص المرشحين' : 'Candidate Inspection')}</span>
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleOpenInspector}
-              className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 shadow-2xs"
-              title={lang === 'ar' ? 'فحص المطابقة (فحص المشاكل)' : 'Problem Inspection — matching check'}
-            >
-              <Scale className="h-3.5 w-3.5 text-amber-600 shrink-0" />
-              <span>{lang === 'ar' ? 'فحص المشاكل' : 'Problem Inspection'}</span>
-            </Button>
-          </div>
         </div>
       </div>
 
@@ -1553,6 +1523,35 @@ export default function ReportDetailPage() {
                       )}
                     </Button>
                   </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    asChild
+                    className="h-8 text-xs"
+                  >
+                    <a
+                      href={
+                        buildReportEmail(report, {
+                          shareUrl:
+                            typeof window !== 'undefined'
+                              ? `${window.location.origin}/share/${report.shareToken}`
+                              : null,
+                          issuesTotal: linkedIssues.length,
+                          lang,
+                        }).mailto
+                      }
+                    >
+                      <Mail className="h-3.5 w-3.5 me-1" />
+                      <span>{lang === 'ar' ? 'إرسال بالإيميل' : 'Send via email'}</span>
+                    </a>
+                  </Button>
+                  <span className="text-[10px] text-muted-foreground">
+                    {lang === 'ar' ? 'يفتح بريدك بمسودة جاهزة' : 'Opens your mail app with a ready draft'}
+                  </span>
                 </div>
 
                 <div className="rounded-xl border border-border/80 bg-muted/30 p-3 text-[11px] text-muted-foreground leading-relaxed flex items-start gap-2">

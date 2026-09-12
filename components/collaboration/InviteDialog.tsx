@@ -1,9 +1,10 @@
 'use client';
 
 import React, { useState } from 'react';
-import { X, UserPlus, Trash2, Mail } from 'lucide-react';
+import { X, UserPlus, Trash2, Mail, Send, MessageCircle } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { normalizeShareEmail } from '@/lib/db';
+import { buildInviteEmail, buildInviteWhatsApp } from '@/lib/email-share';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 
@@ -35,6 +36,9 @@ export function InviteDialog({
   const isAr = lang === 'ar';
   const [draft, setDraft] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
+  // Last invited address: offer one-click notify (email/WhatsApp) because
+  // invites are access grants — nothing is delivered automatically.
+  const [lastInvited, setLastInvited] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
@@ -44,9 +48,13 @@ export function InviteDialog({
       setLocalError(isAr ? 'بريد إلكتروني غير صالح.' : 'Invalid email address.');
       return;
     }
-    await onInvite(draft.trim().toLowerCase());
+    const email = draft.trim().toLowerCase();
+    await onInvite(email);
+    setLastInvited(email);
     setDraft('');
   };
+
+  const notify = lastInvited ? buildInviteEmail(lastInvited, subjectName, kind, isAr ? 'ar' : 'en') : null;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
@@ -82,11 +90,11 @@ export function InviteDialog({
         <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
           {isAr
             ? kind === 'report'
-              ? 'المدعوون (بحسابات مسجلة) يمكنهم عرض هذا التقرير وتعديله والتعليق على مشاكله. لا يمكنهم حذفه أو مشاركته مع آخرين.'
-              : 'المدعوون يمكنهم عرض وتعديل كل التقارير داخل هذا المجلد — الحالية والمستقبلية — والتعليق على مشاكلها المرتبطة بها فقط.'
+              ? 'المدعوون (بحسابات مسجلة) يمكنهم عرض هذا التقرير وتعديله والتعليق على مشاكله. لا يمكنهم حذفه أو مشاركته مع آخرين. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
+              : 'المدعوون يمكنهم عرض وتعديل كل التقارير داخل هذا المجلد — الحالية والمستقبلية — والتعليق على مشاكلها المرتبطة بها فقط. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
             : kind === 'report'
-              ? 'Invitees (registered accounts) can view and edit this report and comment on its issues. They cannot delete it or re-share it.'
-              : 'Invitees can view and edit every report in this folder — current and future — and comment on their linked issues only.'}
+              ? 'Invitees (registered accounts) can view and edit this report and comment on its issues. They cannot delete it or re-share it. Note: the invitee must sign in with the invited email — nothing is sent automatically, notify them with the buttons below.'
+              : 'Invitees can view and edit every report in this folder — current and future — and comment on their linked issues only. Note: the invitee must sign in with the invited email — nothing is sent automatically, notify them with the buttons below.'}
         </p>
 
         <div className="flex items-center gap-2 mb-3">
@@ -122,6 +130,28 @@ export function InviteDialog({
         {(localError || error) && (
           <div className="mb-3 rounded-xl border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 p-2.5 text-[11px] text-rose-700 dark:text-rose-300">
             {localError || error}
+          </div>
+        )}
+
+        {notify && !error && (
+          <div className="mb-3 rounded-xl border border-teal-200 dark:border-teal-800 bg-teal-50/60 dark:bg-teal-950/30 p-3">
+            <p className="text-[11px] font-semibold text-foreground mb-2" dir="auto">
+              {isAr ? `تمت إضافة ${lastInvited} — أبلغه الآن:` : `${lastInvited} added — notify them:`}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" asChild className="h-8 text-xs">
+                <a href={notify.mailto}>
+                  <Send className="h-3.5 w-3.5 me-1" />
+                  <span>{isAr ? 'إرسال بالإيميل' : 'Send via email'}</span>
+                </a>
+              </Button>
+              <Button type="button" size="sm" variant="outline" asChild className="h-8 text-xs">
+                <a href={buildInviteWhatsApp(notify.subject, notify.body)} target="_blank" rel="noopener noreferrer">
+                  <MessageCircle className="h-3.5 w-3.5 me-1" />
+                  <span>{isAr ? 'إرسال واتساب' : 'Send via WhatsApp'}</span>
+                </a>
+              </Button>
+            </div>
           </div>
         )}
 

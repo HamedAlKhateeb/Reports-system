@@ -15,7 +15,10 @@ import {
   BarChart3,
   Sparkles,
   Archive,
+  Undo2,
+  X,
 } from 'lucide-react';
+import Link from 'next/link';
 import { getIssues, getReports, updateIssue, createIssue, reorderIssues, getSeverityConfig, isArchivedIssue } from '@/lib/db';
 import { IssueItem, ReportItem, SeverityConfigItem } from '@/lib/types';
 import { IssueCard } from '@/components/dashboard/IssueCard';
@@ -397,10 +400,25 @@ export default function DashboardPage() {
     setSelectedIssue(null);
   };
 
+  // Deep link from a report (?report=<id>): scope the board to that report's
+  // issues and offer a one-click return. Read client-side (no Suspense needed).
+  const [reportFilter, setReportFilter] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const id = new URLSearchParams(window.location.search).get('report');
+      setReportFilter(id && id.trim() ? id.trim() : null);
+    } catch {
+      setReportFilter(null);
+    }
+  }, []);
+
   // Filter issues (B18 perf: memoized — was re-filtered + lowercased on every render/keystroke)
   const filteredIssues = useMemo(() => {
     const q = searchQuery.toLowerCase();
     return issues.filter((iss) => {
+      if (reportFilter && iss.linkedReportId !== reportFilter && (iss as any).reportId !== reportFilter) {
+        return false;
+      }
       const matchesSearch =
         (iss.title || '').toLowerCase().includes(q) ||
         (iss.description || '').toLowerCase().includes(q);
@@ -412,7 +430,7 @@ export default function DashboardPage() {
         normSev === normalizeSeverity(severityFilter);
       return matchesSearch && matchesSeverity;
     });
-  }, [issues, searchQuery, severityFilter]);
+  }, [issues, searchQuery, severityFilter, reportFilter]);
 
   // O(1) report lookup (B18 perf: was reports.find per row/card = O(N*M))
   const reportById = useMemo(() => new Map(reports.map((r) => [r.id, r])), [reports]);
@@ -526,6 +544,45 @@ export default function DashboardPage() {
           </Button>
         </div>
       </div>
+
+      {/* Deep-link banner: opened from a report — scoped board + one-click return */}
+      {reportFilter && (
+        <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/5 px-4 py-3">
+          <div className="flex items-center gap-2 text-xs">
+            <Kanban className="size-4 text-primary shrink-0" />
+            <span className="font-semibold text-foreground">
+              {lang === 'ar' ? 'مشاكل التقرير:' : 'Issues of report:'}{' '}
+              {reportById.get(reportFilter)?.title || `#${reportById.get(reportFilter)?.reportNumber || ''}`}
+            </span>
+            <Badge variant="secondary" className="text-[10px]">
+              {filteredIssues.length}
+            </Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" size="sm" asChild className="h-8 text-xs">
+              <Link href={`/reports/${reportFilter}`}>
+                <Undo2 data-icon="inline-start" />
+                <span>{lang === 'ar' ? 'رجوع للتقرير' : 'Back to report'}</span>
+              </Link>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setReportFilter(null);
+                try {
+                  window.history.replaceState(null, '', window.location.pathname);
+                } catch {}
+              }}
+              className="h-8 text-xs text-muted-foreground"
+            >
+              <X data-icon="inline-start" />
+              <span>{lang === 'ar' ? 'عرض الكل' : 'Show all'}</span>
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Dashboard Mode Switcher */}
       <div className="no-print mb-6 border-b border-border/80 pb-px">
