@@ -1508,6 +1508,7 @@ export function SmartTable({
       onFocus={(e) => { try { e.stopPropagation(); } catch {} }}
       onMouseDownCapture={notifySmartActive}
       onFocusCapture={notifySmartActive}
+      onTouchStartCapture={notifySmartActive}
       dir={isAr ? 'rtl' : 'ltr'}
     >
       {/* ============ 1. TOP TOOLBAR (internal mode only; external mode uses the top EditorToolbar) ============ */}

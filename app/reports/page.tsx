@@ -176,7 +176,21 @@ export default function ReportsPage() {
   const toggleArchiveView = async (on: boolean) => {
     setArchiveView(on);
     setSearchQuery('');
-    if (on) await loadArchived();
+    // Entering the archive shows the whole archive (no stale folder filter);
+    // leaving it returns to the full report list.
+    if (on) {
+      setSelectedFolderId('all');
+      await loadArchived();
+    }
+  };
+
+  // Picking any folder (sidebar, breadcrumb, or a report's folder badge)
+  // always leaves the archive and shows that folder's live reports — the
+  // archive filter never "sticks" to folder navigation.
+  const leaveArchiveAndSelect = (id: string | null | 'all') => {
+    setArchiveView(false);
+    setSelectedFolderId(id);
+    setSearchQuery('');
   };
 
   const handleArchiveReport = async (e: React.MouseEvent, id: string) => {
@@ -497,7 +511,7 @@ export default function ReportsPage() {
     if (!newFolderName.trim() || !user) return;
     try {
       setCreatingFolder(true);
-      await createFolder({
+      const created = await createFolder({
         name: newFolderName.trim(),
         parentId: createFolderParentId,
         color: newFolderColor,
@@ -507,6 +521,13 @@ export default function ReportsPage() {
       setFolders(updated);
       setShowCreateFolderModal(false);
       setNewFolderName('');
+      // Creating a folder from inside the archive drops you into it: the new
+      // folder is selected and the archive filter is left behind.
+      if (archiveView) {
+        setArchiveView(false);
+        setSelectedFolderId(created?.id || null);
+        setSearchQuery('');
+      }
     } catch (err: any) {
       console.error('Failed to create folder:', err);
       alert((isAr ? 'فشل إنشاء المجلد: ' : 'Failed to create folder: ') + err?.message);
@@ -544,7 +565,7 @@ export default function ReportsPage() {
       setReports(updatedReports);
       setFolders(updatedFolders);
       if (selectedFolderId === folderToDelete.id) {
-        setSelectedFolderId(folderToDelete.parentId || null);
+        leaveArchiveAndSelect(folderToDelete.parentId || null);
       }
       setFolderToDelete(null);
     } catch (err: any) {
@@ -817,8 +838,7 @@ export default function ReportsPage() {
               selectedFolderId={selectedFolderId}
               currentUid={user?.uid}
               onSelectFolder={(id) => {
-                setSelectedFolderId(id);
-                setSearchQuery('');
+                leaveArchiveAndSelect(id);
               }}
               onCreateFolder={(parentId) => handleOpenCreateFolderModal(parentId)}
               onRenameFolder={(f) => {
@@ -849,8 +869,7 @@ export default function ReportsPage() {
               currentFolderId={selectedFolderId === 'all' ? null : selectedFolderId}
               folders={folders}
               onNavigate={(fId) => {
-                setSelectedFolderId(fId);
-                setSearchQuery('');
+                leaveArchiveAndSelect(fId);
               }}
             />
 
@@ -1013,7 +1032,7 @@ export default function ReportsPage() {
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setSelectedFolderId(reportFolder.id);
+                                leaveArchiveAndSelect(reportFolder.id);
                               }}
                             >
                               <Badge variant="outline" className="gap-1 text-[10px] hover:bg-muted transition-colors">
