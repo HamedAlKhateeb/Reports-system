@@ -26,6 +26,12 @@ export interface ChartSource {
   valueColumns: string[];
   /** Optional human label of the source table at creation time */
   tableName?: string;
+  /**
+   * Phase 4.4 (B17): stable content-id for native sources
+   * (nativeFingerprint at creation). Empty for smart sources and for
+   * charts created before fingerprints existed (legacy positional match).
+   */
+  sourceFingerprint?: string;
 }
 
 export interface ChartSchema {

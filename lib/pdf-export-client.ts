@@ -2,26 +2,30 @@ import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { formatWhatsAppUrl } from './contact-links';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
+import { filterUnplacedImages } from './images-appendix';
+import { chartDataTable, escapeHtmlExport } from './charts/export-helpers';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLINE_CSS } from './latex';
 
 /**
- * Converts TipTap JSON node to clean styled HTML for print/PDF
+ * Converts TipTap JSON node to clean styled HTML for print/PDF.
+ * `docRef` is the top-level doc (needed to resolve native chart sources).
  */
 function tipTapNodeToHtml(
   node: any,
   isAr: boolean,
   images: ReportImageItem[] = [],
-  tablesMap: Record<string, any> = {}
+  tablesMap: Record<string, any> = {},
+  docRef?: any
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, node)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<p class="report-p">${content || '&nbsp;'}</p>`;
     }
 
@@ -72,27 +76,27 @@ function tipTapNodeToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<h${level} class="report-h${level}">${content}</h${level}>`;
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<ul class="report-ul">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<ol class="report-ol">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<li class="report-li">${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       return `<blockquote class="report-quote">${content}</blockquote>`;
     }
 
@@ -134,7 +138,7 @@ function tipTapNodeToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap)).join('');
+          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap, docRef)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let extraClass = '';
@@ -234,12 +238,31 @@ function tipTapNodeToHtml(
     case 'reportChart': {
       const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
       const type = node.attrs?.type || 'bar';
-      return `<figure class="report-chart-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">📊 ${title}</div><div style="font-size:11px;color:#64748b;">${type}</div></figure>`;
+      // Phase 4.4 (B17): render the data table under the title (was
+      // title-only). Smart sources resolve from tablesMap; native sources
+      // from the top-level doc with fingerprint rebinding.
+      let chartTableHtml = '';
+      try {
+        const table = chartDataTable(node, docRef, tablesMap, 50, isAr ? 'البند' : 'Item');
+        if (!table.broken && table.rows.length > 0) {
+          const thead = `<thead><tr class="report-header-row">${table.headers.map((h) => `<th class="report-cell">${escapeHtmlExport(h)}</th>`).join('')}</tr></thead>`;
+          const tbody = `<tbody>${table.rows.map((r) => `<tr class="report-row">${r.map((c) => `<td class="report-cell">${escapeHtmlExport(c)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+          const more = table.truncated
+            ? `<div style="font-size:11px;color:#64748b;">... ${isAr ? 'و' : 'and'} ${table.totalRows - table.rows.length} ${isAr ? 'صفوف أخرى' : 'more rows'}</div>`
+            : '';
+          chartTableHtml = `<div class="table-wrapper"><table class="report-table" dir="${isAr ? 'rtl' : 'ltr'}">${thead}${tbody}</table>${more}</div>`;
+        } else {
+          chartTableHtml = `<div style="font-size:11px;color:#64748b;">${isAr ? '(تعذر تحميل بيانات الرسم — المصدر غير متاح)' : '(Chart data unavailable — source missing)'}</div>`;
+        }
+      } catch {
+        chartTableHtml = '';
+      }
+      return `<figure class="report-chart-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">📊 ${title}</div><div style="font-size:11px;color:#64748b;">${type}</div>${chartTableHtml}</figure>`;
     }
 
     default:
       if (node.content) {
-        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap)).join('');
+        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
       }
       return '';
   }
@@ -273,28 +296,8 @@ export function buildPrintableHtml(
   const bg = BG_PALETTES[report.backgroundColor || 'white'] || BG_PALETTES.white;
 
   // Extract all images already embedded in report content to prevent duplication in appendix
-  const embeddedImageIds = new Set<string>();
-  function traverseForEmbeddedImages(node: any) {
-    if (!node) return;
-    if (node.type === 'reportImage') {
-      if (node.attrs?.imageId) embeddedImageIds.add(String(node.attrs.imageId));
-      if (node.attrs?.src) embeddedImageIds.add(String(node.attrs.src));
-      if (node.attrs?.fileName) embeddedImageIds.add(String(node.attrs.fileName));
-      if (node.attrs?.sequenceNumber !== undefined) embeddedImageIds.add(`seq_${node.attrs.sequenceNumber}`);
-    }
-    if (node.content && Array.isArray(node.content)) {
-      node.content.forEach(traverseForEmbeddedImages);
-    }
-  }
-  traverseForEmbeddedImages(report.contentJson);
-
-  const unplacedImages = images.filter((img) => {
-    if (embeddedImageIds.has(img.id)) return false;
-    if (img.downloadUrl && embeddedImageIds.has(img.downloadUrl)) return false;
-    if (img.fileName && embeddedImageIds.has(img.fileName)) return false;
-    if (img.sequenceNumber !== undefined && embeddedImageIds.has(`seq_${img.sequenceNumber}`)) return false;
-    return true;
-  });
+  // Phase 4.3 (B16): shared id-first helper (was duplicated with docx-builder).
+  const unplacedImages = filterUnplacedImages(report.contentJson, images);
 
   const tablesMap: Record<string, any> = {};
   if (tables && tables.length > 0) {
@@ -428,9 +431,6 @@ export function buildPrintableHtml(
       padding: 14px 18px;
       margin-bottom: 24px;
     }
-      padding: 14px 18px;
-      margin-bottom: 24px;
-    }
 
     .meta-item {
       display: flex;
@@ -511,11 +511,21 @@ export function buildPrintableHtml(
       border-radius: 4px;
     }
 
-    /* Tables */
+    /* Tables: long tables MUST split across pages (rows stay intact,
+       header repeats). Phase 4.2 B13: was page-break-inside avoid on
+       the whole wrapper, which clipped tables taller than one page. */
     .table-wrapper {
       margin: 14px 0 20px 0;
       width: 100%;
       overflow: hidden;
+      page-break-inside: auto;
+    }
+
+    .report-table thead {
+      display: table-header-group;
+    }
+
+    .report-table tr {
       page-break-inside: avoid;
     }
 

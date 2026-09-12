@@ -2,6 +2,7 @@ import { ReportItem, ReportImageItem } from './types';
 import { t } from './i18n/dictionary';
 import { getTablesByReportId } from './db';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
+import { chartDataTable } from './charts/export-helpers';
 import JSZip from 'jszip';
 
 /**
@@ -218,6 +219,23 @@ export function tipTapJsonToMarkdown(
       case 'reportChart': {
         const title = node.attrs?.title || 'Chart';
         const type = node.attrs?.type || 'bar';
+        // Phase 4.4 (B17): export the data table, not just the title.
+        try {
+          const table = chartDataTable(node, json, tablesMap, 50, isAr ? 'البند' : 'Item');
+          if (!table.broken && table.rows.length > 0) {
+            const esc = (s: string) => String(s ?? '').replace(/\|/g, '\\|').replace(/\n+/g, ' ');
+            const out = [`> 📊 **${title}** (${type})`, ''];
+            out.push(`| ${table.headers.map(esc).join(' | ')} |`);
+            out.push(`| ${table.headers.map(() => (isAr ? '---:' : '---')).join(' | ')} |`);
+            for (const r of table.rows) out.push(`| ${r.map(esc).join(' | ')} |`);
+            if (table.truncated) {
+              out.push(
+                `> ... ${isAr ? 'و' : 'and'} ${table.totalRows - table.rows.length} ${isAr ? 'صفوف أخرى' : 'more rows'}`
+              );
+            }
+            return out.join('\n') + '\n\n';
+          }
+        } catch {}
         return `> 📊 **${title}** (${type})\n\n`;
       }
 

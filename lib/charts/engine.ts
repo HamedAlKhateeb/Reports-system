@@ -15,6 +15,50 @@ export interface NativeTableInfo {
   rows: string[][];
 }
 
+/* ------------------------------------------------------------------ */
+/* Stable native identity (Phase 4.4 / B17)                             */
+/*                                                                     */
+/* Native tables are addressed by POSITION ("native:N"), so inserting a */
+/* table above a chart's source silently rebinds it. The fingerprint    */
+/* (headers + row count) acts as a stable content-id: resolvers prefer  */
+/* key+fingerprint agreement, then fingerprint-only rebinding, and only */
+/* then the legacy positional match (charts created before fingerprints */
+/* existed keep working, documented residual).                          */
+/* ------------------------------------------------------------------ */
+
+export function nativeFingerprint(info: Pick<NativeTableInfo, 'headers' | 'rows'> | null): string {
+  if (!info) return '';
+  const heads = (info.headers || []).map((h) => String(h ?? '').trim()).join('|');
+  const rowCount = Array.isArray(info.rows) ? info.rows.length : 0;
+  return `h:${heads}#r:${rowCount}`;
+}
+
+export interface NativeResolveResult {
+  info: NativeTableInfo | null;
+  /** True when the positional key missed but the fingerprint matched. */
+  rebound: boolean;
+}
+
+export function resolveNativeWithFallback(
+  natives: NativeTableInfo[],
+  tableId: string,
+  fingerprint?: string | null
+): NativeResolveResult {
+  const list = Array.isArray(natives) ? natives : [];
+  const direct = list.find((n) => n.key === tableId) || null;
+  if (direct && (!fingerprint || nativeFingerprint(direct) === fingerprint)) {
+    return { info: direct, rebound: false };
+  }
+  if (fingerprint) {
+    const healed = list.find((n) => n.key !== tableId && nativeFingerprint(n) === fingerprint) || null;
+    if (healed) return { info: healed, rebound: true };
+    // Fingerprinted chart whose source moved AND changed content (or was
+    // deleted): explicit broken, never silently bind the wrong table.
+    return { info: null, rebound: false };
+  }
+  return { info: direct, rebound: false };
+}
+
 export interface SmartTableLike {
   id: string;
   name: string;

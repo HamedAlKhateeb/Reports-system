@@ -6,7 +6,7 @@ import { Pencil, Copy, Trash2, AlertTriangle, BarChart3, Maximize2 } from 'lucid
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { getTableById } from '@/lib/db';
 import type { ChartSchema } from '@/lib/charts/types';
-import { buildEchartsOption, extractNativeTables, resolveFromNative, resolveFromSmart } from '@/lib/charts/engine';
+import { buildEchartsOption, extractNativeTables, resolveFromNative, resolveFromSmart, resolveNativeWithFallback } from '@/lib/charts/engine';
 import { cn } from '@/lib/utils';
 
 function attrsToSchema(a: any): ChartSchema {
@@ -103,7 +103,12 @@ export function ReportChartView(props: NodeViewProps) {
     try {
       const doc = editor?.getJSON?.();
       const natives = extractNativeTables(doc);
-      const info = natives.find((n) => n.key === schema.source.tableId) || null;
+      // Phase 4.4 (B17): same fingerprint fallback as exports.
+      const { info } = resolveNativeWithFallback(
+        natives,
+        schema.source.tableId,
+        (schema.source as any).sourceFingerprint || (schema as any).sourceFingerprint || null
+      );
       return resolveFromNative(info, schema);
     } catch {
       return { categories: [], series: [], missing: [...schema.source.valueColumns], valueCount: 0 };

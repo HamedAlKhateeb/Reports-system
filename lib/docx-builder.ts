@@ -18,9 +18,25 @@ import {
   PageBreak,
 } from 'docx';
 import { ReportItem, ReportImageItem } from './types';
+import { imageSize } from 'image-size';
+
+/** Best-effort natural dimensions; falls back to the appendix box. */
+function imageDimensions(buf: Buffer): { width: number; height: number } {
+  try {
+    const dims = imageSize(buf);
+    if (dims && Number.isFinite(dims.width) && Number.isFinite(dims.height)) {
+      return { width: dims.width as number, height: dims.height as number };
+    }
+  } catch {
+    // Corrupt/unsupported header — caller fits the default box.
+  }
+  return { width: 520, height: 320 };
+}
 import { t, DICTIONARY } from './i18n/dictionary';
 import { getTableById } from './db';
+import { chartDataTable } from './charts/export-helpers';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
+import { filterUnplacedImages, fitImageBox } from './images-appendix';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
 
 async function resolveImageBuffer(downloadUrl?: string): Promise<Buffer | null> {
@@ -610,6 +626,97 @@ export async function buildDocxDocument(
             spacing: { before: 160, after: 120 },
           })
         );
+        // Phase 4.4 (B17): export the underlying data table, not just the title.
+        try {
+          const chartKind = node.attrs?.sourceKind === 'native' ? 'native' : 'smart';
+          const chartSrcId = String(node.attrs?.sourceTableId || '');
+          const chartTables: Record<string, any> = {};
+          if (chartKind === 'smart' && chartSrcId) {
+            const st = await getTableById(chartSrcId).catch(() => null);
+            if (st) chartTables[chartSrcId] = st;
+          }
+          const chartTable = chartDataTable(
+            node,
+            report.contentJson,
+            chartTables,
+            50,
+            isAr ? 'البند' : 'Item'
+          );
+          if (!chartTable.broken && chartTable.rows.length > 0) {
+            const headerCells = chartTable.headers.map(
+              (h) =>
+                new TableCell({
+                  shading: { fill: theme.primary, type: ShadingType.CLEAR, color: 'auto' },
+                  children: [
+                    new Paragraph({
+                      children: [makeRun(h, { color: 'ffffff', bold: true, size: 18 })],
+                      alignment: AlignmentType.CENTER,
+                      bidirectional: isAr,
+                    }),
+                  ],
+                })
+            );
+            const bodyRows = chartTable.rows.map(
+              (r) =>
+                new TableRow({
+                  children: r.map(
+                    (cell) =>
+                      new TableCell({
+                        children: [
+                          new Paragraph({
+                            children: [makeRun(cell, { size: 18 })],
+                            alignment,
+                            bidirectional: isAr,
+                          }),
+                        ],
+                      })
+                  ),
+                })
+            );
+            children.push(
+              new Table({
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                alignment,
+                visuallyRightToLeft: isAr,
+                rows: [
+                  new TableRow({ children: headerCells, tableHeader: true, cantSplit: true }),
+                  ...bodyRows,
+                ],
+              })
+            );
+            if (chartTable.truncated) {
+              children.push(
+                new Paragraph({
+                  children: [
+                    makeRun(
+                      isAr
+                        ? `... و ${chartTable.totalRows - chartTable.rows.length} صفوف أخرى في التقرير الأصلي`
+                        : `... and ${chartTable.totalRows - chartTable.rows.length} more rows in the original report`,
+                      { size: 16, color: '64748b', italics: true }
+                    ),
+                  ],
+                  alignment: AlignmentType.CENTER,
+                  bidirectional: isAr,
+                })
+              );
+            }
+          } else {
+            children.push(
+              new Paragraph({
+                children: [
+                  makeRun(
+                    isAr ? '(تعذر تحميل بيانات الرسم — المصدر غير متاح)' : '(Chart data unavailable — source missing)',
+                    { size: 16, color: '64748b', italics: true }
+                  ),
+                ],
+                alignment: AlignmentType.CENTER,
+                bidirectional: isAr,
+              })
+            );
+          }
+        } catch {
+          // Title-only fallback (previous behavior).
+        }
       }
     }
   }
@@ -728,28 +835,8 @@ export async function buildDocxDocument(
   );
 
   // Screenshots Appendix Section at the end only for UNPLACED images (not already embedded in contentJson)
-  const embeddedImageIds = new Set<string>();
-  function traverseForEmbeddedImages(node: any) {
-    if (!node) return;
-    if (node.type === 'reportImage') {
-      if (node.attrs?.imageId) embeddedImageIds.add(String(node.attrs.imageId));
-      if (node.attrs?.src) embeddedImageIds.add(String(node.attrs.src));
-      if (node.attrs?.fileName) embeddedImageIds.add(String(node.attrs.fileName));
-      if (node.attrs?.sequenceNumber !== undefined) embeddedImageIds.add(`seq_${node.attrs.sequenceNumber}`);
-    }
-    if (node.content && Array.isArray(node.content)) {
-      node.content.forEach(traverseForEmbeddedImages);
-    }
-  }
-  traverseForEmbeddedImages(report.contentJson);
-
-  const unplacedImages = images.filter((img) => {
-    if (embeddedImageIds.has(img.id)) return false;
-    if (img.downloadUrl && embeddedImageIds.has(img.downloadUrl)) return false;
-    if (img.fileName && embeddedImageIds.has(img.fileName)) return false;
-    if (img.sequenceNumber !== undefined && embeddedImageIds.has(`seq_${img.sequenceNumber}`)) return false;
-    return true;
-  });
+  // Phase 4.3 (B16): id-first matching via shared helper (was duplicated here + pdf-export-client).
+  const unplacedImages = filterUnplacedImages(report.contentJson, images);
 
   if (unplacedImages.length > 0) {
     children.push(
@@ -795,14 +882,18 @@ export async function buildDocxDocument(
       try {
         const imgBuffer = await resolveImageBuffer(img.downloadUrl);
         if (imgBuffer) {
+          // Phase 4.3 (B16): fit inside the appendix box preserving aspect
+          // ratio (was forced 520×320, distorting non-matching images).
+          const dims = imageDimensions(imgBuffer);
+          const box = fitImageBox(dims.width, dims.height);
           children.push(
             new Paragraph({
               children: [
                 new ImageRun({
                   data: imgBuffer,
                   transformation: {
-                    width: 520,
-                    height: 320,
+                    width: box.width,
+                    height: box.height,
                   },
                 }),
               ],
