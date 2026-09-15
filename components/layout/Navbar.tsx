@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   FileText,
   Kanban,
@@ -12,9 +12,13 @@ import {
   Sparkles,
   Menu,
   BookOpen,
+  Bell,
+  UserPlus,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
+import { useInviteInbox } from '@/lib/invites';
+import { InviteInboxDialog } from '@/components/collaboration/InviteInboxDialog';
 import { getAiAssistantVisible, saveAiAssistantVisible } from '@/lib/ai-config';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,10 +45,18 @@ import { AppLogo } from './AppLogo';
 
 export function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { lang, setLang, t } = useLanguage();
   const { user, isGuest, signOut } = useAuth();
   const [isAiVisible, setIsAiVisible] = useState(() => getAiAssistantVisible(user?.uid));
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Invite inbox: reports shared with me (bell + account menu entry).
+  const { inbox, unseen, unseenCount, markSeen, markAllSeen } = useInviteInbox(
+    isGuest ? null : user?.uid,
+    isGuest ? null : user?.email
+  );
+  // Account-click invites dialog (the user asked: pressing my account shows the invite).
+  const [showInvites, setShowInvites] = useState(false);
 
   useEffect(() => {
     setIsAiVisible(getAiAssistantVisible(user?.uid));
@@ -157,6 +169,77 @@ export function Navbar() {
             <span>{lang === 'ar' ? 'English' : 'العربية'}</span>
           </Button>
 
+          {/* Invite inbox bell (shared-with-me reports) */}
+          {!isGuest && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="relative gap-2 px-2 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+                  title={lang === 'ar' ? 'دعوات المشاركة' : 'Share invites'}
+                  aria-label={lang === 'ar' ? `دعوات المشاركة (${unseenCount} جديدة)` : `Share invites (${unseenCount} new)`}
+                >
+                  <Bell className="size-4" />
+                  {unseenCount > 0 && (
+                    <span className="absolute -top-0.5 -end-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+                      {unseenCount > 99 ? '99+' : unseenCount}
+                    </span>
+                  )}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-72">
+                <DropdownMenuLabel className="flex items-center justify-between">
+                  <span className="text-xs font-bold">
+                    {lang === 'ar' ? 'تقارير شاركها معي الآخرون' : 'Reports shared with me'}
+                  </span>
+                  {inbox.length > 0 && unseenCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => markAllSeen()}
+                      className="text-[10px] font-semibold text-muted-foreground hover:text-foreground"
+                    >
+                      {lang === 'ar' ? 'تعليم الكل كمقروء' : 'Mark all read'}
+                    </button>
+                  )}
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {inbox.length === 0 ? (
+                  <div className="px-3 py-4 text-center text-[11px] text-muted-foreground">
+                    {lang === 'ar' ? 'لا توجد دعوات — التقارير المشاركة معك ستظهر هنا.' : 'No invites — reports shared with you will appear here.'}
+                  </div>
+                ) : (
+                  <DropdownMenuGroup>
+                    {inbox.slice(0, 8).map((rep) => {
+                      const isNew = unseen.includes(rep.id);
+                      return (
+                        <DropdownMenuItem
+                          key={rep.id}
+                          onClick={() => {
+                            markSeen(rep.id);
+                            router.push(`/reports/${rep.id}`);
+                          }}
+                          className="flex cursor-pointer items-start gap-2"
+                        >
+                          <UserPlus className="mt-0.5 size-3.5 shrink-0 text-teal-600 dark:text-teal-400" />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                              <span className="truncate">{rep.title || (lang === 'ar' ? 'تقرير' : 'Report')}</span>
+                              {isNew && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-600" />}
+                            </span>
+                            <span className="block text-[10px] text-muted-foreground">
+                              #{rep.reportNumber}
+                            </span>
+                          </span>
+                        </DropdownMenuItem>
+                      );
+                    })}
+                  </DropdownMenuGroup>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
           {/* User Profile Dropdown Menu */}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -200,6 +283,24 @@ export function Navbar() {
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
+                {!isGuest && (
+                  <DropdownMenuItem
+                    onClick={() => setShowInvites(true)}
+                    className="flex cursor-pointer items-center gap-2"
+                  >
+                    <Bell className="size-4 text-teal-600 dark:text-teal-400" />
+                    <span className="flex-1">{lang === 'ar' ? 'دعوات المشاركة' : 'Share invites'}</span>
+                    {unseenCount > 0 ? (
+                      <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">
+                        {unseenCount > 99 ? '99+' : unseenCount}
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+                        {inbox.length}
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   onClick={toggleAiVisibility}
                   className="flex items-center justify-between cursor-pointer"
@@ -314,6 +415,67 @@ export function Navbar() {
 
                 <Separator />
 
+                {/* Invite inbox (mobile) — tapping opens the full dialog too */}
+                {!isGuest && (
+                  <>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between px-2">
+                        <div className="flex items-center gap-2">
+                          <Bell className="size-4 text-teal-600 dark:text-teal-400" />
+                          <span className="text-xs font-bold text-foreground">
+                            {lang === 'ar' ? 'دعوات المشاركة' : 'Share invites'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {unseenCount > 0 && (
+                            <Badge variant="destructive" className="px-1.5 py-0 text-[10px]">
+                              {unseenCount > 99 ? '99+' : unseenCount}
+                            </Badge>
+                          )}
+                          {inbox.length > 5 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMobileMenuOpen(false);
+                                setShowInvites(true);
+                              }}
+                              className="text-[10px] font-bold text-teal-700 dark:text-teal-300 hover:underline"
+                            >
+                              {lang === 'ar' ? 'عرض الكل' : 'View all'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {inbox.length === 0 ? (
+                        <p className="px-2 text-[11px] text-muted-foreground">
+                          {lang === 'ar' ? 'لا توجد دعوات بعد.' : 'No invites yet.'}
+                        </p>
+                      ) : (
+                        inbox.slice(0, 5).map((rep) => (
+                          <Button
+                            key={rep.id}
+                            variant="ghost"
+                            className="w-full justify-start gap-2 h-9 text-xs font-medium"
+                            onClick={() => {
+                              markSeen(rep.id);
+                              setMobileMenuOpen(false);
+                              router.push(`/reports/${rep.id}`);
+                            }}
+                          >
+                            <span className="truncate flex-1 text-start">
+                              {rep.title || (lang === 'ar' ? 'تقرير' : 'Report')}
+                            </span>
+                            {unseen.includes(rep.id) && (
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-rose-600" />
+                            )}
+                          </Button>
+                        ))
+                      )}
+                    </div>
+                    <Separator />
+                  </>
+                )}
+
                 {/* AI Assistant Quick Toggle */}
                 <div className="flex items-center justify-between px-2 py-1">
                   <div className="flex items-center gap-2">
@@ -351,6 +513,18 @@ export function Navbar() {
           </Sheet>
         </div>
       </div>
+      {/* Full invite inbox — opened from the account menu (desktop) or mobile */}
+      {!isGuest && (
+        <InviteInboxDialog
+          isOpen={showInvites}
+          onClose={() => setShowInvites(false)}
+          inbox={inbox}
+          unseen={unseen}
+          onOpenReport={(id) => markSeen(id)}
+          onMarkAllSeen={() => markAllSeen()}
+          userEmail={user?.email}
+        />
+      )}
     </header>
   );
 }

@@ -21,12 +21,16 @@ service firebase.storage {
         && callerEmail() in data.sharedWithEmails;
     }
 
-    // Collaboration: owner, direct invitee, owned folder, or invited folder.
+    // Collaboration: owner, direct invitee, owned folder, invited folder,
+    // or public link. Production fix B13: folder-collaborator readers were
+    // denied image reads via SDK while seeing the report itself.
     function canReadReport(data) {
       return isAuthenticated() && (
         data.ownerUid == request.auth.uid
         || hasCallerEmail(data)
         || data.isShared == true
+        || (data.folderId is string
+          && (folderOf(data).ownerUid == request.auth.uid || hasCallerEmail(folderOf(data))))
       );
     }
 

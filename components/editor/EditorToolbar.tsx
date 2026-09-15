@@ -38,6 +38,7 @@ import {
   PilcrowLeft,
   PilcrowRight,
   Sigma,
+  Sheet,
   Undo2,
   Redo2,
   ArrowRightLeft,
@@ -55,6 +56,7 @@ import { saveTable } from '@/lib/db';
 import { seedMindmap, newMindId } from '@/lib/mindmap';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
+import { resolveActiveFontSize } from './FontSizeMark';
 
 const TEXT_COLORS = [
   { name: 'Red', hex: '#dc2626', labelAr: 'أحمر داكن', labelEn: 'Dark Red' },
@@ -77,6 +79,7 @@ const HIGHLIGHT_COLORS = [
 interface EditorToolbarProps {
   editor: Editor | null;
   reportId?: string;
+  reportLanguage?: 'ar' | 'en';
   onImageUpload: (file: File) => void;
   uploadingImage?: boolean;
 }
@@ -84,6 +87,7 @@ interface EditorToolbarProps {
 export function EditorToolbar({
   editor,
   reportId,
+  reportLanguage,
   onImageUpload,
   uploadingImage,
 }: EditorToolbarProps) {
@@ -113,18 +117,21 @@ export function EditorToolbar({
   const handleInsertSmartTable = async () => {
     if (!editor) return;
     try {
+      // New sheets inherit the REPORT language direction (not the app UI
+      // language — they can differ). Arabic report → RTL sheet.
+      const sheetLang = reportLanguage || (lang === 'ar' ? 'ar' : 'en');
       const newTableId = `tbl_${reportId || 'rep'}_${Date.now().toString(36)}`;
       const defaultTable: TableEntity = {
         id: newTableId,
         report_id: reportId || '',
-        name: lang === 'ar' ? 'جدول' : 'Table',
-        direction: lang === 'ar' ? 'rtl' : 'ltr',
+        name: sheetLang === 'ar' ? 'جدول' : 'Table',
+        direction: sheetLang === 'ar' ? 'rtl' : 'ltr',
         cell_formats: {},
         merged_cells: [],
         columns_data: [
-          { id: 'A', name: lang === 'ar' ? 'البند' : 'Item', type: 'text', width: 200 },
-          { id: 'B', name: lang === 'ar' ? 'الوصف' : 'Description', type: 'text', width: 260 },
-          { id: 'C', name: lang === 'ar' ? 'العدد' : 'Count', type: 'number', width: 110 },
+          { id: 'A', name: sheetLang === 'ar' ? 'البند' : 'Item', type: 'text', width: 200 },
+          { id: 'B', name: sheetLang === 'ar' ? 'الوصف' : 'Description', type: 'text', width: 260 },
+          { id: 'C', name: sheetLang === 'ar' ? 'العدد' : 'Count', type: 'number', width: 110 },
         ],
         rows_data: [
           { A: '', B: '', C: '' },
@@ -217,7 +224,7 @@ export function EditorToolbar({
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (!target || typeof target.closest !== 'function') return;
-      if (target.closest('.smart-table-wrapper')) return;
+      if (target.closest('.smart-table-node-view, .smart-table-wrapper')) return;
       if (target.closest('.editor-toolbar-root')) return;
       if (target.closest('[data-radix-portal]')) return;
       setActiveSmartTable(null);
@@ -231,6 +238,50 @@ export function EditorToolbar({
   }, []);
 
   // Leaving the smart table via keyboard into a normal table clears the bridge.
+  // Selected-but-not-focused smart tables: a NodeSelection on the atom block
+  // (click the frame, arrow-key onto it) never fires the sheet's click bridge,
+  // so the sub-toolbar (delete/clear/direction) would stay hidden while the
+  // node is selected and Backspace is blocked — a dead end. Mirror the
+  // selection into state so management controls are always reachable.
+  const [selectedSmartId, setSelectedSmartId] = useState<string | null>(null);
+  React.useEffect(() => {
+    if (!editor) return;
+    const syncSmartSelection = () => {
+      try {
+        const sel: any = editor.state.selection;
+        const node = sel?.node;
+        if (node?.type?.name === 'smartTable' && node.attrs?.tableId) {
+          setSelectedSmartId(String(node.attrs.tableId));
+          return;
+        }
+        // Cursor directly before/after the atom block: resolve the neighbour.
+        try {
+          const $from: any = sel?.$from;
+          const after: any = $from?.nodeAfter;
+          const before: any = $from?.nodeBefore;
+          if (after?.type?.name === 'smartTable' && after.attrs?.tableId) {
+            setSelectedSmartId(String(after.attrs.tableId));
+            return;
+          }
+          if (before?.type?.name === 'smartTable' && before.attrs?.tableId) {
+            setSelectedSmartId(String(before.attrs.tableId));
+            return;
+          }
+        } catch {}
+        setSelectedSmartId(null);
+      } catch {
+        setSelectedSmartId(null);
+      }
+    };
+    syncSmartSelection();
+    editor.on('selectionUpdate', syncSmartSelection);
+    editor.on('update', syncSmartSelection);
+    return () => {
+      editor.off('selectionUpdate', syncSmartSelection);
+      editor.off('update', syncSmartSelection);
+    };
+  }, [editor]);
+
   React.useEffect(() => {
     if (!editor) return;
     const onSel = () => {
@@ -245,11 +296,38 @@ export function EditorToolbar({
   }, [editor]);
 
   const sendSmartCommand = (command: string, value?: string) => {
-    if (!activeSmartTable) return;
+    const targetId = activeSmartTable?.id || selectedSmartId;
+    if (!targetId) return;
+    // Deleting via the toolbar must also remove the node when the sheet
+    // engine never mounted (no Univer listener to call onDeleteNode):
+    // the editor backup listener strips residual nodes on smart-table-deleted.
     window.dispatchEvent(
-      new CustomEvent('smart-table-command', { detail: { tableId: activeSmartTable.id, command, value } })
+      new CustomEvent('smart-table-command', { detail: { tableId: targetId, command, value } })
     );
+    if (command === 'delete-table' && editor) {
+      window.setTimeout(() => {
+        try {
+          let found = false;
+          editor.state.doc.descendants((node: any) => {
+            if (node?.type?.name === 'smartTable' && String(node.attrs?.tableId || '') === targetId) {
+              found = true;
+            }
+          });
+          if (found) {
+            window.dispatchEvent(new CustomEvent('smart-table-delete-node', { detail: { tableId: targetId } }));
+          }
+        } catch {}
+      }, 1500);
+    }
   };
+
+  // The smart sheet owns its formatting UI (Univer ribbon). Outer toolbar
+  // formatting buttons are disabled with an explanatory tooltip while a
+  // smart table is focused — no focus steal, no silent no-op, no toast spam.
+  const smartDisabledTitle = (base: string): string =>
+    useSmart
+      ? `${base} — ${lang === 'ar' ? 'استخدم شريط أدوات الجدول الذكي' : 'use the smart sheet toolbar'}`
+      : base;
 
   const commitSmartName = () => {
     if (!activeSmartTable) return;
@@ -275,23 +353,15 @@ export function EditorToolbar({
 
   const isTableActive = editor.isActive('table');
   // When the cursor is in a normal table it wins; otherwise a focused smart
-  // table drives the same sub-toolbar through the command bridge.
-  const useSmart = !!activeSmartTable && !isTableActive;
+  // table drives the same sub-toolbar through the command bridge — or a
+  // selected (but sheet-unfocused) smart table via the selection mirror.
+  const useSmart = (!!activeSmartTable || !!selectedSmartId) && !isTableActive;
+  const effectiveSmartId = activeSmartTable?.id || selectedSmartId || null;
   const isRtlActive = editor.isActive({ dir: 'rtl' }) || (!editor.isActive({ dir: 'ltr' }) && isRtl);
   const isLtrActive = editor.isActive({ dir: 'ltr' }) || (!editor.isActive({ dir: 'rtl' }) && !isRtl);
 
-  // Active font size in px
-  const getActiveFontSize = (): number => {
-    const sizeAttr = editor.getAttributes('fontSize').size;
-    if (sizeAttr) {
-      const parsed = parseInt(sizeAttr, 10);
-      if (!isNaN(parsed) && parsed > 0) return parsed;
-    }
-    if (editor.isActive('heading', { level: 1 })) return 30;
-    if (editor.isActive('heading', { level: 2 })) return 24;
-    if (editor.isActive('heading', { level: 3 })) return 20;
-    return 16;
-  };
+  // Active font size in px (shared resolver: mark → heading → memory → 16)
+  const getActiveFontSize = (): number => resolveActiveFontSize(editor);
 
   const currentFontSize = getActiveFontSize();
 
@@ -305,10 +375,24 @@ export function EditorToolbar({
     editor.chain().focus().setFontSize(`${newSize}px`).run();
   };
 
+  // Keep editor focus on toolbar button presses: mousedown would blur the
+  // editor (clearing stored marks AND firing a blur-save that re-renders
+  // mid-click, swallowing rapid consecutive clicks). Inputs keep focus.
+  const keepFocus = (e: React.MouseEvent) => {
+    try {
+      const t = e.target as HTMLElement | null;
+      if (t && typeof t.closest === 'function' && t.closest('input,textarea,select,[contenteditable="true"]')) return;
+      e.preventDefault();
+    } catch {}
+  };
+
   return (
     <div className="editor-toolbar-root flex flex-col bg-card/60 backdrop-blur-sm w-full max-w-full">
       {/* Primary Toolbar - Smooth horizontal scroll on mobile, wrap on desktop */}
-      <div className="toolbar-container flex flex-nowrap sm:flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto sm:overflow-visible scroll-smooth relative z-30">
+      <div
+        className="toolbar-container flex flex-nowrap sm:flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto sm:overflow-visible scroll-smooth relative z-30"
+        onMouseDown={keepFocus}
+      >
         {/* Hidden file input */}
         <input
           type="file"
@@ -329,7 +413,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 1 })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('heading1')} (Ctrl+Alt+1)`}
@@ -345,7 +429,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 2 })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('heading2')} (Ctrl+Alt+2)`}
@@ -361,7 +445,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('heading', { level: 3 })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('heading3')} (Ctrl+Alt+3)`}
@@ -415,14 +499,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('style-bold') : editor.chain().focus().toggleBold().run()}
+            onClick={() => editor.chain().focus().toggleBold().run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('bold')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={`${t('bold')} (Ctrl+B)`}
+            title={smartDisabledTitle(`${t('bold')} (Ctrl+B)`)}
           >
             <Bold className="h-4 w-4" />
           </Button>
@@ -431,14 +517,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('style-italic') : editor.chain().focus().toggleItalic().run()}
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('italic')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={`${t('italic')} (Ctrl+I)`}
+            title={smartDisabledTitle(`${t('italic')} (Ctrl+I)`)}
           >
             <Italic className="h-4 w-4" />
           </Button>
@@ -447,14 +535,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('style-underline') : editor.chain().focus().toggleUnderline().run()}
+            onClick={() => editor.chain().focus().toggleUnderline().run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg underline underline-offset-2",
               editor.isActive('underline')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'تسطير (Ctrl+U)' : 'Underline (Ctrl+U)'}
+            title={smartDisabledTitle(lang === 'ar' ? 'تسطير (Ctrl+U)' : 'Underline (Ctrl+U)')}
           >
             <span className="text-sm font-bold leading-none">U</span>
           </Button>
@@ -511,7 +601,7 @@ export function EditorToolbar({
                   }
                 }}
                 placeholder="https://example.com"
-                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-[#2E4034] focus:ring-1 focus:ring-[#2E4034] mb-2 text-foreground"
+                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary mb-2 text-foreground"
               />
               <div className="flex items-center justify-between gap-1.5">
                 {editor.isActive('link') ? (
@@ -555,7 +645,7 @@ export function EditorToolbar({
                       }
                       setShowLinkPopover(false);
                     }}
-                    className="h-7 px-2.5 text-[11px] font-semibold bg-[#2E4034] hover:bg-[#24382F] text-white rounded-md shadow-2xs"
+                    className="h-7 px-2.5 text-[11px] font-semibold bg-primary hover:bg-primary/90 text-primary-foreground rounded-md shadow-2xs"
                   >
                     {lang === 'ar' ? 'تطبيق' : 'Apply'}
                   </Button>
@@ -684,7 +774,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('bulletList')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('bulletList')} (Ctrl+Shift+8)`}
@@ -700,7 +790,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('orderedList')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('orderedList')} (Ctrl+Shift+7)`}
@@ -716,7 +806,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('blockquote')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground"
             )}
             title={`${t('blockquote')} (Ctrl+Shift+Q)`}
@@ -733,14 +823,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('align-right') : editor.chain().focus().setTextAlign('right').run()}
+            onClick={() => editor.chain().focus().setTextAlign('right').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'right' })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'محاذاة لليمين' : 'Align Right'}
+            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة لليمين' : 'Align Right')}
           >
             <AlignRight className="h-4 w-4" />
           </Button>
@@ -749,14 +841,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('align-center') : editor.chain().focus().setTextAlign('center').run()}
+            onClick={() => editor.chain().focus().setTextAlign('center').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'center' })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'محاذاة للوسط' : 'Align Center'}
+            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة للوسط' : 'Align Center')}
           >
             <AlignCenter className="h-4 w-4" />
           </Button>
@@ -765,14 +859,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('align-left') : editor.chain().focus().setTextAlign('left').run()}
+            onClick={() => editor.chain().focus().setTextAlign('left').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'left' })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'محاذاة لليسار' : 'Align Left'}
+            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة لليسار' : 'Align Left')}
           >
             <AlignLeft className="h-4 w-4" />
           </Button>
@@ -781,14 +877,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('align-justify') : editor.chain().focus().setTextAlign('justify').run()}
+            onClick={() => editor.chain().focus().setTextAlign('justify').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'justify' })
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'ضبط كلي (Justify)' : 'Justify'}
+            title={smartDisabledTitle(lang === 'ar' ? 'ضبط كلي (Justify)' : 'Justify')}
           >
             <AlignJustify className="h-4 w-4" />
           </Button>
@@ -802,14 +900,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('toggle-direction') : editor.chain().focus().setTextDirection('rtl').run()}
+            onClick={() => editor.chain().focus().setTextDirection('rtl').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               isRtlActive
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'اتجاه النص: من اليمين لليسار (RTL)' : 'Text Direction: Right to Left (RTL)'}
+            title={smartDisabledTitle(lang === 'ar' ? 'اتجاه النص: من اليمين لليسار (RTL)' : 'Text Direction: Right to Left (RTL)')}
           >
             <PilcrowLeft className="h-4 w-4" />
           </Button>
@@ -818,14 +918,16 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => useSmart ? sendSmartCommand('toggle-direction') : editor.chain().focus().setTextDirection('ltr').run()}
+            onClick={() => editor.chain().focus().setTextDirection('ltr').run()}
+            disabled={useSmart}
             className={cn(
               "h-8 w-8 rounded-lg",
               isLtrActive
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground",
+              useSmart && "opacity-40"
             )}
-            title={lang === 'ar' ? 'اتجاه النص: من اليسار لليمين (LTR)' : 'Text Direction: Left to Right (LTR)'}
+            title={smartDisabledTitle(lang === 'ar' ? 'اتجاه النص: من اليسار لليمين (LTR)' : 'Text Direction: Left to Right (LTR)')}
           >
             <PilcrowRight className="h-4 w-4" />
           </Button>
@@ -833,64 +935,42 @@ export function EditorToolbar({
 
         <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
 
-        {/* Table Insert: normal (TipTap) vs smart (formulas) */}
-        <div className="flex items-center gap-1">
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "h-8 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs",
-                  (isTableActive || activeSmartTable) && "border-olive-600 bg-olive-50 dark:bg-olive-950/40 text-olive-800 dark:text-olive-300"
-                )}
-                title={lang === 'ar' ? 'إدراج جدول عادي أو جدول ذكي (معادلات)' : 'Insert a normal or smart (formulas) table'}
-                aria-label={lang === 'ar' ? 'إدراج جدول جديد في التقرير' : 'Insert a new table into the report'}
-              >
-                <TableIcon className="h-3.5 w-3.5" />
-                <span>{lang === 'ar' ? 'إدراج جدول' : 'Insert Table'}</span>
-                <ChevronDown className="h-3 w-3 opacity-60" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              side="top"
-              align="center"
-              sideOffset={8}
-              className="z-50 w-64 rounded-xl border border-border bg-card p-1.5 shadow-xl"
-            >
-              <button
-                type="button"
-                onClick={handleInsertNormalTable}
-                className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted transition-colors"
-              >
-                <TableIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-                <span>
-                  <span className="block text-xs font-bold text-foreground">
-                    {lang === 'ar' ? 'جدول عادي' : 'Normal table'}
-                  </span>
-                  <span className="block text-[11px] text-muted-foreground">
-                    {lang === 'ar' ? 'نصوص وتنسيق بسيط، سريع وثابت' : 'Simple text table, fast and stable'}
-                  </span>
-                </span>
-              </button>
-              <button
-                type="button"
-                onClick={handleInsertSmartTable}
-                className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-start hover:bg-muted transition-colors"
-              >
-                <Sigma className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
-                <span>
-                  <span className="block text-xs font-bold text-foreground">
-                    {lang === 'ar' ? 'جدول ذكي (معادلات)' : 'Smart table (formulas)'}
-                  </span>
-                  <span className="block text-[11px] text-muted-foreground">
-                    {lang === 'ar' ? 'معادلات Excel ودمج خلايا وملء تلقائي' : 'Excel formulas, merges, autofill'}
-                  </span>
-                </span>
-              </button>
-            </PopoverContent>
-          </Popover>
+        {/* Normal table: dedicated button (plain TipTap text table) */}
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleInsertNormalTable}
+            className={cn(
+              "h-8 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs",
+              isTableActive && "border-olive-600 bg-olive-50 dark:bg-olive-950/40 text-olive-800 dark:text-olive-300"
+            )}
+            title={lang === 'ar' ? 'إدراج جدول عادي — نصوص وتنسيق بسيط' : 'Insert a normal table — simple text table'}
+            aria-label={lang === 'ar' ? 'إدراج جدول عادي في التقرير' : 'Insert a normal table into the report'}
+          >
+            <TableIcon className="h-3.5 w-3.5" />
+            <span>{lang === 'ar' ? 'جدول عادي' : 'Normal table'}</span>
+          </Button>
+        </div>
+
+        {/* Smart spreadsheet: dedicated button (full Univer spreadsheet) */}
+        <div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleInsertSmartTable}
+            className={cn(
+              "h-8 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs border-emerald-200 dark:border-emerald-800/60 bg-emerald-50/60 dark:bg-emerald-950/30 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40",
+              activeSmartTable && "border-emerald-600"
+            )}
+            title={lang === 'ar' ? 'إدراج جدول ذكي — spreadsheet كامل بمعادلات وتنسيق' : 'Insert a smart spreadsheet — full spreadsheet with formulas'}
+            aria-label={lang === 'ar' ? 'إدراج جدول ذكي في التقرير' : 'Insert a smart spreadsheet into the report'}
+          >
+            <Sheet className="h-3.5 w-3.5" />
+            <span>{lang === 'ar' ? 'جدول ذكي' : 'Smart sheet'}</span>
+          </Button>
         </div>
 
         {/* Upload Image Button */}
@@ -973,14 +1053,14 @@ export function EditorToolbar({
             onClick={() => {
               window.dispatchEvent(
                 new CustomEvent('chart-button-pressed', {
-                  detail: useSmart && activeSmartTable ? { smartTableId: activeSmartTable.id } : {},
+                  detail: useSmart && effectiveSmartId ? { smartTableId: effectiveSmartId } : {},
                 })
               );
             }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('reportChart')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             )}
             title={lang === 'ar' ? 'إدراج رسم بياني من جدول' : 'Insert chart from table'}
@@ -1020,7 +1100,7 @@ export function EditorToolbar({
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('reportMindmap')
-                ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300 font-bold"
+                ? "bg-primary/15 text-primary font-bold"
                 : "text-muted-foreground hover:text-foreground hover:bg-muted"
             )}
             title={lang === 'ar' ? 'إدراج خريطة ذهنية' : 'Insert mind map'}
@@ -1042,7 +1122,7 @@ export function EditorToolbar({
                 className={cn(
                   "h-8 w-8 rounded-lg font-serif text-base font-bold",
                   editor.isActive('latexInline')
-                    ? "bg-[#2E4034]/15 text-[#2E4034] dark:bg-olive-900/50 dark:text-olive-300"
+                    ? "bg-primary/15 text-primary"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted"
                 )}
                 title={lang === 'ar' ? 'إدراج معادلة رياضية (LaTeX) — أو اكتب $...$ مباشرة' : 'Insert math equation (LaTeX) — or type $...$ directly'}
@@ -1073,7 +1153,7 @@ export function EditorToolbar({
                   }
                 }}
                 placeholder="x^2 + y^2 = z^2"
-                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 font-mono text-xs outline-none focus:border-[#2E4034] focus:ring-1 focus:ring-[#2E4034] mb-1.5 text-foreground"
+                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 font-mono text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary mb-1.5 text-foreground"
               />
               <div className="mb-2 rounded-md bg-muted/60 px-2 py-1.5 font-mono text-[10px] text-muted-foreground" dir="ltr">
                 $x^2$ → rendered math
@@ -1093,7 +1173,7 @@ export function EditorToolbar({
                   size="sm"
                   disabled={!latexInput.trim()}
                   onClick={handleInsertLatex}
-                  className="h-7 px-2.5 text-[11px] font-semibold bg-[#2E4034] hover:bg-[#24382F] text-white rounded-md shadow-2xs disabled:opacity-40"
+                  className="h-7 px-2.5 text-[11px] font-semibold bg-primary hover:bg-primary/90 text-primary-foreground rounded-md shadow-2xs disabled:opacity-40"
                 >
                   {lang === 'ar' ? 'إدراج' : 'Insert'}
                 </Button>
@@ -1107,7 +1187,7 @@ export function EditorToolbar({
           Shown for normal tables (cursor inside) AND smart tables (focus bridge).
           Smart-table buttons are forwarded as addressed commands; the normal
           path keeps the exact TipTap commands as before. */}
-      {(isTableActive || activeSmartTable) && (
+      {(isTableActive || activeSmartTable || selectedSmartId) && (
         <div
           className="flex flex-nowrap sm:flex-wrap items-center gap-1.5 border-t border-border/70 bg-muted/40 px-2 sm:px-3 py-1.5 text-xs text-foreground w-full max-w-full overflow-x-auto scroll-smooth"
           // Keep editor/grid focus stable so table commands run on the right target
@@ -1122,6 +1202,11 @@ export function EditorToolbar({
           <div className="flex items-center gap-1 text-[11px] font-bold text-olive-800 dark:text-olive-300 me-1">
             <TableIcon className="h-3.5 w-3.5" />
             <span>{t('tableControls')}:</span>
+            {isTableActive && !useSmart && (
+              <span className="rounded-md border border-border bg-card px-1.5 py-0 text-[10px] text-muted-foreground">
+                {lang === 'ar' ? 'عادي' : 'Basic'}
+              </span>
+            )}
             {useSmart && activeSmartTable && (
               <>
                 <span className="rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0 text-[10px] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
@@ -1142,17 +1227,26 @@ export function EditorToolbar({
                 />
               </>
             )}
+            {useSmart && !activeSmartTable && selectedSmartId && (
+              <span
+                className="max-w-[160px] truncate rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0 font-mono text-[10px] text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                title={selectedSmartId}
+              >
+                {lang === 'ar' ? 'ذكي محدد' : 'Smart selected'}
+              </span>
+            )}
           </div>
 
-          {/* Undo / Redo (smart tables keep their own history) */}
-          {useSmart && (
+          {/* Undo / Redo: Univer smart tables own their history + toolbar;
+              this bridge keeps native-table buttons only. */}
+          {!useSmart && isTableActive && (
             <>
               <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => sendSmartCommand('undo')}
+                  onClick={() => editor.chain().focus().undo().run()}
                   className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
                   title={`${lang === 'ar' ? 'تراجع' : 'Undo'} (Ctrl+Z)`}
                 >
@@ -1162,7 +1256,7 @@ export function EditorToolbar({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => sendSmartCommand('redo')}
+                  onClick={() => editor.chain().focus().redo().run()}
                   className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
                   title={`${lang === 'ar' ? 'إعادة' : 'Redo'} (Ctrl+Y)`}
                 >
@@ -1172,13 +1266,16 @@ export function EditorToolbar({
             </>
           )}
 
-          {/* Row Controls */}
+          {/* Row / Column / Merge Controls — native TipTap tables only.
+              Univer smart tables own these in their own toolbar. */}
+          {!useSmart && (
+          <>
           <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('insert-row-above') : editor.chain().focus().addRowBefore().run()}
+              onClick={() => editor.chain().focus().addRowBefore().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowBefore')}
             >
@@ -1190,7 +1287,7 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('insert-row-below') : editor.chain().focus().addRowAfter().run()}
+              onClick={() => editor.chain().focus().addRowAfter().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowAfter')}
             >
@@ -1202,7 +1299,7 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('delete-row') : editor.chain().focus().deleteRow().run()}
+              onClick={() => editor.chain().focus().deleteRow().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteRow')}
             >
@@ -1217,7 +1314,7 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('insert-col-before') : editor.chain().focus().addColumnBefore().run()}
+              onClick={() => editor.chain().focus().addColumnBefore().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnBefore')}
             >
@@ -1229,7 +1326,7 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('insert-col-after') : editor.chain().focus().addColumnAfter().run()}
+              onClick={() => editor.chain().focus().addColumnAfter().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnAfter')}
             >
@@ -1241,7 +1338,7 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('delete-col') : editor.chain().focus().deleteColumn().run()}
+              onClick={() => editor.chain().focus().deleteColumn().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteColumn')}
             >
@@ -1250,61 +1347,32 @@ export function EditorToolbar({
             </Button>
           </div>
 
-          {/* Merge & Split Cells (smart tables merge/unmerge through one toggle) */}
+          {/* Merge & Split Cells */}
           <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => useSmart ? sendSmartCommand('merge') : editor.chain().focus().mergeCells().run()}
+              onClick={() => editor.chain().focus().mergeCells().run()}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('mergeCells')}
             >
               <Merge className="h-3 w-3 text-olive-600 dark:text-olive-400" />
               <span className="hidden lg:inline">{t('mergeCells')}</span>
             </Button>
-            {!useSmart && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => editor.chain().focus().splitCell().run()}
-                className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                title={t('splitCell')}
-              >
-                <Split className="h-3 w-3 text-olive-600 dark:text-olive-400" />
-                <span className="hidden lg:inline">{t('splitCell')}</span>
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => editor.chain().focus().splitCell().run()}
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
+              title={t('splitCell')}
+            >
+              <Split className="h-3 w-3 text-olive-600 dark:text-olive-400" />
+              <span className="hidden lg:inline">{t('splitCell')}</span>
+            </Button>
           </div>
-
-          {/* Smart-only extras: transpose + fullscreen
-              (direction/alignment/B/I live in the main toolbar above and are
-              forwarded to the smart table while it is focused — no duplicates) */}
-          {useSmart && (
-            <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => sendSmartCommand('transpose')}
-                className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                title={lang === 'ar' ? 'قلب الأبعاد (تبديل الصفوف والأعمدة)' : 'Transpose (swap rows & columns)'}
-              >
-                <ArrowLeftRight className="h-3.5 w-3.5 text-amber-600" />
-                <span className="hidden lg:inline">{lang === 'ar' ? 'قلب الأبعاد' : 'Transpose'}</span>
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => sendSmartCommand('fullscreen')}
-                className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                title={lang === 'ar' ? 'ملء الشاشة' : 'Fullscreen'}
-              >
-                <Maximize2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+          </>
           )}
 
           {/* Toggle Header Row / Column (normal TipTap tables only) */}
@@ -1335,19 +1403,38 @@ export function EditorToolbar({
             </div>
           )}
 
-          {/* Delete Whole Table */}
-          <div className="ms-auto">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => useSmart ? sendSmartCommand('delete-table') : editor.chain().focus().deleteTable().run()}
-              className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
-              title={t('deleteTable')}
-            >
-              <Trash2 className="h-3 w-3" />
-              <span>{t('deleteTable')}</span>
-            </Button>
+          {/* Basic-table formula hint: static, never a repeated toast */}
+          {!useSmart && isTableActive && (
+            <span className="hidden md:inline rounded-md border border-dashed border-border px-1.5 py-1 text-[10px] text-muted-foreground">
+              {lang === 'ar' ? 'تلميح: المعادلات (=) تعمل في الجدول الذكي فقط' : 'Tip: formulas (=) work in the smart sheet only'}
+            </span>
+          )}
+
+          {/* Delete Whole Table — native tables only.
+              Smart-table management (direction / clear / delete) lives ONLY
+              in the table's own permanent header (SmartTableView) so the
+              actions never appear twice. While a smart table is active we
+              show a static hint instead of duplicate buttons. */}
+          <div className="ms-auto flex items-center gap-1.5">
+            {useSmart ? (
+              <span className="rounded-md border border-dashed border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                {lang === 'ar'
+                  ? 'إدارة الجدول الذكي (الاتجاه / مسح القيم / حذف) من شريط الجدول نفسه بالأعلى'
+                  : 'Manage the smart sheet (direction / clear / delete) from its own header above'}
+              </span>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => editor.chain().focus().deleteTable().run()}
+                className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
+                title={t('deleteTable')}
+              >
+                <Trash2 className="h-3 w-3" />
+                <span>{t('deleteTable')}</span>
+              </Button>
+            )}
           </div>
         </div>
       )}

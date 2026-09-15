@@ -90,8 +90,8 @@ export function normalizeFormats(raw: unknown): Record<string, CellFormat> {
       const fmt = (raw as any)[key];
       if (!fmt || typeof fmt !== 'object') continue;
       const clean: CellFormat = {};
-      if (['left', 'center', 'right', 'justify'].includes((fmt as any).align)) clean.align = (fmt as any).align;
-      if (['left', 'center', 'right', 'justify'].includes((fmt as any).horizontalAlign)) clean.horizontalAlign = (fmt as any).horizontalAlign;
+      const alignVal = (fmt as any).align ?? (fmt as any).horizontalAlign;
+      if (['left', 'center', 'right', 'justify'].includes(alignVal)) clean.align = alignVal;
       if ((fmt as any).bold === true) clean.bold = true;
       if ((fmt as any).italic === true) clean.italic = true;
       if ((fmt as any).underline === true) clean.underline = true;
@@ -165,7 +165,9 @@ export function normalizeMerges(raw: unknown, colCount: number, rowCount: number
   }
 }
 
-/** Shifts merge rectangles down/up when rows are inserted/deleted. */
+/** Shifts merge rectangles down/up when rows are inserted/deleted.
+ * @deprecated Structural path uses table-ops shiftMergesForRowInsert/Delete
+ * (single owner). Kept for backward-compatible imports only. */
 export function shiftMergesOnRowChange(
   merges: MergedRange[],
   atIndex: number,

@@ -27,10 +27,26 @@ export interface NativeTableInfo {
 /* ------------------------------------------------------------------ */
 
 export function nativeFingerprint(info: Pick<NativeTableInfo, 'headers' | 'rows'> | null): string {
+  // Production fix B08: headers+rowCount alone collides (two tables with the
+  // same headers and length). Include a sample hash (first/last rows +
+  // column count) so edits/rebinds are detected; legacy fingerprints keep
+  // working via positional fallback in resolveNativeWithFallback.
   if (!info) return '';
   const heads = (info.headers || []).map((h) => String(h ?? '').trim()).join('|');
-  const rowCount = Array.isArray(info.rows) ? info.rows.length : 0;
-  return `h:${heads}#r:${rowCount}`;
+  const rows = Array.isArray(info.rows) ? info.rows : [];
+  const rowCount = rows.length;
+  const colCount = info.headers ? info.headers.length : 0;
+  const sample = (idx: number): string => {
+    const r = rows[idx];
+    if (!Array.isArray(r)) return '';
+    return r.slice(0, 8).map((c) => String(c ?? '').trim().slice(0, 32)).join('|');
+  };
+  let hash = 0;
+  const material = `${heads}\n${sample(0)}\n${sample(Math.floor(rowCount / 2))}\n${sample(rowCount - 1)}`;
+  for (let i = 0; i < material.length; i++) {
+    hash = (hash * 31 + material.charCodeAt(i)) | 0;
+  }
+  return `h:${heads}#r:${rowCount}c:${colCount}s:${(hash >>> 0).toString(36)}`;
 }
 
 export interface NativeResolveResult {

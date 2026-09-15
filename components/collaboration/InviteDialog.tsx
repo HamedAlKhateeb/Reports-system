@@ -90,11 +90,11 @@ export function InviteDialog({
         <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
           {isAr
             ? kind === 'report'
-              ? 'المدعوون (بحسابات مسجلة) يمكنهم عرض هذا التقرير وتعديله والتعليق على مشاكله. لا يمكنهم حذفه أو مشاركته مع آخرين. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
-              : 'المدعوون يمكنهم عرض وتعديل كل التقارير داخل هذا المجلد — الحالية والمستقبلية — والتعليق على مشاكلها المرتبطة بها فقط. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
+              ? 'المدعوون (بحسابات مسجلة) يمكنهم عرض هذا التقرير وتعديله والتعليق على مشاكله. لا يمكنهم حذفه أو مشاركته مع آخرين. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — ستظهر الدعوة عنده في جرس الإشعارات وفي قائمة حسابه (اضغط على اسمه أعلى الشاشة ← دعوات المشاركة). لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
+              : 'المدعوون يمكنهم عرض وتعديل كل التقارير داخل هذا المجلد — الحالية والمستقبلية — والتعليق على مشاكلها المرتبطة بها فقط. مهم: يجب أن يسجل المدعو بنفس البريد المدعو به — ستظهر الدعوة عنده في جرس الإشعارات وفي قائمة حسابه (اضغط على اسمه أعلى الشاشة ← دعوات المشاركة). لا تُرسل دعوات تلقائيًا، أبلغه بنفسك بالأزرار أدناه.'
             : kind === 'report'
-              ? 'Invitees (registered accounts) can view and edit this report and comment on its issues. They cannot delete it or re-share it. Note: the invitee must sign in with the invited email — nothing is sent automatically, notify them with the buttons below.'
-              : 'Invitees can view and edit every report in this folder — current and future — and comment on their linked issues only. Note: the invitee must sign in with the invited email — nothing is sent automatically, notify them with the buttons below.'}
+              ? 'Invitees (registered accounts) can view and edit this report and comment on its issues. They cannot delete it or re-share it. Note: the invitee must sign in with the invited email — the invite will appear in their bell and in their account menu (click their name at the top → Share invites). Nothing is sent automatically, notify them with the buttons below.'
+              : 'Invitees can view and edit every report in this folder — current and future — and comment on their linked issues only. Note: the invitee must sign in with the invited email — the invite will appear in their bell and in their account menu (click their name at the top → Share invites). Nothing is sent automatically, notify them with the buttons below.'}
         </p>
 
         <div className="flex items-center gap-2 mb-3">

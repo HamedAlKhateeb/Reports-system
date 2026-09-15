@@ -142,8 +142,8 @@ export const DICTIONARY = {
     en: 'Passwords do not match. Please ensure both fields are identical.',
   },
   passwordTooShort: {
-    ar: 'يجب ألا تقل كلمة المرور عن 6 أحرف.',
-    en: 'Password must be at least 6 characters long.',
+    ar: 'كلمة السر ضعيفة: 8 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز، بدون مسافات.',
+    en: 'Weak password: at least 8 chars with upper + lower case, a digit and a symbol, no spaces.',
   },
   signUpSuccess: {
     ar: 'تم إنشاء الحساب بنجاح! جاري تسجيل الدخول...',

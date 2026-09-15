@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { getIssues, getReports, updateIssue, createIssue, reorderIssues, getSeverityConfig, isArchivedIssue } from '@/lib/db';
+import { archiveIssue } from '@/lib/db-intelligence';
 import { IssueItem, ReportItem, SeverityConfigItem } from '@/lib/types';
 import { IssueCard } from '@/components/dashboard/IssueCard';
 import { IssueModal } from '@/components/dashboard/IssueModal';
@@ -78,7 +79,7 @@ export default function DashboardPage() {
       return;
     }
     try {
-      const all = await getIssues(user.uid, undefined, { includeArchived: true });
+      const all = await getIssues(user.uid, user.email, { includeArchived: true });
       setArchivedIssues(all.filter(isArchivedIssue));
     } catch (err) {
       console.error('Failed to load archived issues', err);
@@ -124,10 +125,10 @@ export default function DashboardPage() {
     (loadData as any).__lastRun = now;
     try {
       setLoading(true);
-      const fetchedReports = await getReports(user.uid);
+      const fetchedReports = await getReports(user.uid, user.email);
       // Perf: single issues fan-out — split active/archived locally instead of
       // fetching getIssues() twice (each call re-runs getReports internally).
-      const allIssues = await getIssues(user.uid, undefined, { includeArchived: true });
+      const allIssues = await getIssues(user.uid, user.email, { includeArchived: true });
       setIssues(allIssues.filter((i) => !isArchivedIssue(i)));
       setReports(fetchedReports);
       setSeverityConfig(getSeverityConfig(user.uid));
@@ -398,6 +399,29 @@ export default function DashboardPage() {
     setIssues((prev) => prev.filter((i) => i.id !== id));
     setArchivedIssues((prev) => prev.filter((i) => i.id !== id));
     setSelectedIssue(null);
+  };
+
+  // Bulk archive: archive every currently filtered (visible) issue at once.
+  const [bulkArchiving, setBulkArchiving] = useState(false);
+  const handleArchiveAllFiltered = async () => {
+    if (!user || bulkArchiving || filteredIssues.length === 0) return;
+    const ownVisible = filteredIssues.filter((i) => i.ownerUid === user.uid);
+    if (ownVisible.length === 0) return;
+    try {
+      setBulkArchiving(true);
+      let done = 0;
+      for (const iss of ownVisible) {
+        try {
+          await archiveIssue(iss.id, user.uid, 'Bulk archive from dashboard');
+          done++;
+        } catch {}
+      }
+      await loadData();
+    } catch (err) {
+      console.error('Bulk archive failed', err);
+    } finally {
+      setBulkArchiving(false);
+    }
   };
 
   // Deep link from a report (?report=<id>): scope the board to that report's
@@ -746,8 +770,42 @@ export default function DashboardPage() {
             <option value="normal">{getSeverityLabel('normal', lang)}</option>
             <option value="minor">{getSeverityLabel('minor', lang)}</option>
           </select>
+          {!showArchived && filteredIssues.some((i) => i.ownerUid === user?.uid) && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void handleArchiveAllFiltered()}
+              disabled={bulkArchiving || filteredIssues.length === 0}
+              className="h-9 gap-1.5 text-xs font-semibold shrink-0"
+              title={lang === 'ar' ? 'أرشفة كل مشاكلك الظاهرة دفعة واحدة' : 'Archive all your visible issues at once'}
+            >
+              <Archive data-icon="inline-start" />
+              <span>{bulkArchiving ? (lang === 'ar' ? 'جارٍ...' : '...') : (lang === 'ar' ? 'أرشفة الظاهر' : 'Archive visible')}</span>
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Empty-filtered vs empty-board: distinct message + clear action */}
+      {!loading && !showArchived && issues.length > 0 && filteredIssues.length === 0 && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-xs text-amber-900 dark:text-amber-200">
+          <span className="font-semibold">
+            {lang === 'ar' ? 'لا توجد مشاكل تطابق الفلتر الحالي — اللوحة نفسها ليست فارغة.' : 'No issues match the current filter — the board itself is not empty.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setSearchQuery('');
+              setSeverityFilter('all');
+              setReportFilter(null);
+            }}
+            className="h-8 shrink-0 rounded-lg border border-amber-400 dark:border-amber-700 bg-card px-3 text-xs font-bold text-foreground hover:bg-muted"
+          >
+            {lang === 'ar' ? 'مسح الفلاتر' : 'Clear filters'}
+          </button>
+        </div>
+      )}
 
       {/* Kanban Board Columns */}
       {loading ? (

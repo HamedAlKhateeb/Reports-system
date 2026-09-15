@@ -3,6 +3,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ReportItem, IssueItem, ReportIssueItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAuth } from '@/lib/auth-context';
+import { archiveIssue, getIssuesByReportId, unarchiveIssue } from '@/lib/db';
+import { toast } from '@/components/ui/toast';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
   Search,
   Filter,
@@ -20,6 +24,8 @@ import {
   ScanSearch,
   Plus,
   ArrowUpRight,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -73,6 +79,101 @@ export function IssuesTab({
   const [searchQuery, setSearchQuery] = useState('');
   const [severityFilter, setSeverityFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+
+  // Per-issue archive lifecycle (owner only — same rule as report archive).
+  const { user } = useAuth();
+  const isOwner = !!user && !!report.ownerUid && report.ownerUid === user.uid;
+  const [confirmNode, askConfirm] = useConfirm();
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archivedIssues, setArchivedIssues] = useState<IssueItem[]>([]);
+  const [loadingArchived, setLoadingArchived] = useState(false);
+
+  const loadArchivedIssues = async () => {
+    setLoadingArchived(true);
+    try {
+      const all = await getIssuesByReportId(report.id, user?.uid, { includeArchived: true });
+      setArchivedIssues(all.filter((i) => !!(i.archived_at || (i as any).archivedAt)));
+    } catch {
+      setArchivedIssues([]);
+    } finally {
+      setLoadingArchived(false);
+    }
+  };
+
+  const toggleArchivedSection = async () => {
+    const next = !showArchived;
+    setShowArchived(next);
+    if (next) await loadArchivedIssues();
+  };
+
+  const handleArchiveIssue = async (issue: IssueItem) => {
+    if (!user || !isOwner) return;
+    if (!(await askConfirm(
+      isAr
+        ? `أرشفة «${issue.title}»؟ ستختفي من اللوحة والقوائم ويمكن استعادتها من قسم المؤرشف أدناه.`
+        : `Archive "${issue.title}"? It will leave the board and can be restored from the archived section below.`
+    ))) return;
+    try {
+      setArchivingId(issue.id);
+      await archiveIssue(issue.id, user.uid, 'Archived from report issues tab');
+      toast.success(isAr ? 'تمت أرشفة المشكلة' : 'Issue archived');
+      onRefreshIssues();
+      if (showArchived) await loadArchivedIssues();
+    } catch (err) {
+      console.error('Archive issue failed', err);
+      toast.error(isAr ? 'فشل أرشفة المشكلة' : 'Failed to archive issue');
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
+  const handleRestoreIssue = async (issue: IssueItem) => {
+    if (!user || !isOwner) return;
+    try {
+      setArchivingId(issue.id);
+      const res = await unarchiveIssue(issue.id, user.uid);
+      if (!res.ok) throw new Error(res.error || 'restore failed');
+      toast.success(isAr ? 'تمت استعادة المشكلة' : 'Issue restored');
+      onRefreshIssues();
+      await loadArchivedIssues();
+    } catch (err) {
+      console.error('Restore issue failed', err);
+      toast.error(isAr ? 'فشل استعادة المشكلة' : 'Failed to restore issue');
+    } finally {
+      setArchivingId(null);
+    }
+  };
+
+  // Bulk archive: archive every currently visible (filtered) issue at once.
+  const [bulkArchiving, setBulkArchiving] = useState(false);
+  const handleArchiveAllVisible = async () => {
+    if (!user || !isOwner || filteredIssues.length === 0 || bulkArchiving) return;
+    if (!(await askConfirm(
+      isAr
+        ? `أرشفة كل المشاكل الظاهرة (${filteredIssues.length})؟ ستختفي من اللوحة ويمكن استعادتها واحدة واحدة من قسم المؤرشف أدناه.`
+        : `Archive all visible issues (${filteredIssues.length})? They will leave the board and can be restored one by one below.`
+    ))) return;
+    try {
+      setBulkArchiving(true);
+      let done = 0;
+      for (const iss of filteredIssues) {
+        try {
+          await archiveIssue(iss.id, user.uid, 'Bulk archive from report issues tab');
+          done++;
+        } catch {}
+      }
+      toast.success(isAr ? `تمت أرشفة ${done} مشكلة` : `Archived ${done} issue(s)`);
+      onRefreshIssues();
+      if (showArchived) await loadArchivedIssues();
+      else await loadArchivedIssues();
+    } catch (err) {
+      console.error('Bulk archive failed', err);
+      toast.error(isAr ? 'فشل الأرشفة الجماعية' : 'Bulk archive failed');
+    } finally {
+      setBulkArchiving(false);
+    }
+  };
 
   // Synchronize incoming activeFilter from OverviewTab metric card clicks
   useEffect(() => {
@@ -409,7 +510,7 @@ export function IssuesTab({
 
       {/* 3. Unified Issues Table View (Global Scrolling, no inner overflow-y traps) */}
       <div className="rounded-xl border border-border bg-card shadow-2xs overflow-hidden">
-        <div className="p-4 border-b border-border/80 flex items-center justify-between bg-muted/20">
+        <div className="p-4 border-b border-border/80 flex flex-wrap items-center justify-between gap-2 bg-muted/20">
           <div className="flex items-center gap-2">
             <Layers className="h-4 w-4 text-olive-600" />
             <span className="text-sm font-bold text-foreground">
@@ -420,15 +521,30 @@ export function IssuesTab({
             </Badge>
           </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onRefreshIssues}
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <RefreshCw className="h-3.5 w-3.5 me-1" />
-            <span>{isAr ? 'تحديث' : 'Refresh'}</span>
-          </Button>
+          <div className="flex items-center gap-1.5">
+            {isOwner && filteredIssues.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleArchiveAllVisible()}
+                disabled={bulkArchiving}
+                className="h-7 px-2 gap-1 text-xs font-semibold"
+                title={isAr ? 'أرشفة كل المشاكل الظاهرة دفعة واحدة' : 'Archive all visible issues at once'}
+              >
+                <Archive className="h-3.5 w-3.5" />
+                <span>{bulkArchiving ? (isAr ? 'جارٍ الأرشفة...' : 'Archiving...') : (isAr ? 'أرشفة الكل' : 'Archive all')}</span>
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRefreshIssues}
+              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <RefreshCw className="h-3.5 w-3.5 me-1" />
+              <span>{isAr ? 'تحديث' : 'Refresh'}</span>
+            </Button>
+          </div>
         </div>
 
         {filteredIssues.length === 0 ? (
@@ -490,6 +606,9 @@ export function IssuesTab({
                   <TableHead className="w-28 text-center font-bold">{isAr ? 'درجة الخطورة' : 'Severity'}</TableHead>
                   <TableHead className="w-28 text-center font-bold">{isAr ? 'الحالة' : 'Status'}</TableHead>
                   <TableHead className="w-24 text-center font-bold">{isAr ? 'نوع الربط' : 'Relation'}</TableHead>
+                  {isOwner && (
+                    <TableHead className="w-16 text-center font-bold">{isAr ? 'إجراء' : 'Action'}</TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -540,11 +659,87 @@ export function IssuesTab({
                           </Badge>
                         )}
                       </TableCell>
+                      {isOwner && (
+                        <TableCell className="text-center">
+                          <button
+                            type="button"
+                            onClick={() => void handleArchiveIssue(iss)}
+                            disabled={archivingId === iss.id}
+                            className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40 transition-colors"
+                            title={isAr ? 'أرشفة المشكلة' : 'Archive issue'}
+                            aria-label={isAr ? `أرشفة ${iss.title}` : `Archive ${iss.title}`}
+                          >
+                            <Archive className="h-3.5 w-3.5" />
+                          </button>
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}
               </TableBody>
             </Table>
+          </div>
+        )}
+      </div>
+
+      {/* Archived issues section (owner can restore one by one) */}
+      <div className="mt-4 rounded-xl border border-border bg-card shadow-2xs overflow-hidden">
+        <button
+          type="button"
+          onClick={() => void toggleArchivedSection()}
+          className="flex w-full items-center justify-between gap-2 p-4 text-start hover:bg-muted/30 transition-colors"
+          aria-expanded={showArchived}
+        >
+          <span className="flex items-center gap-2 text-sm font-bold text-foreground">
+            <Archive className="h-4 w-4 text-muted-foreground" />
+            {isAr ? 'المشاكل المؤرشفة' : 'Archived issues'}
+            <Badge variant="secondary" className="text-xs font-mono">
+              {archivedIssues.length}
+            </Badge>
+          </span>
+          <span className="text-[11px] text-muted-foreground">
+            {showArchived ? (isAr ? 'إخفاء' : 'Hide') : (isAr ? 'عرض' : 'Show')}
+          </span>
+        </button>
+        {showArchived && (
+          <div className="border-t border-border/80 p-4">
+            {loadingArchived ? (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                {isAr ? 'جاري التحميل...' : 'Loading...'}
+              </p>
+            ) : archivedIssues.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                {isAr ? 'لا توجد مشاكل مؤرشفة لهذا التقرير.' : 'No archived issues for this report.'}
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {archivedIssues.map((iss) => (
+                  <li
+                    key={iss.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs font-semibold text-foreground">{iss.title}</span>
+                      <span className="block text-[10px] text-muted-foreground font-mono">
+                        {iss.issue_key || (iss as any).issueKey || ''} • {getSeverityLabel(iss.severity, lang)}
+                      </span>
+                    </span>
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => void handleRestoreIssue(iss)}
+                        disabled={archivingId === iss.id}
+                        className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-border bg-card px-2 text-[11px] font-semibold text-foreground hover:bg-muted disabled:opacity-40 transition-colors"
+                        title={isAr ? 'استعادة المشكلة' : 'Restore issue'}
+                      >
+                        <ArchiveRestore className="h-3.5 w-3.5" />
+                        <span className="hidden sm:inline">{isAr ? 'استعادة' : 'Restore'}</span>
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>
@@ -560,6 +755,7 @@ export function IssuesTab({
           onReportUpdate={onReportUpdate}
         />
       </div>
+      {confirmNode}
     </div>
   );
 }

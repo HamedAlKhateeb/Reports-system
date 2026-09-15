@@ -98,6 +98,8 @@ export interface ReportItem {
   analysisRows?: AnalysisTableRow[]; // Structured rows from Analysis Table
   folderId?: string | null;   // null/undefined represents root/uncategorized
   shareToken?: string | null; // Unguessable random token for public read-only web view
+  /** Optional share-link password: SHA-256 hex only, never plaintext. */
+  sharePasswordHash?: string | null;
   isShared?: boolean;         // Whether web sharing is active
   sharedAt?: string | null;   // When the report was last shared
   /**
@@ -265,6 +267,14 @@ export interface TableEntity {
   rows_data: Array<Record<string, any>>;
   cell_formats?: Record<string, any>;
   merged_cells?: Array<{ start: string; end: string; rowSpan?: number; colSpan?: number }>;
+  /**
+   * Univer canonical snapshot (post-migration single source of truth for the
+   * spreadsheet grid). columns_data/rows_data/cell_formats/merged_cells are
+   * a DERIVED cache regenerated from this snapshot on every save, so legacy
+   * readers (exports, charts, share) keep working unchanged.
+   * Tables created before Univer have no snapshot → lazy-migrated on open.
+   */
+  univerSnapshot?: any;
   version: number;
   created_at: string;
   updated_at: string;

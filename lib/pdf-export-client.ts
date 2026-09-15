@@ -12,21 +12,26 @@ import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLI
  * Converts TipTap JSON node to clean styled HTML for print/PDF.
  * `docRef` is the top-level doc (needed to resolve native chart sources).
  */
+/** Client pre-rendered mind-map PNGs (mindmapId → snapshot). PNG-first;
+ * tree-HTML fallback when a snapshot is missing (e.g. direct API calls). */
+export type MindmapSnapshotMap = Record<string, { dataUrl: string; width?: number; height?: number }>;
+
 function tipTapNodeToHtml(
   node: any,
   isAr: boolean,
   images: ReportImageItem[] = [],
   tablesMap: Record<string, any> = {},
+  mindmaps: MindmapSnapshotMap = {},
   docRef?: any
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, node)).join('');
+      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, node)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<p class="report-p">${content || '&nbsp;'}</p>`;
     }
 
@@ -77,27 +82,27 @@ function tipTapNodeToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<h${level} class="report-h${level}">${content}</h${level}>`;
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<ul class="report-ul">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<ol class="report-ol">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<li class="report-li">${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       return `<blockquote class="report-quote">${content}</blockquote>`;
     }
 
@@ -139,7 +144,7 @@ function tipTapNodeToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap, docRef)).join('');
+          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap, mindmaps, docRef)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let extraClass = '';
@@ -264,6 +269,11 @@ function tipTapNodeToHtml(
     case 'reportMindmap': {
       const title = String(node.attrs?.title || (isAr ? 'خريطة ذهنية' : 'Mind map'));
       const caption = String(node.attrs?.caption || '').trim();
+      const snap = node.attrs?.mindmapId ? mindmaps[String(node.attrs.mindmapId)] : undefined;
+      const capHtml = caption ? `<div style="font-size:11px;color:#64748b;">${escapeHtmlExport(caption)}</div>` : '';
+      if (snap?.dataUrl) {
+        return `<figure class="report-mindmap-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">🧠 ${escapeHtmlExport(title)}</div><img src="${snap.dataUrl}" alt="${escapeHtmlExport(title)}" style="max-width:100%;height:auto;margin-top:8px;border-radius:8px;" />${capHtml}</figure>`;
+      }
       let bodyHtml = '';
       try {
         const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
@@ -273,13 +283,12 @@ function tipTapNodeToHtml(
       } catch {
         bodyHtml = `<div style="font-size:11px;color:#64748b;">${isAr ? 'خريطة فارغة' : 'Empty map'}</div>`;
       }
-      const capHtml = caption ? `<div style="font-size:11px;color:#64748b;">${escapeHtmlExport(caption)}</div>` : '';
       return `<figure class="report-mindmap-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">🧠 ${escapeHtmlExport(title)}</div><div style="text-align:start;margin-top:8px;">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
     default:
       if (node.content) {
-        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, docRef)).join('');
+        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
       }
       return '';
   }
@@ -291,7 +300,8 @@ function tipTapNodeToHtml(
 export function buildPrintableHtml(
   report: ReportItem,
   images: ReportImageItem[] = [],
-  tables: any[] = []
+  tables: any[] = [],
+  mindmaps: MindmapSnapshotMap = {}
 ): string {
   const isAr = report.language === 'ar';
   const lang = report.language;
@@ -335,7 +345,7 @@ export function buildPrintableHtml(
     } catch {}
   }
 
-  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images, tablesMap);
+  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images, tablesMap, mindmaps);
   const formattedDate = new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US', {
     year: 'numeric',
     month: 'long',
@@ -916,14 +926,15 @@ export function buildPrintableHtml(
 export function printReportAsPdf(
   report: ReportItem,
   images: ReportImageItem[] = [],
-  tables: any[] = []
+  tables: any[] = [],
+  mindmaps: MindmapSnapshotMap = {}
 ): void {
   const isAr = report.language === 'ar';
   const rawTitle = (report.title || (isAr ? 'تقرير أخطاء النظام' : 'Review Report')).trim();
   const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
   const filename = `${sanitizedTitle} - #${report.reportNumber}`;
 
-  const html = buildPrintableHtml(report, images, tables);
+  const html = buildPrintableHtml(report, images, tables, mindmaps);
 
   // Try opening in popup window for clean isolated print experience
   const printWindow = window.open('', '_blank');

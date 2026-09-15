@@ -523,7 +523,7 @@ export function EditorContextMenu({
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950 transition-colors"
           >
             <TableIcon className="h-3.5 w-3.5 text-olive-600" />
-            <span>{isAr ? 'جدول ذكي (معادلات)' : 'Smart table (formulas)'}</span>
+            <span>{isAr ? 'جدول ذكي (spreadsheet كامل)' : 'Smart spreadsheet (full)'}</span>
           </button>
         </>
       )}

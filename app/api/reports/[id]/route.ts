@@ -1,18 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getReportById } from '@/lib/db';
 import { authenticateApiRequest } from '@/lib/api-auth';
-import { getVerifiedSessionUid } from '@/lib/server-auth';
+import { getVerifiedSession } from '@/lib/server-auth';
 
-async function getAuthenticatedUid(req: NextRequest): Promise<string | null> {
-  // Phase 1.1 (B3): verified Firebase session only.
-  return getVerifiedSessionUid(req);
+async function getAuthenticatedIdentity(req: NextRequest): Promise<{ uid: string | null; email: string }> {
+  // Phase 1.1 (B3): verified Firebase session only (uid + email for collab).
+  try {
+    const session = await getVerifiedSession(req);
+    if (session) return { uid: session.uid, email: session.email || '' };
+  } catch {}
+  return { uid: null, email: '' };
 }
 
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  let userUid = await getAuthenticatedUid(req);
+  const identity = await getAuthenticatedIdentity(req);
+  let userUid = identity.uid;
+  let userEmail = identity.email;
 
   if (!userUid && (req.headers.get('x-api-key') || req.headers.get('authorization'))) {
     const auth = await authenticateApiRequest(req);
@@ -22,7 +28,11 @@ export async function GET(
   }
 
   const reportId = params.id;
-  const report = await getReportById(reportId, userUid || undefined);
+  // Production fix B12: pass verified email so getReportById enforces the
+  // SAME collab policy as Firestore rules (owner / invited email / folder /
+  // public). The old route re-checked ownerUid/isShared only and returned
+  // 403 to legitimate collaborators.
+  const report = await getReportById(reportId, userUid || undefined, userEmail || undefined);
 
   if (!report) {
     return NextResponse.json(
@@ -38,20 +48,8 @@ export async function GET(
     );
   }
 
-  // If report is not public/shared and user is not the owner
-  if (!report.isShared && (!userUid || report.ownerUid !== userUid)) {
-    return NextResponse.json(
-      { success: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required to view this report.' } },
-      {
-        status: userUid ? 403 : 401,
-        headers: {
-          'Cache-Control': 'private, no-cache, no-store, must-revalidate',
-          Pragma: 'no-cache',
-          Expires: '0',
-        },
-      }
-    );
-  }
+  // getReportById already enforced owner/collab/folder/public. No second
+  // owner-only check here (that was the B12 regression).
 
   return NextResponse.json(
     { success: true, data: report },

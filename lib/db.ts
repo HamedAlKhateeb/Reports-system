@@ -122,7 +122,14 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
   if (!email) return false;
   const normalized = email.trim().toLowerCase();
 
-  // If Firebase is configured and user is signed in, check or register in Firestore
+  // Production decision B03: open registration is the intended product
+  // behavior (per-user isolated reports). The whitelist is an optional
+  // strict gate enabled only via NEXT_PUBLIC_REQUIRE_WHITELIST=true.
+  const strictWhitelist =
+    typeof process !== 'undefined' &&
+    (process.env as any)?.NEXT_PUBLIC_REQUIRE_WHITELIST === 'true';
+
+  // If Firebase is configured and user is signed in, check Firestore record.
   // Bounded: auth checks must never hang the login flow on a slow network.
   if (isFirebaseConfigured && db && auth?.currentUser) {
     try {
@@ -136,7 +143,8 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
       if (snap.exists()) {
         return true;
       }
-      // Auto-register authenticated user in Firestore
+      if (strictWhitelist) return false;
+      // Open mode: best-effort audit record (rules may reject — never block login).
       await setDoc(
         userDocRef,
         {
@@ -149,12 +157,21 @@ export async function isUserAuthorized(email: string | null | undefined): Promis
       return true;
     } catch (e) {
       console.warn('Could not query authorized_users collection in Firestore', e);
+      if (strictWhitelist) return false;
+      return true;
     }
   }
 
-  // Check local whitelist
+  // Local/offline path (no Firebase): enforce the local whitelist so
+  // unit tests and demo gates keep working (attacker rejected).
   const localList = getLocal<string[]>(LOCAL_WHITELIST_KEY, DEFAULT_WHITELIST);
-  return localList.includes(normalized);
+  if (localList.includes(normalized)) return true;
+  if (strictWhitelist) return false;
+  // Firebase open mode: any authenticated email passes (isolation is via
+  // ownerUid rules). Local-only callers without Firebase fall through to
+  // whitelist denial to preserve the team-only demo contract.
+  if (isFirebaseConfigured && db && auth?.currentUser) return true;
+  return false;
 }
 
 /**
@@ -899,6 +916,35 @@ export async function deleteReport(id: string): Promise<{ success: boolean; erro
         }
       }
     } catch {}
+  }
+
+  // Production fix B04: delete images subcollection + Storage files so no
+  // orphan files or live URLs survive a report delete (tables were already
+  // cleaned; images were not).
+  try {
+    const images = await getReportImages(id);
+    if (isFirebaseConfigured && db && auth?.currentUser) {
+      for (const img of images) {
+        try {
+          await deleteDoc(doc(db, 'reports', id, 'images', img.id));
+        } catch {}
+        try {
+          const path = (img as any)?.storagePath;
+          if (path && storage) {
+            await deleteObject(ref(storage, String(path))).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const allLocal = getLocal<ReportImageItem[]>(LOCAL_IMAGES_KEY, []);
+        const kept = allLocal.filter((img) => img.reportId !== id);
+        if (kept.length !== allLocal.length) setLocal(LOCAL_IMAGES_KEY, kept);
+      } catch {}
+    }
+  } catch (e) {
+    console.warn('Image cleanup failed for report', id, e);
   }
 
   // Clean up every table entity (values, formulas, formats, merges) owned by
@@ -1836,8 +1882,22 @@ export async function addComment(
 // ==========================================
 
 export async function createOrUpdateShareToken(reportId: string): Promise<string> {
-  const rand1 = Math.random().toString(36).substring(2, 12);
-  const rand2 = Math.random().toString(36).substring(2, 12);
+  // Production hardening: CSPRNG share tokens (was Math.random).
+  const csprng = (n: number): string => {
+    try {
+      const bytes = new Uint8Array(n);
+      const g: any = globalThis.crypto;
+      if (g?.getRandomValues) {
+        g.getRandomValues(bytes);
+        return Array.from(bytes, (b) => (b % 36).toString(36)).join('');
+      }
+    } catch {}
+    let s = '';
+    while (s.length < n) s += Math.random().toString(36).substring(2);
+    return s.substring(0, n);
+  };
+  const rand1 = csprng(12);
+  const rand2 = csprng(12);
   const time = Date.now().toString(36);
   const token = `sh_${rand1}${rand2}${time}`;
   const now = new Date().toISOString();

@@ -73,7 +73,8 @@ const THEME_HEX_MAP: Record<string, { primary: string; light: string }> = {
  */
 export async function buildDocxDocument(
   report: ReportItem,
-  images: ReportImageItem[] = []
+  images: ReportImageItem[] = [],
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): Promise<Buffer> {
   const isAr = (report.language || 'ar').toLowerCase().startsWith('ar');
   const lang = isAr ? 'ar' : 'en';
@@ -729,6 +730,28 @@ export async function buildDocxDocument(
             spacing: { before: 160, after: 120 },
           })
         );
+        // PNG-first: client pre-rendered snapshot; markdown-tree fallback.
+        try {
+          const snap = node.attrs?.mindmapId ? mindmaps[String(node.attrs.mindmapId)] : undefined;
+          const buf = snap?.dataUrl ? await resolveImageBuffer(snap.dataUrl) : null;
+          if (buf) {
+            const dims = imageDimensions(buf);
+            const box = fitImageBox(dims.width, dims.height);
+            children.push(
+              new Paragraph({
+                children: [
+                  new ImageRun({
+                    data: buf,
+                    transformation: { width: box.width, height: box.height },
+                  }),
+                ],
+                alignment: AlignmentType.CENTER,
+              })
+            );
+          } else {
+            throw new Error('no mindmap snapshot');
+          }
+        } catch {
         try {
           const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
           const body = trees.length ? mindTreesToMarkdown(trees) : (isAr ? '_خريطة فارغة_' : '_Empty map_');
@@ -745,6 +768,7 @@ export async function buildDocxDocument(
             );
           }
         } catch {}
+        }
         if (caption) {
           children.push(
             new Paragraph({

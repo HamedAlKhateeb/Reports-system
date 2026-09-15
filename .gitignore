@@ -26,3 +26,7 @@ next-env.d.ts
 # Python / Large scratch files
 venv/
 *.zip
+
+# Local Univer forks build workspaces
+univer-fork/
+univer-fork-251/

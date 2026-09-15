@@ -96,13 +96,24 @@ export function AnalysisTable({ report, onReportUpdate, liveEditorRef }: Analysi
   }, [report.analysisRows]);
 
   const severityCounts = useMemo(() => {
-    return {
-      critical: rows.filter((r) => r.severity === 'حرجة').length,
-      major: rows.filter((r) => r.severity === 'كبيرة').length,
-      medium: rows.filter((r) => r.severity === 'متوسطة').length,
-      normal: rows.filter((r) => r.severity === 'عادية').length,
-      minor: rows.filter((r) => r.severity === 'طفيفة').length,
+    // B06 production fix: count via canonical normalizer so English legacy
+    // values (critical/major/...) are never silently dropped.
+    const norm = (s: any): string => {
+      try {
+        const v = String(s ?? '').trim().toLowerCase();
+        if (v === 'critical' || v === 'حرجة' || v === 'حرج' || v === 'خطيرة') return 'critical';
+        if (v === 'major' || v === 'high' || v === 'كبيرة' || v === 'كبير' || v === 'عالية' || v === 'مرتفعة') return 'major';
+        if (v === 'medium' || v === 'متوسطة' || v === 'متوسط') return 'medium';
+        if (v === 'normal' || v === 'عادية' || v === 'عادي') return 'normal';
+        return 'minor';
+      } catch { return 'minor'; }
     };
+    const counts = { critical: 0, major: 0, medium: 0, normal: 0, minor: 0 };
+    for (const r of rows) {
+      const k = norm((r as any).severity);
+      if ((counts as any)[k] !== undefined) (counts as any)[k]++;
+    }
+    return counts;
   }, [rows]);
 
   const syncedRowsCount = useMemo(() => {

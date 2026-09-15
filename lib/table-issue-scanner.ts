@@ -21,49 +21,45 @@ export interface ExtractedReportIssue {
 }
 
 /**
- * Normalizes any text to canonical Arabic severity values
+ * Normalizes any text to canonical Arabic severity values.
+ * Production fix B06: single source of truth is `lib/i18n/dictionary`
+ * (English canonical keys). This wrapper keeps the legacy Arabic return
+ * type for existing rows, but classification now delegates to the
+ * dictionary so `critical/major/high/medium/...` map identically
+ * everywhere (scanner, AnalysisTable, AI engine, dashboard).
  */
+import { normalizeSeverity as normalizeSeverityCanonical } from './i18n/dictionary';
+
+const AR_FROM_CANONICAL: Record<string, 'حرجة' | 'كبيرة' | 'متوسطة' | 'عادية' | 'طفيفة'> = {
+  critical: 'حرجة',
+  major: 'كبيرة',
+  medium: 'متوسطة',
+  normal: 'عادية',
+  minor: 'طفيفة',
+};
+
 export function normalizeSeverity(val: string): 'حرجة' | 'كبيرة' | 'متوسطة' | 'عادية' | 'طفيفة' {
   const clean = (val || '').trim().toLowerCase();
+  // Fast path: exact canonical/Arabic tokens via the dictionary.
+  try {
+    const canon = normalizeSeverityCanonical(val);
+    if (canon && AR_FROM_CANONICAL[canon]) return AR_FROM_CANONICAL[canon];
+  } catch {}
 
-  if (
-    clean.includes('حرجة') ||
-    clean.includes('critical') ||
-    clean.includes('حرج') ||
-    clean.includes('خطيرة')
-  ) {
+  // Legacy fuzzy Arabic variants (kept for scanned table text).
+  if (clean.includes('حرجة') || clean.includes('حرج') || clean.includes('خطيرة')) {
     return 'حرجة';
   }
-  if (
-    clean.includes('كبيرة') ||
-    clean.includes('major') ||
-    clean.includes('كبير') ||
-    clean.includes('عالية')
-  ) {
+  if (clean.includes('كبيرة') || clean.includes('كبير') || clean.includes('عالية') || clean.includes('مرتفعة')) {
     return 'كبيرة';
   }
-  if (
-    clean.includes('متوسطة') ||
-    clean.includes('medium') ||
-    clean.includes('متوسط') ||
-    clean.includes('معتدلة')
-  ) {
+  if (clean.includes('متوسطة') || clean.includes('متوسط') || clean.includes('معتدلة')) {
     return 'متوسطة';
   }
-  if (
-    clean.includes('عادية') ||
-    clean.includes('normal') ||
-    clean.includes('عادي')
-  ) {
+  if (clean.includes('عادية') || clean.includes('عادي')) {
     return 'عادية';
   }
-  if (
-    clean.includes('طفيفة') ||
-    clean.includes('minor') ||
-    clean.includes('طفيف') ||
-    clean.includes('منخفضة') ||
-    clean.includes('بسيطة')
-  ) {
+  if (clean.includes('طفيفة') || clean.includes('طفيف') || clean.includes('منخفضة') || clean.includes('بسيطة')) {
     return 'طفيفة';
   }
 

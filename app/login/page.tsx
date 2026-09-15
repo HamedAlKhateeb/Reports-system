@@ -15,6 +15,8 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { FieldGroup, Field, FieldLabel } from '@/components/ui/field';
 import { Separator } from '@/components/ui/separator';
+import { PasswordStrength } from '@/components/auth/PasswordStrength';
+import { evaluateAccountPassword, firstPasswordFailure } from '@/lib/password-policy';
 
 function LoginFormContent() {
   const router = useRouter();
@@ -53,8 +55,9 @@ function LoginFormContent() {
     }
 
     if (mode === 'signup') {
-      if (password.length < 6) {
-        setLocalError(t('passwordTooShort'));
+      const failure = firstPasswordFailure(password, lang === 'ar' ? 'ar' : 'en');
+      if (failure) {
+        setLocalError(failure);
         return;
       }
       if (password !== confirmPassword) {
@@ -398,8 +401,19 @@ function LoginFormContent() {
                       placeholder={t('passwordPlaceholder')}
                       required
                       className="ps-9 text-xs"
+                      dir="ltr"
                     />
                   </div>
+                  {mode === 'signup' && (
+                    <div className="pt-2">
+                      <PasswordStrength password={password} lang={lang === 'ar' ? 'ar' : 'en'} />
+                      <p className="pt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                        {lang === 'ar'
+                          ? 'كلمة سر قوية: 8 أحرف على الأقل، حرف كبير وصغير، رقم، ورمز — بدون مسافات.'
+                          : 'Strong password: 8+ chars, upper + lower case, a digit and a symbol — no spaces.'}
+                      </p>
+                    </div>
+                  )}
                 </Field>
 
                 {mode === 'signup' && (

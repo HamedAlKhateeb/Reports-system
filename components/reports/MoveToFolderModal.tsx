@@ -14,6 +14,7 @@ import {
 import { FolderItem, ReportItem } from '@/lib/types';
 import { wouldCreateFolderCycle } from '@/lib/db';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { toast } from '@/components/ui/toast';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -62,7 +63,7 @@ export function MoveToFolderModal({
       onClose();
     } catch (err: any) {
       console.error('Failed to move item', err);
-      alert((isAr ? 'فشل النقل: ' : 'Failed to move: ') + err.message);
+      toast.error((isAr ? 'فشل النقل: ' : 'Failed to move: ') + err.message);
     } finally {
       setMoving(false);
     }

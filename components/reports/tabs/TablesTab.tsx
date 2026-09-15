@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { ReportItem, TableEntity } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import {
@@ -16,13 +17,26 @@ import {
   MoveRight,
   HelpCircle,
   Table as TableIcon,
+  Trash2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { PageLoading } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
-import { getTablesByReportId, saveTable, updateReport } from '@/lib/db';
+import { useConfirm } from '@/components/ui/confirm-dialog';
+import { getTablesByReportId, saveTable, updateReport, deleteTableEntity, clearTableValues } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
-import { SmartTable } from '@/components/editor/grid/SmartTable';
+// Univer editor (heavy, client-only) — replaces the hand-rolled SmartTable.
+const UniverTable = dynamic(
+  () => import('@/components/editor/grid/UniverTable').then((m) => m.UniverTable),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-[300px] items-center justify-center">
+        <PageLoading label="…" className="flex-col" spinnerClassName="size-6" />
+      </div>
+    ),
+  }
+);
 
 interface TablesTabProps {
   report: ReportItem;
@@ -47,6 +61,7 @@ export function TablesTab({
   const [loading, setLoading] = useState(true);
   const [isFullScreenOpen, setIsFullScreenOpen] = useState(false);
   const [movingToReport, setMovingToReport] = useState(false);
+  const [confirmNode, askConfirm] = useConfirm();
 
   useEffect(() => {
     loadTables();
@@ -58,32 +73,13 @@ export function TablesTab({
       const list = await getTablesByReportId(report.id);
       setTables(list);
       if (list.length > 0) {
-        setActiveTableId(list[0].id);
+        setActiveTableId((prev) => (prev && list.some((t) => t.id === prev) ? prev : list[0].id));
       } else {
-        // Create default empty table if none exists
-        const defaultTable: TableEntity = {
-          id: `tbl_${report.id}_1`,
-          report_id: report.id,
-          name: isAr ? 'جدول البيانات الرئيسي' : 'Main Data Sheet',
-          columns_data: [
-            { id: 'A', name: isAr ? 'الرمز' : 'Key', type: 'issue_key', width: 100 },
-            { id: 'B', name: isAr ? 'البند / المشكلة' : 'Item / Issue', type: 'text', width: 240 },
-            { id: 'C', name: isAr ? 'الدرجة' : 'Severity', type: 'status', width: 120 },
-            { id: 'D', name: isAr ? 'العدد / القيمة' : 'Value', type: 'number', width: 120 },
-            { id: 'E', name: isAr ? 'التاريخ' : 'Date', type: 'date', width: 130 },
-          ],
-          rows_data: [
-            { A: 'PRB-001', B: 'تأخر في معالجة الطلبات', C: 'حرجة', D: 1, E: '2026-09-01' },
-            { A: 'PRB-002', B: 'خطأ في تنسيق العملة', C: 'متوسطة', D: 2, E: '2026-09-02' },
-            { A: 'PRB-003', B: 'بطء في استجابة قاعدة البيانات', C: 'كبيرة', D: 3, E: '2026-09-03' },
-          ],
-          version: 1,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-        await saveTable(defaultTable);
-        setTables([defaultTable]);
-        setActiveTableId(defaultTable.id);
+        // No auto-create: an empty report stays empty. Auto-creating a sample
+        // sheet here was the "deleted values come back" bug — deleting the
+        // last table instantly recreated PRB-001/002/003. The empty state
+        // below offers an explicit "create" button instead.
+        setActiveTableId(null);
       }
     } catch (err) {
       console.error('Failed to load tables', err);
@@ -98,6 +94,7 @@ export function TablesTab({
       id: `tbl_${report.id}_${Date.now().toString(36)}`,
       report_id: report.id,
       name: `${isAr ? 'ورقة بيانات' : 'Sheet'} ${nextIdx}`,
+      direction: report.language === 'en' ? 'ltr' : 'rtl',
       columns_data: [
         { id: 'A', name: 'A', type: 'text', width: 120 },
         { id: 'B', name: 'B', type: 'number', width: 120 },
@@ -115,6 +112,87 @@ export function TablesTab({
     setTables([...tables, newTbl]);
     setActiveTableId(newTbl.id);
     toast.success(isAr ? 'تم إنشاء جدول جديد' : 'New table sheet created');
+  };
+
+  // Delete lives here (TablesTab) and in the editor command bar — never
+  // inside the sheet itself. Embedded tables delete the entity AND strip
+  // every matching smartTable node from contentJson, so nothing resurrects.
+  const handleDeleteTable = async () => {
+    if (!activeTable) return;
+    const ok = await askConfirm(
+      isAr
+        ? isEmbedded
+          ? `حذف «${activeTable.name}» نهائيًا من التقرير وقاعدة البيانات؟ سيُزال موضعه من المحرر أيضًا. لا يمكن التراجع.`
+          : `حذف «${activeTable.name}» نهائيًا؟ لا يمكن التراجع.`
+        : isEmbedded
+          ? `Permanently delete "${activeTable.name}" from the report and database? Its editor block will be removed too.`
+          : `Permanently delete "${activeTable.name}"? This cannot be undone.`
+    );
+    if (!ok) return;
+    try {
+      const deletedId = activeTable.id;
+      await deleteTableEntity(deletedId);
+      // If embedded, strip its node(s) from the document so the editor never
+      // re-shows a ghost block pointing at a deleted entity.
+      if (isEmbedded) {
+        try {
+          let docObj: any = null;
+          if (typeof report.contentJson === 'string') {
+            try {
+              docObj = JSON.parse(report.contentJson);
+            } catch {
+              docObj = null;
+            }
+          } else if (report.contentJson && typeof report.contentJson === 'object') {
+            docObj = JSON.parse(JSON.stringify(report.contentJson));
+          }
+          if (docObj && Array.isArray(docObj.content)) {
+            const before = docObj.content.length;
+            docObj.content = docObj.content.filter(
+              (n: any) => !(n && n.type === 'smartTable' && String(n.attrs?.tableId || '') === deletedId)
+            );
+            if (docObj.content.length !== before) {
+              await updateReport(report.id, { contentJson: docObj, updatedAt: new Date().toISOString() });
+              onReportUpdate?.({ ...report, contentJson: docObj, updatedAt: new Date().toISOString() });
+            }
+          }
+        } catch (e) {
+          console.warn('Embedded node strip failed (entity already deleted)', e);
+        }
+      }
+      // Reload from the source of truth (freshest-wins + tombstones) —
+      // never trust a locally filtered list after a delete.
+      const fresh = await getTablesByReportId(report.id);
+      setTables(fresh);
+      setActiveTableId(fresh.length ? fresh[0].id : null);
+      toast.success(isAr ? 'تم حذف الجدول نهائيًا' : 'Table deleted permanently');
+    } catch (err) {
+      console.error('Delete table failed', err);
+      toast.error(isAr ? 'فشل حذف الجدول' : 'Failed to delete table');
+    }
+  };
+
+  // Explicit "empty the sheet" action — clears every value/formula/merge
+  // while keeping the table itself (the user asked for a way to delete the
+  // values that kept coming back).
+  const handleClearValues = async () => {
+    if (!activeTable) return;
+    const ok = await askConfirm(
+      isAr
+        ? `مسح كل القيم داخل «${activeTable.name}»؟ سيبقى الجدول فارغًا. لا يمكن التراجع.`
+        : `Clear all values inside "${activeTable.name}"? The sheet stays but becomes empty.`
+    );
+    if (!ok) return;
+    try {
+      const done = await clearTableValues(activeTable.id);
+      if (!done) throw new Error('clear failed');
+      const fresh = await getTablesByReportId(report.id);
+      setTables(fresh);
+      toast.success(isAr ? 'تم مسح قيم الجدول' : 'Table values cleared');
+    } catch (err) {
+      console.error('Clear table values failed', err);
+      toast.error(isAr ? 'فشل مسح القيم' : 'Failed to clear values');
+    }
   };
 
   const activeTable = tables.find((t) => t.id === activeTableId) || tables[0];
@@ -291,6 +369,38 @@ export function TablesTab({
               <span className="hidden sm:inline">{isAr ? 'تصدير CSV' : 'Export CSV'}</span>
             </Button>
           )}
+
+          {activeTable && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleClearValues}
+              className="h-8 gap-1 text-xs text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+              title={isAr ? 'مسح كل القيم داخل الجدول (يبقى الجدول فارغًا)' : 'Clear all values inside the table (keeps an empty sheet)'}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{isAr ? 'مسح القيم' : 'Clear values'}</span>
+            </Button>
+          )}
+
+          {activeTable && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleDeleteTable}
+              className="h-8 gap-1 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+              title={
+                isEmbedded
+                  ? isAr ? 'حذف الجدول نهائيًا مع إزالته من المحرر' : 'Delete the table permanently and remove it from the editor'
+                  : isAr ? 'حذف الجدول' : 'Delete table'
+              }
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">{isAr ? 'حذف الجدول' : 'Delete'}</span>
+            </Button>
+          )}
         </div>
       </div>
 
@@ -298,6 +408,24 @@ export function TablesTab({
       {loading ? (
         <div className="p-12 text-center text-xs text-muted-foreground border border-border rounded-xl bg-card">
           <PageLoading label={isAr ? 'جاري تحميل الجداول...' : 'Loading tables...'} className="flex-col" spinnerClassName="size-6" />
+        </div>
+      ) : !activeTable ? (
+        <div className="rounded-xl border border-dashed border-border bg-card p-10 text-center space-y-3">
+          <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+            <FileSpreadsheet className="h-5 w-5" />
+          </div>
+          <p className="text-sm font-bold text-foreground">
+            {isAr ? 'لا توجد جداول في هذا التقرير' : 'No tables in this report'}
+          </p>
+          <p className="text-xs text-muted-foreground max-w-sm mx-auto leading-relaxed">
+            {isAr
+              ? 'حذفت كل الجداول — ولن تعود من تلقاء نفسها. أنشئ جدولًا جديدًا متى احتجت.'
+              : 'All tables are deleted — nothing will come back on its own. Create a new sheet whenever you need one.'}
+          </p>
+          <Button type="button" size="sm" onClick={handleAddNewTable} className="h-9 gap-1.5 text-xs font-semibold">
+            <Plus className="h-3.5 w-3.5" />
+            <span>{isAr ? 'إنشاء جدول جديد' : 'Create new sheet'}</span>
+          </Button>
         </div>
       ) : activeTable ? (
         isEmbedded ? (
@@ -426,9 +554,9 @@ export function TablesTab({
               </Button>
             </div>
 
-            {/* Render SmartTable directly */}
+            {/* Render Univer spreadsheet directly */}
             <div className="rounded-xl border border-border bg-card shadow-2xs overflow-hidden">
-              <SmartTable tableId={activeTable.id} reportId={report.id} mode="embedded-edit" />
+              <UniverTable tableId={activeTable.id} reportId={report.id} mode="embedded-edit" />
             </div>
           </div>
         )
@@ -436,7 +564,7 @@ export function TablesTab({
 
       {/* FULLSCREEN SPREADSHEET MODAL */}
       {isFullScreenOpen && activeTable && (
-        <SmartTable
+        <UniverTable
           tableId={activeTable.id}
           reportId={report.id}
           mode="full-screen"
@@ -450,6 +578,7 @@ export function TablesTab({
           }}
         />
       )}
+      {confirmNode}
     </div>
   );
 }

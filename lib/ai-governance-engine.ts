@@ -280,10 +280,13 @@ export async function generateAutomatedInsights(
     return [];
   }
 
-  // 1. Check for Critical Risk Concentration
-  const criticalIssues = targetIssues.filter(
-    (i) => i.severity === 'critical' || i.severity === 'حرجة'
-  );
+  // 1. Check for Critical Risk Concentration (B06: canonical normalizer)
+  const criticalIssues = targetIssues.filter((i) => {
+    try {
+      const v = String((i as any).severity ?? '').trim().toLowerCase();
+      return v === 'critical' || v === 'حرجة' || v === 'حرج' || v === 'خطيرة';
+    } catch { return false; }
+  });
   const criticalRatio = criticalIssues.length / targetIssues.length;
 
   if (criticalIssues.length >= 2 || criticalRatio >= 0.25) {

@@ -17,7 +17,6 @@ import {
   Layers,
   Check,
   AlertCircle,
-  Clock,
   Images,
   ExternalLink,
   Briefcase,
@@ -46,6 +45,7 @@ import {
   AlertOctagon,
   BarChart3,
   Settings,
+  Lock,
 } from 'lucide-react';
 import dynamic from 'next/dynamic';
 import {
@@ -82,6 +82,7 @@ import {
 } from '@/lib/types';
 import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
 import { InviteDialog } from '@/components/collaboration/InviteDialog';
+import { SharePasswordForm } from '@/components/collaboration/SharePasswordForm';
 import { AnalysisTable } from '@/components/reports/AnalysisTable';
 import { CandidateReviewModal } from '@/components/reports/CandidateReviewModal';
 import { DiscrepancyInspectorModal } from '@/components/reports/DiscrepancyInspectorModal';
@@ -100,6 +101,7 @@ import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { Button } from '@/components/ui/button';
 import { PageLoading } from '@/components/ui/loading';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { toast } from '@/components/ui/toast';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -152,11 +154,22 @@ export default function ReportDetailPage() {
   // like a success. `lastFailedSaveRef` holds a retry closure for the banner.
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Phase-1 unified draft pipeline: every field edit marks dirty and flows
+  // through ONE debounced full save (no field persists via its own path).
+  const [hasUnsaved, setHasUnsaved] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasUnsavedRef = useRef(false);
+  const saveStatusRef = useRef(saveStatus);
+  saveStatusRef.current = saveStatus;
+  hasUnsavedRef.current = hasUnsaved;
   const lastFailedSaveRef = useRef<(() => Promise<void>) | null>(null);
   const savedClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const markSaved = useCallback(() => {
     setSaveStatus('saved');
     setSaveError(null);
+    setHasUnsaved(false);
+    setLastSavedAt(new Date().toISOString());
     lastFailedSaveRef.current = null;
     if (savedClearTimer.current) clearTimeout(savedClearTimer.current);
     savedClearTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
@@ -165,6 +178,7 @@ export default function ReportDetailPage() {
     (message: string, retry: () => Promise<void>) => {
       setSaveStatus('error');
       setSaveError(message);
+      setHasUnsaved(true);
       lastFailedSaveRef.current = retry;
     },
     []
@@ -175,13 +189,32 @@ export default function ReportDetailPage() {
   const latestContentRef = useRef<any>(null);
   const liveEditorRef = useRef<any>(null);
 
-  // Tab navigation state
-  const [activeMainTab, setActiveMainTab] = useState<'overview' | 'content' | 'issues' | 'analytics' | 'settings'>('overview');
+  // Tab navigation state — deep-linkable (?tab=issues): refresh/back/forward
+  // and shared links preserve the tab.
+  type MainTabKey = 'overview' | 'content' | 'issues' | 'analytics' | 'settings';
+  const MAIN_TAB_KEYS: MainTabKey[] = ['overview', 'content', 'issues', 'analytics', 'settings'];
+  const [activeMainTab, setActiveMainTab] = useState<MainTabKey>(() => {
+    try {
+      const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '').get('tab');
+      return (MAIN_TAB_KEYS as string[]).includes(q || '') ? (q as MainTabKey) : 'overview';
+    } catch {
+      return 'overview';
+    }
+  });
   const [activeIssueFilter, setActiveIssueFilter] = useState<{ severity?: string; status?: string; search?: string } | null>(null);
+
+  const changeMainTab = (key: MainTabKey) => {
+    setActiveMainTab(key);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set('tab', key);
+      window.history.replaceState(null, '', u.toString());
+    } catch {}
+  };
 
   const handleNavigateTab = (tabKey: string, meta?: any) => {
     const targetTab = tabKey === 'tables' ? 'content' : tabKey;
-    setActiveMainTab(targetTab as any);
+    changeMainTab((MAIN_TAB_KEYS as string[]).includes(targetTab) ? (targetTab as MainTabKey) : 'overview');
     if (targetTab === 'issues' && meta) {
       setActiveIssueFilter(meta);
     }
@@ -284,7 +317,7 @@ export default function ReportDetailPage() {
       setShowCandidateModal(true);
     } catch (err: any) {
       console.error('Candidate scan error:', err);
-      alert((lang === 'ar' ? 'فشل فحص التشابه: ' : 'Similarity check failed: ') + err.message);
+      toast.error((lang === 'ar' ? 'فشل فحص التشابه: ' : 'Similarity check failed: ') + err.message);
     } finally {
       setIsScanningCandidates(false);
     }
@@ -299,6 +332,7 @@ export default function ReportDetailPage() {
   // Web Sharing states
   const [showShareModal, setShowShareModal] = useState(false);
   const [sharingAction, setSharingAction] = useState(false);
+  const [sharePwdDraft, setSharePwdDraft] = useState('');
   const [copiedShareLink, setCopiedShareLink] = useState(false);
 
   // Collaboration (invites) states
@@ -366,7 +400,7 @@ export default function ReportDetailPage() {
       setReport((prev) => (prev ? { ...prev, shareToken: token, isShared: true, sharedAt: new Date().toISOString() } : null));
     } catch (err: any) {
       console.error('Failed to create share link', err);
-      alert((lang === 'ar' ? 'فشل إنشاء رابط المشاركة: ' : 'Failed to create share link: ') + err.message);
+      toast.error((lang === 'ar' ? 'فشل إنشاء رابط المشاركة: ' : 'Failed to create share link: ') + err.message);
     } finally {
       setSharingAction(false);
     }
@@ -380,10 +414,53 @@ export default function ReportDetailPage() {
     try {
       setSharingAction(true);
       await revokeShareToken(reportId);
-      setReport((prev) => (prev ? { ...prev, shareToken: null, isShared: false, sharedAt: null } : null));
+      setReport((prev) => (prev ? { ...prev, shareToken: null, isShared: false, sharedAt: null, sharePasswordHash: null } : null));
     } catch (err: any) {
       console.error('Failed to revoke share link', err);
-      alert((lang === 'ar' ? 'فشل إلغاء المشاركة: ' : 'Failed to revoke share link: ') + err.message);
+      toast.error((lang === 'ar' ? 'فشل إلغاء المشاركة: ' : 'Failed to revoke share link: ') + err.message);
+    } finally {
+      setSharingAction(false);
+    }
+  };
+
+  // Optional share-link password (owner only). Only the SHA-256 hash is
+  // persisted; the plaintext never leaves this dialog except to unlock.
+  const handleSetSharePassword = async () => {
+    if (!report || !isReportOwner) return;
+    const pwd = sharePwdDraft;
+    const { evaluateSharePassword } = await import('@/lib/share-password');
+    if (!evaluateSharePassword(pwd).passed) {
+      toast.error(lang === 'ar' ? 'كلمة السر لا تطابق المعايير أدناه' : 'Password does not meet the criteria below');
+      return;
+    }
+    try {
+      setSharingAction(true);
+      const { sha256Hex } = await import('@/lib/share-password');
+      const hash = await sha256Hex(pwd);
+      const ok = await updateReport(reportId, { sharePasswordHash: hash });
+      if (!ok) throw new Error('save failed');
+      setReport((prev) => (prev ? { ...prev, sharePasswordHash: hash } : null));
+      setSharePwdDraft('');
+      toast.success(lang === 'ar' ? 'تم تفعيل كلمة السر للرابط' : 'Share link password enabled');
+    } catch (err: any) {
+      console.error('Set share password failed', err);
+      toast.error(lang === 'ar' ? 'فشل حفظ كلمة السر' : 'Failed to save password');
+    } finally {
+      setSharingAction(false);
+    }
+  };
+
+  const handleRemoveSharePassword = async () => {
+    if (!report || !isReportOwner) return;
+    try {
+      setSharingAction(true);
+      const ok = await updateReport(reportId, { sharePasswordHash: null });
+      if (!ok) throw new Error('save failed');
+      setReport((prev) => (prev ? { ...prev, sharePasswordHash: null } : null));
+      toast.success(lang === 'ar' ? 'تمت إزالة كلمة السر' : 'Password removed');
+    } catch (err: any) {
+      console.error('Remove share password failed', err);
+      toast.error(lang === 'ar' ? 'فشل إزالة كلمة السر' : 'Failed to remove password');
     } finally {
       setSharingAction(false);
     }
@@ -427,16 +504,25 @@ export default function ReportDetailPage() {
   const [confirmNode, askConfirm] = useConfirm();
   const handleArchiveReport = async () => {
     if (!report || !user) return;
-    if (!(await askConfirm(lang === 'ar' ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.'))) {
+    const openCount = linkedIssues.filter((i) => !(i.archived_at || (i as any).archivedAt)).length;
+    const confirmMsg = lang === 'ar'
+      ? openCount > 0
+        ? `أرشفة هذا التقرير؟ سيختفي من القوائم، وستُؤرشف معه ${openCount} مشكلة مفتوحة. الاستعادة لاحقًا تعيد التقرير فقط — المشاكل تبقى مؤرشفة.`
+        : 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا (المشاكل المؤرشفة معه سابقًا تبقى مؤرشفة).'
+      : openCount > 0
+        ? `Archive this report? It will leave all lists, and ${openCount} open issue(s) will be archived with it. Restoring later brings back the report only — issues stay archived.`
+        : 'Archive this report? It will leave all lists and can be restored later (issues archived with it stay archived).';
+    if (!(await askConfirm(confirmMsg))) {
       return;
     }
     try {
       setArchiving(true);
       const res = await archiveReport(report.id, user.uid);
       if (!res.ok) {
-        alert(lang === 'ar' ? 'فشل الأرشفة.' : 'Archive failed.');
+        toast.error(lang === 'ar' ? 'فشل الأرشفة.' : 'Archive failed.');
         return;
       }
+      toast.success(lang === 'ar' ? `تمت الأرشفة${res.archivedIssues ? ` مع ${res.archivedIssues} مشكلة` : ''}` : `Archived${res.archivedIssues ? ` with ${res.archivedIssues} issue(s)` : ''}`);
       const updated = await getReportById(report.id, user.uid);
       if (updated) {
         setReport(updated);
@@ -449,11 +535,14 @@ export default function ReportDetailPage() {
 
   const handleUnarchiveReport = async () => {
     if (!report || !user) return;
+    if (!(await askConfirm(lang === 'ar' ? 'استعادة هذا التقرير؟ سيعود للقوائم، لكن المشاكل التي أُرشفت معه تبقى مؤرشفة — استعدها كل على حدة.' : 'Restore this report? It returns to lists, but issues archived with it stay archived — restore them individually.'))) {
+      return;
+    }
     try {
       setArchiving(true);
       const res = await unarchiveReport(report.id, user.uid);
       if (!res.ok) {
-        alert(lang === 'ar' ? 'فشل الاستعادة.' : 'Restore failed.');
+        toast.error(lang === 'ar' ? 'فشل الاستعادة.' : 'Restore failed.');
         return;
       }
       const updated = await getReportById(report.id, user.uid);
@@ -513,6 +602,31 @@ export default function ReportDetailPage() {
       setCustomFooterFields(rep.customFooterFields || []);
       setImages(imgs);
       setLinkedIssues(issues);
+      // Invite inbox: opening a shared report marks its invite as seen.
+      try {
+        if (user && rep.ownerUid !== user.uid) {
+          const { markInviteSeen } = await import('@/lib/invites');
+          markInviteSeen(user.uid, rep.id);
+        }
+      } catch {}
+      // Persisted baseline for the autosave fingerprint (mirrors the sets above).
+      try {
+        lastPersistedMetaRef.current = metaFingerprint({
+          title: rep.title || '',
+          reportNumber: rep.reportNumber ?? 1,
+          author: rep.author || '',
+          authorTitle: rep.authorTitle || '',
+          organization: rep.organization || '',
+          signatureData: rep.signatureData || '',
+          themeColor: rep.themeColor || 'olive',
+          backgroundColor: rep.backgroundColor || 'white',
+          contactLinks: activeLinks,
+          systemUnderReview: rep.systemUnderReview || '',
+          reportLanguage: rep.language || 'ar',
+          customFields: rep.customFields || [],
+          customFooterFields: rep.customFooterFields || [],
+        });
+      } catch {}
 
       // Register active report with AI Context bridge
       setActiveReportInfo({
@@ -682,6 +796,13 @@ export default function ReportDetailPage() {
           customFooterFields,
         });
       }
+      try {
+        lastPersistedMetaRef.current = metaFingerprint({
+          title, reportNumber: numVal, author, authorTitle, organization, signatureData,
+          themeColor, backgroundColor, contactLinks, systemUnderReview,
+          reportLanguage, customFields, customFooterFields,
+        });
+      } catch {}
       markSaved();
     } catch (err: any) {
       console.error('Metadata save failed:', err);
@@ -691,6 +812,10 @@ export default function ReportDetailPage() {
 
   const handleSaveImmediately = useCallback(async () => {
     if (!report) return;
+    if (draftTimer.current) {
+      clearTimeout(draftTimer.current);
+      draftTimer.current = null;
+    }
     const { ok, numVal } = await resolveValidReportNumber();
     if (!ok) return;
     const content = latestContentRef.current || report.contentJson;
@@ -716,6 +841,13 @@ export default function ReportDetailPage() {
       const success = await updateReport(reportId, updatedData);
       if (!success) throw new Error(saveFailedMessage);
       setReport((prev) => (prev ? { ...prev, ...updatedData } : null));
+      try {
+        lastPersistedMetaRef.current = metaFingerprint({
+          title, reportNumber: numVal, author, authorTitle, organization, signatureData,
+          themeColor, backgroundColor, contactLinks, systemUnderReview,
+          reportLanguage, customFields, customFooterFields,
+        });
+      } catch {}
       markSaved();
     } catch (err: any) {
       console.error('Immediate save failed:', err);
@@ -742,6 +874,81 @@ export default function ReportDetailPage() {
     resolveValidReportNumber,
   ]);
 
+  // Single draft pipeline: any meta/field edit marks dirty and debounces
+  // into the SAME full save above. No field owns a persistence path.
+  const saveImmediateRef = useRef(handleSaveImmediately);
+  saveImmediateRef.current = handleSaveImmediately;
+  const draftLoadedRef = useRef(false);
+  // Fingerprint of the last PERSISTED meta snapshot. The autosave effect
+  // compares current fields against it: programmatic syncs (loads, restores,
+  // AI updates) reproduce persisted values exactly → skipped, never dirty.
+  // Only genuine user edits diverge → dirty + scheduled save. No flags that
+  // can swallow a real edit.
+  const lastPersistedMetaRef = useRef<string>('');
+  const metaFingerprint = (v: {
+    title: unknown; reportNumber: unknown; author: unknown; authorTitle: unknown;
+    organization: unknown; signatureData: unknown; themeColor: unknown; backgroundColor: unknown;
+    contactLinks: unknown; systemUnderReview: unknown; reportLanguage: unknown;
+    customFields: unknown; customFooterFields: unknown;
+  }): string => {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return '';
+    }
+  };
+  const currentMetaFingerprint = (): string => metaFingerprint({
+    title, reportNumber, author, authorTitle, organization, signatureData,
+    themeColor, backgroundColor, contactLinks, systemUnderReview,
+    reportLanguage, customFields, customFooterFields,
+  });
+  useEffect(() => {
+    if (loading || !report) return;
+    if (!draftLoadedRef.current) {
+      draftLoadedRef.current = true;
+      return;
+    }
+    if (currentMetaFingerprint() === lastPersistedMetaRef.current) {
+      if (draftTimer.current) {
+        clearTimeout(draftTimer.current);
+        draftTimer.current = null;
+      }
+      setHasUnsaved(false);
+      return;
+    }
+    setHasUnsaved(true);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      void saveImmediateRef.current();
+    }, 2000);
+    return () => {
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+    };
+    // NOTE: intentionally keyed on field states only (never `report` —
+    // setReport on save success must not retrigger this effect).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, reportId, title, reportNumber, author, authorTitle, organization, signatureData, themeColor, backgroundColor, contactLinks, systemUnderReview, reportLanguage, customFields, customFooterFields]);
+
+  // Leave guard: dirty, saving, or failed — never lose edits silently.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      // Flush a pending draft first (best effort), then warn if needed.
+      try {
+        if (draftTimer.current) {
+          clearTimeout(draftTimer.current);
+          draftTimer.current = null;
+          void saveImmediateRef.current();
+        }
+      } catch {}
+      if (hasUnsavedRef.current || saveStatusRef.current === 'saving' || saveStatusRef.current === 'error') {
+        e.preventDefault();
+        (e as any).returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   const handleAddCustomField = () => {
     const newField: CustomFieldItem = {
       id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cf_${Date.now()}`,
@@ -750,7 +957,6 @@ export default function ReportDetailPage() {
     };
     const updated = [...customFields, newField];
     setCustomFields(updated);
-    updateReport(reportId, { customFields: updated });
     setReport((prev) => (prev ? { ...prev, customFields: updated } : null));
   };
 
@@ -762,7 +968,6 @@ export default function ReportDetailPage() {
   const handleRemoveCustomField = (id: string) => {
     const updated = customFields.filter((f) => f.id !== id);
     setCustomFields(updated);
-    updateReport(reportId, { customFields: updated });
     setReport((prev) => (prev ? { ...prev, customFields: updated } : null));
   };
 
@@ -774,7 +979,6 @@ export default function ReportDetailPage() {
     };
     const updated = [...customFooterFields, newField];
     setCustomFooterFields(updated);
-    updateReport(reportId, { customFooterFields: updated });
     setReport((prev) => (prev ? { ...prev, customFooterFields: updated } : null));
   };
 
@@ -786,25 +990,21 @@ export default function ReportDetailPage() {
   const handleRemoveCustomFooterField = (id: string) => {
     const updated = customFooterFields.filter((f) => f.id !== id);
     setCustomFooterFields(updated);
-    updateReport(reportId, { customFooterFields: updated });
     setReport((prev) => (prev ? { ...prev, customFooterFields: updated } : null));
   };
 
   const handleThemeChange = async (newTheme: string) => {
     setThemeColor(newTheme);
-    await updateReport(reportId, { themeColor: newTheme });
     setReport((prev) => (prev ? { ...prev, themeColor: newTheme } : null));
   };
 
   const handleBackgroundChange = async (newBg: string) => {
     setBackgroundColor(newBg);
-    await updateReport(reportId, { backgroundColor: newBg });
     setReport((prev) => (prev ? { ...prev, backgroundColor: newBg } : null));
   };
 
   const handleLanguageToggle = async (newLang: AppLanguage) => {
     setReportLanguage(newLang);
-    await updateReport(reportId, { language: newLang });
     if (report) {
       setReport({ ...report, language: newLang });
     }
@@ -820,6 +1020,14 @@ export default function ReportDetailPage() {
       const numVal = Number(reportNumber) || reportNumber;
       const currentImgs = await getReportImages(reportId);
       const contentJsonToExport = latestContentRef.current || report.contentJson;
+      // Mind-maps export/share as PNG images (client pre-render).
+      let mindmapSnaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {};
+      try {
+        const { snapshotMindmaps } = await import('@/lib/mindmap-export');
+        mindmapSnaps = await snapshotMindmaps(contentJsonToExport);
+      } catch {
+        mindmapSnaps = {};
+      }
 
       const currentReportData: ReportItem = {
         ...report,
@@ -841,7 +1049,7 @@ export default function ReportDetailPage() {
 
       if (format === 'pdf') {
         // Direct, high-fidelity PDF print/generation with native browser rendering and 100% RTL support
-        printReportAsPdf(currentReportData, currentImgs);
+        printReportAsPdf(currentReportData, currentImgs, [], mindmapSnaps);
         setExporting(null);
         return;
       }
@@ -852,6 +1060,7 @@ export default function ReportDetailPage() {
         body: JSON.stringify({
           report: currentReportData,
           images: currentImgs,
+          mindmaps: mindmapSnaps,
         }),
       });
 
@@ -891,7 +1100,7 @@ export default function ReportDetailPage() {
       try {
         setExportNotice(`${t('exportError')}: ${err?.message || err}`);
       } catch {}
-      alert(t('exportError') + ': ' + err.message);
+      toast.error(t('exportError') + ': ' + err.message);
     } finally {
       setExporting(null);
     }
@@ -955,6 +1164,52 @@ export default function ReportDetailPage() {
 
         {/* Export & Action Buttons with Unified Styling */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Visible Save: same pipeline as autosave + persistent state */}
+          <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-card px-1.5 py-1 shadow-2xs">
+            <Button
+              type="button"
+              size="sm"
+              disabled={saveStatus === 'saving'}
+              onClick={() => void handleSaveImmediately()}
+              className="h-7 gap-1 rounded-md bg-[#2E4034] px-2.5 text-[11px] font-bold text-white hover:bg-[#24382F] disabled:opacity-60"
+              title={lang === 'ar' ? 'حفظ التقرير الآن (Ctrl+S)' : 'Save report now (Ctrl+S)'}
+            >
+              <Check className="h-3.5 w-3.5" />
+              <span>{lang === 'ar' ? 'حفظ' : 'Save'}</span>
+            </Button>
+            <span
+              role="status"
+              className="flex items-center gap-1 px-1 text-[10px] font-semibold text-muted-foreground whitespace-nowrap"
+              title={
+                saveStatus === 'error'
+                  ? saveError || ''
+                  : lastSavedAt
+                    ? `${lang === 'ar' ? 'آخر حفظ' : 'Last saved'}: ${new Date(lastSavedAt).toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+                    : ''
+              }
+            >
+              {(hasUnsaved || saveStatus === 'saving') && (
+                <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" aria-label={lang === 'ar' ? 'تعديلات غير محفوظة' : 'Unsaved changes'} />
+              )}
+              {saveStatus === 'saved' && !hasUnsaved && (
+                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label={lang === 'ar' ? 'محفوظ' : 'Saved'} />
+              )}
+              {saveStatus === 'error' && (
+                <span className="h-2 w-2 rounded-full bg-red-500" aria-label={lang === 'ar' ? 'فشل الحفظ' : 'Save failed'} />
+              )}
+              <span>
+                {saveStatus === 'saving'
+                  ? lang === 'ar' ? 'جارٍ الحفظ…' : 'Saving…'
+                  : saveStatus === 'error'
+                    ? lang === 'ar' ? 'فشل الحفظ' : 'Save failed'
+                    : hasUnsaved
+                      ? lang === 'ar' ? 'غير محفوظ' : 'Unsaved'
+                      : lastSavedAt
+                        ? `${lang === 'ar' ? 'حُفظ' : 'Saved'} ${new Date(lastSavedAt).toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+                        : lang === 'ar' ? 'محفوظ' : 'Saved'}
+              </span>
+            </span>
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -1057,46 +1312,18 @@ export default function ReportDetailPage() {
         </div>
       )}
 
-      {/* Phase 2.2 (B8): explicit save status — saving / saved / failed+retry */}
-      {saveStatus !== 'idle' && (
+      {/* Save status: saving/saved live ONLY in the header cluster. The error
+          state is a fixed bottom overlay — an in-flow banner here shifts the
+          whole page mid-click (buttons under the cursor move and clicks get
+          swallowed). Never render layout-shifting status UI. */}
+      {saveStatus === 'error' && (
         <div
-          role="status"
-          className={cn(
-            'mb-6 rounded-lg border p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs',
-            saveStatus === 'error'
-              ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-900 dark:text-red-100'
-              : saveStatus === 'saved'
-                ? 'border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-900 dark:text-emerald-100'
-                : 'border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 text-sky-900 dark:text-sky-100'
-          )}
+          role="alert"
+          className="fixed bottom-4 inset-x-4 z-[90] sm:inset-x-auto sm:end-6 sm:max-w-md rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/95 text-red-900 dark:text-red-100 p-3.5 text-xs flex flex-col gap-2.5 shadow-2xl animate-fade-in"
         >
           <div className="flex items-center gap-2">
-            {saveStatus === 'saving' && <Clock className="h-4 w-4 animate-spin shrink-0" />}
-            {saveStatus === 'saved' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
-            {saveStatus === 'error' && <AlertCircle className="h-4 w-4 shrink-0" />}
-            <span className="font-medium">
-              {saveStatus === 'saving' && (lang === 'ar' ? 'جاري حفظ التقرير...' : 'Saving report...')}
-              {saveStatus === 'saved' && (lang === 'ar' ? 'تم حفظ التقرير بنجاح.' : 'Report saved successfully.')}
-              {saveStatus === 'error' && (saveError || saveFailedMessage)}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-            {saveStatus === 'error' && lastFailedSaveRef.current && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const retry = lastFailedSaveRef.current;
-                  lastFailedSaveRef.current = null;
-                  setSaveError(null);
-                  if (retry) void retry();
-                }}
-                className="h-7 text-xs font-semibold gap-1.5"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                <span>{lang === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
-              </Button>
-            )}
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="font-medium flex-1">{saveError || saveFailedMessage}</span>
             <button
               type="button"
               onClick={() => {
@@ -1104,12 +1331,28 @@ export default function ReportDetailPage() {
                 setSaveError(null);
                 lastFailedSaveRef.current = null;
               }}
-              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5"
+              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5 shrink-0"
               title={lang === 'ar' ? 'إخفاء' : 'Dismiss'}
             >
               ×
             </button>
           </div>
+          {lastFailedSaveRef.current && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                const retry = lastFailedSaveRef.current;
+                lastFailedSaveRef.current = null;
+                setSaveError(null);
+                if (retry) void retry();
+              }}
+              className="h-8 text-xs font-semibold gap-1.5 bg-card"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>{lang === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
+            </Button>
+          )}
         </div>
       )}
 
@@ -1194,7 +1437,9 @@ export default function ReportDetailPage() {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveMainTab(tab.id as any)}
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => changeMainTab(tab.id as MainTabKey)}
                 className={cn(
                   'group inline-flex items-center gap-2 py-3 px-3.5 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer rounded-t-lg',
                   isActive
@@ -1562,6 +1807,46 @@ export default function ReportDetailPage() {
                       : 'Anyone with this link can view the report without logging in. The link is not indexed by search engines.'}
                   </div>
                 </div>
+
+                {/* Optional share-link password (owner only, hash stored) */}
+                {isReportOwner && (
+                  <div className="rounded-xl border border-border/80 bg-muted/30 p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+                      <Lock className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+                      <span>{lang === 'ar' ? 'كلمة سر اختيارية للرابط' : 'Optional link password'}</span>
+                      {report.sharePasswordHash && (
+                        <Badge variant="outline" className="text-[10px] bg-emerald-100 dark:bg-emerald-900 border-emerald-300">
+                          {lang === 'ar' ? 'مفعّلة' : 'On'}
+                        </Badge>
+                      )}
+                    </div>
+                    {report.sharePasswordHash ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground">
+                          {lang === 'ar' ? 'الزوار يحتاجون كلمة السر لفتح الصفحة والتصدير.' : 'Visitors need the password to open and export.'}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={sharingAction}
+                          onClick={handleRemoveSharePassword}
+                          className="h-7 text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950 shrink-0"
+                        >
+                          {lang === 'ar' ? 'إزالة' : 'Remove'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <SharePasswordForm
+                        lang={lang}
+                        draft={sharePwdDraft}
+                        onDraft={setSharePwdDraft}
+                        onSubmit={() => void handleSetSharePassword()}
+                        busy={sharingAction}
+                      />
+                    )}
+                  </div>
+                )}
 
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   {isReportOwner ? (

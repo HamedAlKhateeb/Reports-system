@@ -300,6 +300,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     const normalizedEmail = email.trim().toLowerCase();
 
+    // Strong password gate (client + local): Firebase alone only requires 6
+    // chars. Evaluate first so weak passwords never create shadow accounts.
+    try {
+      const { evaluateAccountPassword } = await import('./password-policy');
+      if (!evaluateAccountPassword(pass || '').passed) {
+        const err: any = new Error('Password does not meet the strength policy');
+        err.code = 'auth/weak-password';
+        throw err;
+      }
+    } catch (e: any) {
+      if (e?.code === 'auth/weak-password') {
+        setLoading(false);
+        throw e;
+      }
+      // Policy module failed to load — fall through to Firebase's own check.
+    }
     try {
       await isUserAuthorized(normalizedEmail);
 

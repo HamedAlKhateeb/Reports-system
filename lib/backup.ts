@@ -8,7 +8,7 @@ import {
   getReports,
   type ScopeOpts,
 } from './db';
-import type { CommentItem, FolderItem, IssueItem, ReportImageItem, ReportItem } from './types';
+import type { CommentItem, FolderItem, IssueItem, ReportImageItem, ReportItem, TableEntity } from './types';
 
 export const BACKUP_VERSION = 1;
 export const BACKUP_KIND = 'review-reports-backup';
@@ -18,12 +18,13 @@ export interface BackupFile {
   version: number;
   exportedAt: string;
   exportedByUid: string;
-  counts: { reports: number; folders: number; issues: number; images: number; comments: number };
+  counts: { reports: number; folders: number; issues: number; images: number; comments: number; tables: number };
   reports: ReportItem[];
   folders: FolderItem[];
   issues: IssueItem[];
   images: ReportImageItem[];
   comments: Array<CommentItem & { issueId: string }>;
+  tables: TableEntity[];
 }
 
 export interface BackupProgress {
@@ -68,12 +69,14 @@ function validateBackupFile(raw: unknown): BackupFile {
       issues: f.issues!.length,
       images: Array.isArray(f.images) ? f.images.length : 0,
       comments: Array.isArray(f.comments) ? f.comments.length : 0,
+      tables: Array.isArray((f as Partial<BackupFile>).tables) ? (f as Partial<BackupFile>).tables!.length : 0,
     },
     reports: f.reports,
     folders: f.folders,
     issues: f.issues,
     images: Array.isArray(f.images) ? f.images : [],
     comments: Array.isArray(f.comments) ? f.comments : [],
+    tables: Array.isArray((f as Partial<BackupFile>).tables) ? (f as Partial<BackupFile>).tables as TableEntity[] : [],
   };
 }
 
@@ -142,18 +145,32 @@ export async function buildUserBackup(
       list.forEach((c) => comments.push({ ...c, issueId: iss.id }));
     } catch {}
   }
+  // Canonical tables (SmartTable entities) — previously missing from backups,
+  // which silently dropped every spreadsheet on restore. Read via the same
+  // canonical getTablesByReportId used by exports.
+  const tables: TableEntity[] = [];
+  try {
+    const { getTablesByReportId } = await import('./db-intelligence');
+    for (const r of reports) {
+      try {
+        const t = await getTablesByReportId(r.id);
+        tables.push(...t);
+      } catch {}
+    }
+  } catch {}
   onProgress?.({ stage: 'done', done: 4, total: 4 });
   return {
     kind: BACKUP_KIND,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     exportedByUid: userUid,
-    counts: { reports: reports.length, folders: folders.length, issues: issues.length, images: images.length, comments: comments.length },
+    counts: { reports: reports.length, folders: folders.length, issues: issues.length, images: images.length, comments: comments.length, tables: tables.length },
     reports,
     folders,
     issues,
     images,
     comments,
+    tables,
   };
 }
 
@@ -176,7 +193,7 @@ export function downloadBackup(file: BackupFile, lang: string): void {
 }
 
 async function restoreToFirestore(uid: string, file: BackupFile, onProgress?: (p: BackupProgress) => void): Promise<void> {
-  const total = file.folders.length + file.reports.length + file.issues.length + file.images.length + file.comments.length;
+  const total = file.folders.length + file.reports.length + file.issues.length + file.images.length + file.comments.length + (file.tables?.length || 0);
   let done = 0;
   const tick = (stage: string) => {
     done++;
@@ -222,6 +239,13 @@ async function restoreToFirestore(uid: string, file: BackupFile, onProgress?: (p
     await setDoc(doc(db!, 'issues', issueId, 'comments', id), payload, { merge: true });
     tick('comments');
   }
+  for (const t of file.tables || []) {
+    const id = String((t as TableEntity).id || '');
+    if (!id) { tick('tables'); continue; }
+    const payload = sanitizeForFirestore({ ...(t as object) });
+    await setDoc(doc(db!, 'tables', id), payload, { merge: true });
+    tick('tables');
+  }
 }
 
 function restoreToLocal(uid: string, file: BackupFile): void {
@@ -248,6 +272,12 @@ function restoreToLocal(uid: string, file: BackupFile): void {
   getLocal<ReportImageItem[]>(imKey, []).forEach((m) => mergedImages.set(m.id, m));
   file.images.forEach((m) => mergedImages.set(m.id, { ...m }));
   setLocal(imKey, Array.from(mergedImages.values()));
+
+  const tKey = `review_app_mock_tables`;
+  const mergedTables = new Map<string, TableEntity>();
+  getLocal<TableEntity[]>(tKey, []).forEach((t) => mergedTables.set(t.id, t));
+  (file.tables || []).forEach((t) => mergedTables.set(t.id, { ...t }));
+  setLocal(tKey, Array.from(mergedTables.values()));
   // Comments live inside Firestore subcollections; on the local path they are
   // embedded in issue docs by the app — no separate restore needed.
 }

@@ -14,6 +14,7 @@ import {
   ExternalLink,
   ShieldCheck,
   CheckCircle2,
+  Lock,
 } from 'lucide-react';
 import { getReportByShareToken, getTableById } from '@/lib/db';
 import { renderLatexToHtml, renderTextWithLatexToHtml } from '@/lib/latex';
@@ -26,6 +27,7 @@ import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
 import { formatWhatsAppUrl } from '@/lib/contact-links';
 import { Button } from '@/components/ui/button';
+import { toast } from '@/components/ui/toast';
 import { PageLoading } from '@/components/ui/loading';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -38,9 +40,16 @@ export default function SharedReportPage() {
   const [report, setReport] = useState<ReportItem | null>(null);
   const [images, setImages] = useState<ReportImageItem[]>([]);
   const [smartTables, setSmartTables] = useState<Record<string, TableEntity>>({});
+  const [mindmapSnaps, setMindmapSnaps] = useState<Record<string, { dataUrl: string; width?: number; height?: number }>>({});
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  // Optional share password (plaintext lives in memory only, for exports).
+  const [locked, setLocked] = useState(false);
+  const [sharePassword, setSharePassword] = useState('');
+  const [pwdInput, setPwdInput] = useState('');
+  const [pwdError, setPwdError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
 
   useEffect(() => {
     async function loadSharedReport() {
@@ -55,6 +64,15 @@ export default function SharedReportPage() {
         if (data && data.report) {
           setReport(data.report);
           setImages(data.images || []);
+          // Password gate: sessionStorage remembers the unlock per tab only.
+          try {
+            const needsPwd = typeof (data.report as any)?.sharePasswordHash === 'string' && (data.report as any).sharePasswordHash;
+            const remembered = sessionStorage.getItem(`share_unlock_${token}`) === '1';
+            setLocked(!!needsPwd && !remembered);
+            if (!needsPwd) setSharePassword('');
+          } catch {
+            setLocked(false);
+          }
           const tableIds = findSmartTableIds(data.report.contentJson);
           const tables = await Promise.all(tableIds.map((id) => getTableById(id)));
           setSmartTables(
@@ -63,6 +81,13 @@ export default function SharedReportPage() {
               return result;
             }, {})
           );
+          // Mind-maps render as PNG images (same snapshot pipeline as exports).
+          try {
+            const { snapshotMindmaps } = await import('@/lib/mindmap-export');
+            setMindmapSnaps(await snapshotMindmaps(data.report.contentJson));
+          } catch {
+            setMindmapSnaps({});
+          }
         } else {
           setNotFound(true);
         }
@@ -77,13 +102,35 @@ export default function SharedReportPage() {
     loadSharedReport();
   }, [token]);
 
+  const handleUnlock = async () => {
+    if (!report || !pwdInput) return;
+    setUnlocking(true);
+    setPwdError(null);
+    try {
+      const { sha256Hex, safeEqualHex } = await import('@/lib/share-password');
+      const ok = safeEqualHex(await sha256Hex(pwdInput), String((report as any)?.sharePasswordHash || ''));
+      if (!ok) {
+        setPwdError(report.language === 'ar' ? 'كلمة السر غير صحيحة' : 'Incorrect password');
+        return;
+      }
+      try {
+        sessionStorage.setItem(`share_unlock_${token}`, '1');
+      } catch {}
+      setSharePassword(pwdInput);
+      setPwdInput('');
+      setLocked(false);
+    } finally {
+      setUnlocking(false);
+    }
+  };
+
   const handleExport = async (format: 'docx' | 'pdf') => {
-    if (!report) return;
+    if (!report || locked) return;
     try {
       setExporting(format);
 
       if (format === 'pdf') {
-        printReportAsPdf(report, images);
+        printReportAsPdf(report, images, [], mindmapSnaps);
         setExporting(null);
         return;
       }
@@ -94,9 +141,11 @@ export default function SharedReportPage() {
         body: JSON.stringify({
           report,
           images,
+          mindmaps: mindmapSnaps,
           // Phase 1.5 (B2): public-link export path — the server allows
           // this only when report.isShared and the token matches.
           shareToken: token,
+          sharePassword: sharePassword || undefined,
         }),
       });
 
@@ -119,7 +168,7 @@ export default function SharedReportPage() {
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error('Export error:', err);
-      alert((report.language === 'ar' ? 'فشل التصدير: ' : 'Export failed: ') + err.message);
+      toast.error((report.language === 'ar' ? 'فشل التصدير: ' : 'Export failed: ') + err.message);
     } finally {
       setExporting(null);
     }
@@ -155,6 +204,43 @@ export default function SharedReportPage() {
   }
 
   const isAr = report.language === 'ar';
+
+  if (locked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4" dir={isAr ? 'rtl' : 'ltr'}>
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300">
+            <Lock className="h-7 w-7" />
+          </div>
+          <h1 className="text-lg font-bold text-foreground mb-1">
+            {isAr ? 'هذا التقرير محمي بكلمة سر' : 'This report is password-protected'}
+          </h1>
+          <p className="text-xs text-muted-foreground mb-4 leading-relaxed">
+            {isAr ? 'أدخل كلمة السر التي زودك بها مُعدّ التقرير للاطلاع عليه.' : 'Enter the password provided by the report owner to view it.'}
+          </p>
+          <input
+            type="password"
+            value={pwdInput}
+            onChange={(e) => { setPwdInput(e.target.value); setPwdError(null); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') void handleUnlock(); }}
+            placeholder={isAr ? 'كلمة السر' : 'Password'}
+            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:border-teal-600 mb-2"
+            autoFocus
+          />
+          {pwdError && <div className="text-xs text-destructive mb-2 font-semibold">{pwdError}</div>}
+          <Button
+            type="button"
+            onClick={() => void handleUnlock()}
+            disabled={unlocking || !pwdInput}
+            className="w-full h-9 rounded-xl bg-[#2E4034] text-white hover:bg-[#24382F] text-sm font-semibold disabled:opacity-50"
+          >
+            {unlocking ? (isAr ? 'جاري التحقق...' : 'Verifying...') : (isAr ? 'فتح التقرير' : 'Unlock report')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   const theme = getReportTheme(report.themeColor || 'olive');
   const bg = getReportBackground(report.backgroundColor || 'white');
 
@@ -346,7 +432,7 @@ export default function SharedReportPage() {
           <div
             className="prose dark:prose-invert max-w-none report-content-view leading-relaxed"
             dangerouslySetInnerHTML={{
-              __html: renderTipTapContentToHtml(report.contentJson, isAr, images, theme, smartTables),
+              __html: renderTipTapContentToHtml(report.contentJson, isAr, images, theme, smartTables, mindmapSnaps),
             }}
           />
 
@@ -461,16 +547,17 @@ function renderTipTapContentToHtml(
   images: ReportImageItem[] = [],
   theme: { primary: string; accent: string; light: string; border: string },
   smartTables: Record<string, TableEntity> = {},
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
   docRef?: any
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, node)).join('');
+      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, node)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       return `<p class="mb-3 leading-relaxed">${content || '&nbsp;'}</p>`;
     }
 
@@ -512,7 +599,7 @@ function renderTipTapContentToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       if (level === 1) {
         return `<h2 class="text-xl font-bold mt-6 mb-3 pb-2 border-b" style="color: ${theme.primary}; border-color: ${theme.border};">${content}</h2>`;
       }
@@ -523,22 +610,22 @@ function renderTipTapContentToHtml(
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       return `<ul class="list-disc ps-6 mb-4 space-y-1">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       return `<ol class="list-decimal ps-6 mb-4 space-y-1">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       return `<li>${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       return `<blockquote class="border-s-4 ps-4 py-1 my-3 rounded italic text-muted-foreground" style="border-color: ${theme.primary}; background-color: ${theme.light};">${content}</blockquote>`;
     }
 
@@ -574,7 +661,7 @@ function renderTipTapContentToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables, docRef)).join('');
+          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let severityBg = '';
@@ -674,6 +761,11 @@ function renderTipTapContentToHtml(
     case 'reportMindmap': {
       const title = String(node.attrs?.title || (isAr ? 'خريطة ذهنية' : 'Mind map'));
       const caption = String(node.attrs?.caption || '').trim();
+      const capHtml = caption ? `<div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(caption)}</div>` : '';
+      const snap = node.attrs?.mindmapId ? mindmaps[String(node.attrs.mindmapId)] : undefined;
+      if (snap?.dataUrl) {
+        return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">🧠 ${escapeHtml(title)}</div><img src="${snap.dataUrl}" alt="${escapeHtml(title)}" class="mx-auto mt-2 h-auto max-w-full rounded-lg" />${capHtml}</figure>`;
+      }
       let bodyHtml = '';
       try {
         const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
@@ -683,13 +775,12 @@ function renderTipTapContentToHtml(
       } catch {
         bodyHtml = '';
       }
-      const capHtml = caption ? `<div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(caption)}</div>` : '';
       return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">🧠 ${escapeHtml(title)}</div><div class="mt-2 text-start text-xs">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
     default:
       if (node.content) {
-        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, docRef)).join('');
+        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
       }
       return '';
   }

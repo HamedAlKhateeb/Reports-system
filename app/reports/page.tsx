@@ -57,7 +57,10 @@ import {
   archiveReport,
   unarchiveReport,
   isArchivedReport,
+  isArchivedIssue,
+  getIssuesByReportId,
 } from '@/lib/db';
+import { toast } from '@/components/ui/toast';
 import { ReportItem, FolderItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
@@ -166,7 +169,7 @@ export default function ReportsPage() {
       return;
     }
     try {
-      const all = await getReports(user.uid, undefined, { includeArchived: true });
+      const all = await getReports(user.uid, user.email, { includeArchived: true });
       setArchivedReports(all.filter(isArchivedReport));
     } catch (err) {
       console.error('Failed to load archived reports', err);
@@ -197,7 +200,19 @@ export default function ReportsPage() {
     e.preventDefault();
     e.stopPropagation();
     if (!user) return;
-    if (!(await askConfirm(isAr ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report? It will leave all lists and can be restored later.'))) {
+    // Validate first: count open issues so the confirm states real effects.
+    let openCount = 0;
+    try {
+      openCount = (await getIssuesByReportId(id, user.uid)).length;
+    } catch {}
+    const confirmMsg = isAr
+      ? openCount > 0
+        ? `أرشفة هذا التقرير؟ سيختفي من القوائم، وستُؤرشف معه ${openCount} مشكلة مفتوحة. الاستعادة لاحقًا تعيد التقرير فقط — المشاكل تبقى مؤرشفة.`
+        : 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا (المشاكل المؤرشفة معه سابقًا تبقى مؤرشفة).'
+      : openCount > 0
+        ? `Archive this report? It will leave all lists, and ${openCount} open issue(s) will be archived with it. Restoring later brings back the report only — issues stay archived.`
+        : 'Archive this report? It will leave all lists and can be restored later (issues archived with it stay archived).';
+    if (!(await askConfirm(confirmMsg))) {
       return;
     }
     try {
@@ -207,6 +222,7 @@ export default function ReportsPage() {
         setDeleteError(isAr ? 'فشل الأرشفة.' : 'Archive failed.');
         return;
       }
+      toast.success(isAr ? `تمت الأرشفة${res.archivedIssues ? ` مع ${res.archivedIssues} مشكلة` : ''}` : `Archived${res.archivedIssues ? ` with ${res.archivedIssues} issue(s)` : ''}`);
       const [updatedReports] = await Promise.all([
         getReports(user.uid),
         loadArchived(),
@@ -223,6 +239,10 @@ export default function ReportsPage() {
     e.preventDefault();
     e.stopPropagation();
     if (!user) return;
+    // Restore never cascades (explicit per-item restore only) — say so first.
+    if (!(await askConfirm(isAr ? 'استعادة هذا التقرير؟ سيعود للقوائم، لكن المشاكل التي أُرشفت معه تبقى مؤرشفة — استعدها من الأرشيف كل على حدة.' : 'Restore this report? It returns to lists, but issues archived with it stay archived — restore them individually from the archive.'))) {
+      return;
+    }
     try {
       setArchivingId(id);
       const res = await unarchiveReport(id, user.uid);
@@ -266,8 +286,8 @@ export default function ReportsPage() {
       // Perf: single reports fan-out — split active/archived locally instead of
       // fetching getReports() twice (each call fans out to shared+folder queries).
       const [allReports, foldersData] = await Promise.all([
-        getReports(user.uid, undefined, { includeArchived: true }),
-        getFolders(user.uid),
+        getReports(user.uid, user.email, { includeArchived: true }),
+        getFolders(user.uid, user.email),
       ]);
       setReports(allReports.filter((r) => !isArchivedReport(r)));
       setFolders(foldersData);
@@ -474,7 +494,30 @@ export default function ReportsPage() {
     e.stopPropagation();
     setDeleteError(null);
 
-    if (!(await askConfirm(t('deleteReportConfirm')))) {
+    // Validate BEFORE confirm: never ask, then discover it's impossible.
+    let activeCount = 0;
+    let archivedCount = 0;
+    try {
+      const linked = await getIssuesByReportId(id, user?.uid, { includeArchived: true });
+      activeCount = linked.filter((i) => !isArchivedIssue(i)).length;
+      archivedCount = linked.length - activeCount;
+    } catch {}
+    if (activeCount > 0) {
+      setDeleteError(
+        isAr
+          ? `لا يمكن الحذف: توجد ${activeCount} مشكلة نشطة مرتبطة. أرشف التقرير أولًا (سيؤرشفها معه) ثم احذفه.`
+          : `Cannot delete: ${activeCount} active linked issue(s). Archive the report first (it archives them too), then delete.`
+      );
+      return;
+    }
+    const confirmMsg = isAr
+      ? archivedCount > 0
+        ? `حذف نهائي؟ سيُحذف التقرير مع ${archivedCount} مشكلة مؤرشفة وصوره وجداوله نهائيًا. لا يمكن التراجع.`
+        : 'حذف نهائي؟ سيُحذف التقرير مع صوره وجداوله نهائيًا. لا يمكن التراجع.'
+      : archivedCount > 0
+        ? `Delete permanently? The report, its ${archivedCount} archived issue(s), images and tables will be gone forever.`
+        : 'Delete permanently? The report with its images and tables will be gone forever.';
+    if (!(await askConfirm(confirmMsg))) {
       return;
     }
 
@@ -492,6 +535,7 @@ export default function ReportsPage() {
       setReports((prev) => prev.filter((r) => r.id !== id));
       // Keep the archive view consistent when deleting from it.
       setArchivedReports((prev) => prev.filter((r) => r.id !== id));
+      toast.success(isAr ? 'تم حذف التقرير' : 'Report deleted');
     } catch (err: any) {
       console.error('Delete error:', err);
       setDeleteError(err?.message || 'Failed to delete report');
@@ -530,7 +574,7 @@ export default function ReportsPage() {
       }
     } catch (err: any) {
       console.error('Failed to create folder:', err);
-      alert((isAr ? 'فشل إنشاء المجلد: ' : 'Failed to create folder: ') + err?.message);
+      toast.error((isAr ? 'فشل إنشاء المجلد: ' : 'Failed to create folder: ') + err?.message);
     } finally {
       setCreatingFolder(false);
     }
@@ -547,7 +591,7 @@ export default function ReportsPage() {
       setFolderToEdit(null);
     } catch (err: any) {
       console.error('Failed to rename folder:', err);
-      alert((isAr ? 'فشل إعادة تسمية المجلد: ' : 'Failed to rename folder: ') + err?.message);
+      toast.error((isAr ? 'فشل إعادة تسمية المجلد: ' : 'Failed to rename folder: ') + err?.message);
     } finally {
       setSavingFolder(false);
     }
@@ -570,7 +614,7 @@ export default function ReportsPage() {
       setFolderToDelete(null);
     } catch (err: any) {
       console.error('Failed to delete folder:', err);
-      alert((isAr ? 'فشل حذف المجلد: ' : 'Failed to delete folder: ') + err?.message);
+      toast.error((isAr ? 'فشل حذف المجلد: ' : 'Failed to delete folder: ') + err?.message);
     } finally {
       setDeletingFolder(false);
     }
@@ -685,6 +729,23 @@ export default function ReportsPage() {
   });
 
   const currentFolder = folders.find((f) => f.id === selectedFolderId);
+
+  // Explicit sort (Phase-8): the report number is an identity, not a date.
+  type ReportSortKey = 'newest' | 'oldest' | 'name' | 'number';
+  const [sortKey, setSortKey] = useState<ReportSortKey>('newest');
+  const sortedReports = [...filteredReports].sort((a, b) => {
+    switch (sortKey) {
+      case 'oldest':
+        return new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime();
+      case 'name':
+        return String(a.title || '').localeCompare(String(b.title || ''), isAr ? 'ar' : 'en');
+      case 'number':
+        return Number(a.reportNumber || 0) - Number(b.reportNumber || 0);
+      case 'newest':
+      default:
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    }
+  });
 
   const templateOptions = [
     {
@@ -913,6 +974,21 @@ export default function ReportsPage() {
                 </button>
               )}
             </div>
+            {/* Explicit sort: number is identity, not date */}
+            <label className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-card px-2 text-xs font-semibold text-muted-foreground shadow-2xs">
+              <span className="hidden sm:inline">{isAr ? 'ترتيب:' : 'Sort:'}</span>
+              <select
+                value={sortKey}
+                onChange={(e) => setSortKey(e.target.value as ReportSortKey)}
+                className="h-full bg-transparent text-xs font-semibold text-foreground focus:outline-none cursor-pointer"
+                aria-label={isAr ? 'ترتيب التقارير' : 'Sort reports'}
+              >
+                <option value="newest">{isAr ? 'الأحدث' : 'Newest'}</option>
+                <option value="oldest">{isAr ? 'الأقدم' : 'Oldest'}</option>
+                <option value="name">{isAr ? 'الاسم' : 'Name'}</option>
+                <option value="number">{isAr ? 'رقم التقرير' : 'Report number'}</option>
+              </select>
+            </label>
             {/* Archive lifecycle view toggle */}
             <Button
               type="button"
@@ -994,7 +1070,7 @@ export default function ReportsPage() {
             </Empty>
           ) : (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredReports.map((report) => {
+              {sortedReports.map((report) => {
                 const reportDate = new Date(report.updatedAt || report.createdAt);
                 const dateStr = reportDate.toLocaleDateString(isAr ? 'ar-EG' : 'en-US', {
                   year: 'numeric',
@@ -1050,6 +1126,11 @@ export default function ReportsPage() {
                             <Badge variant="outline" className="gap-1 text-[10px] border-amber-300 text-amber-700 dark:text-amber-300">
                               <Archive className="size-3" />
                               <span>{isAr ? 'مؤرشف' : 'Archived'}</span>
+                            </Badge>
+                          )}
+                          {user && report.ownerUid !== user.uid && (
+                            <Badge variant="outline" className="gap-1 text-[10px] border-teal-300 text-teal-700 dark:text-teal-300">
+                              <span>{isAr ? 'مشترك معي' : 'Shared with me'}</span>
                             </Badge>
                           )}
                         </div>

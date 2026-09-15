@@ -139,6 +139,26 @@ export function expandRange(rangeStr: string): string[] {
 }
 
 /**
+ * Production fix B14: reports whether a range string exceeds the safety cap
+ * (without materializing it). Exporters/editors can use this for warnings.
+ */
+export function isRangeTruncated(rangeStr: string): boolean {
+  try {
+    const parts = String(rangeStr || '').split(':');
+    if (parts.length !== 2) return false;
+    const start = parseCellRef(parts[0].trim());
+    const end = parseCellRef(parts[1].trim());
+    if (!start || !end) return false;
+    const total =
+      (Math.abs(end.colIndex - start.colIndex) + 1) *
+      (Math.abs(end.rowNumber - start.rowNumber) + 1);
+    return total > MAX_RANGE_CELLS;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Phase 3.2 (B10): returns true when the token ending at `endPos` in
  * `formula` is a function call, i.e. the next non-space char is `(`.
  * Guards remappers against rewriting names like LOG10 as cell refs.
@@ -156,10 +176,19 @@ export function isFunctionCallAt(formula: string, endPos: number): boolean {
 export function adjustFormula(formula: string, dRow: number, dCol: number): string {
   if (!formula.startsWith('=')) return formula;
 
+  // Production fix B07: never rewrite references inside quoted string
+  // literals (e.g. ="A1" must stay literal on autofill/copy).
+  // Same §S§ protection as remapFormulaRefs.
+  const strings: string[] = [];
+  let working = formula.replace(/"([^"]*)"/g, (_m, s: string) => {
+    strings.push(s as string);
+    return `"§S${strings.length - 1}§"`;
+  });
+
   // Regex matches cell references like $A$1, A$1, $A1, A1, with optional range colons
   const cellRegex = /(\$?)([A-Za-z]+)(\$?)([0-9]+)/g;
 
-  return formula.replace(cellRegex, (match, colPrefix, colLetters, rowPrefix, rowDigits, offset, full) => {
+  working = working.replace(cellRegex, (match, colPrefix, colLetters, rowPrefix, rowDigits, offset, full) => {
     // Phase 3.2 (B10): never rewrite function names containing digits
     // (LOG10, ...). A letters+digits token followed by `(` is a call.
     if (isFunctionCallAt(full, offset + match.length)) return match;
@@ -183,6 +212,9 @@ export function adjustFormula(formula: string, dRow: number, dCol: number): stri
     const newColName = colIndexToName(colIdx);
     return `${isColAbsolute ? '$' : ''}${newColName}${isRowAbsolute ? '$' : ''}${rowNum}`;
   });
+
+  working = working.replace(/§S(\d+)§/g, (_m, i: string) => strings[parseInt(i, 10)] ?? '');
+  return working;
 }
 
 /**
@@ -738,9 +770,22 @@ export class FormulaEvaluator {
     return !isNaN(num) && typeof raw !== 'boolean' ? num : raw;
   }
 
-  // Resolve range into array of values
+  // Resolve range into array of values.
+  // Production fix B14: a range exceeding MAX_RANGE_CELLS no longer
+  // silently evaluates to 0 (SUM([])===0). It resolves to [#VALUE!] so
+  // every aggregate propagates an explicit Excel error instead of a
+  // wrong financial number.
   private resolveRange(rangeStr: string): any[] {
+    if (isRangeTruncated(rangeStr)) return [ERROR_VALUES.VALUE];
     const cells = expandRange(rangeStr);
+    // Empty + non-truncated means invalid range syntax → also an error
+    // (prevents SUM(A1:) style typos from reading as 0).
+    if (cells.length === 0) {
+      const parts = String(rangeStr || '').split(':');
+      if (parts.length === 2 && parseCellRef(parts[0].trim()) && parseCellRef(parts[1].trim())) {
+        return [ERROR_VALUES.VALUE];
+      }
+    }
     return cells.map((c) => this.resolveCell(c));
   }
 
@@ -807,8 +852,9 @@ export class FormulaEvaluator {
       }
 
       case 'COUNT': {
-        // Counts only numeric values
-        return flat.filter((v) => typeof v === 'number' || (!isNaN(Number(v)) && v !== '' && typeof v !== 'boolean')).length;
+        // Production fix: Excel COUNT counts true numbers only — numeric
+        // strings ("5") belong to COUNTA, not COUNT.
+        return flat.filter((v) => typeof v === 'number' && Number.isFinite(v)).length;
       }
 
       case 'COUNTA': {

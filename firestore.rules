@@ -74,8 +74,27 @@ service cloud.firestore {
     }
 
     function collaboratorSafeIssueUpdate() {
+      // Archive lifecycle stays owner/report-owner-only: collaborators may
+      // edit content but NEVER ownership/linkage/archival fields.
       return !request.resource.data.diff(resource.data).affectedKeys().hasAny(
-        ['ownerUid', 'linkedReportId', 'reportId']
+        ['ownerUid', 'linkedReportId', 'reportId', 'archived_at', 'archivedAt']
+      );
+    }
+
+    // Archive/restore/delete stay OWNER-ONLY, except the report owner may
+    // archive/restore issues linked to THEIR report (cascade when a report
+    // is archived). Only archival timestamps + updatedAt may change on that
+    // path — never ownership/linkage/content.
+    function isArchiveOnlyIssueChange() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+        ['archived_at', 'archivedAt', 'updatedAt']
+      );
+    }
+
+    function canArchiveIssue(data) {
+      return isAuthenticated() && (
+        data.ownerUid == request.auth.uid
+        || (issueReportId(data) != '' && ownsReport(issueReportId(data)))
       );
     }
 
@@ -111,6 +130,19 @@ service cloud.firestore {
 
     function ownsParentReport(data) {
       return ownsReport(parentReportId(data));
+    }
+
+    // Production fix B02: table creation requires WRITE access to the parent
+    // report (owner, direct invitee, or folder collaborator). The old rule
+    // allowed any READER (including anonymous public-link readers) to create
+    // tables under a public report. Note: no collaboratorSafe* diff check on
+    // create (resource doesn't exist yet) — parent linkage is enough.
+    function canCreateTableFor(parentData) {
+      return isAuthenticated() && (
+        parentData.ownerUid == request.auth.uid
+        || hasCallerEmail(parentData)
+        || (parentData.folderId is string && isFolderCollaborator(parentData.folderId))
+      );
     }
 
     function ownsIssue(issueId) {
@@ -195,7 +227,9 @@ service cloud.firestore {
     // Issues collection & comments subcollection
     // Collaboration: users with access to the LINKED report (B: only issues
     // linked to accessible reports are visible) may read/comment/edit, but
-    // never reassign ownership/linkage, and never delete (owner-only).
+    // never reassign ownership/linkage/archival, and never delete (owner-only).
+    // Archive/restore: issue owner OR the linked report's owner (cascade),
+    // archival fields only.
     match /issues/{issueId} {
       allow get, list: if canReadIssue(resource.data);
       allow create: if owns(request.resource.data)
@@ -203,7 +237,8 @@ service cloud.firestore {
           && (hasCallerEmail(reportDataOf(issueReportId(request.resource.data)))
             || (reportDataOf(issueReportId(request.resource.data)).folderId is string
               && isFolderCollaborator(reportDataOf(issueReportId(request.resource.data)).folderId))));
-      allow update: if owns(resource.data) || canWriteIssue(resource.data);
+      allow update: if owns(resource.data) || canWriteIssue(resource.data)
+        || (canArchiveIssue(resource.data) && isArchiveOnlyIssueChange());
       allow delete: if owns(resource.data);
 
       match /comments/{commentId} {
@@ -257,7 +292,7 @@ service cloud.firestore {
       // Public sharing may fetch a table by its known id only; listing remains private.
       allow get: if canReadReport(reportDataOf(parentReportId(resource.data)));
       allow list: if canReadReport(reportDataOf(parentReportId(resource.data)));
-      allow create: if canReadReport(reportDataOf(parentReportId(request.resource.data)));
+      allow create: if canCreateTableFor(reportDataOf(parentReportId(request.resource.data)));
       allow update: if ownsParentReport(resource.data)
         || canWriteReport(reportDataOf(parentReportId(resource.data)));
       allow delete: if ownsParentReport(resource.data);

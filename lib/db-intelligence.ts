@@ -355,43 +355,235 @@ export async function addEvidence(evidence: Omit<EvidenceItem, 'id' | 'created_a
 // 5. STRUCTURED TABLES
 // ==========================================
 
+/**
+ * Bounds any Firestore await: the sheet init path must never hang on a
+ * slow/denied network (was: unbounded awaits → intermittent eternal
+ * loading). On timeout the local mirror (sidecar-included) answers.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('firestore-timeout')), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 export async function getTablesByReportId(reportId: string): Promise<TableEntity[]> {
   if (!reportId) return [];
+
+  const merged = new Map<string, TableEntity>();
+  const putLocal = (t: TableEntity) => {
+    if (!t || !t.id) return;
+    attachSidecar(t);
+    if (isTombed(t.id, tableUpdatedAt(t))) return;
+    const prev = merged.get(t.id) || null;
+    merged.set(t.id, pickFreshestTable(prev, t) as TableEntity);
+  };
 
   if (isFirebaseConfigured && db) {
     try {
       const q = query(collection(db, 'tables'), where('report_id', '==', reportId));
-      const snap = await getDocs(q);
+      const snap = await withTimeout(getDocs(q), 8000);
       if (!snap.empty) {
-        return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TableEntity));
+        snap.docs.forEach((d) => {
+          const rec = { id: d.id, ...d.data() } as TableEntity;
+          attachSidecar(rec);
+          if (!isTombed(rec.id, tableUpdatedAt(rec))) merged.set(rec.id, rec);
+        });
       }
     } catch {}
   }
 
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
-  return all.filter((t) => t.report_id === reportId || t.reportId === reportId);
+  all
+    .filter((t) => t.report_id === reportId || t.reportId === reportId)
+    .forEach((t) => putLocal({ ...t }));
+
+  return Array.from(merged.values());
+}
+
+// Univer snapshots live in a sidecar key per table so one large sheet can
+// never blow the localStorage quota for the whole tables array (which used
+// to silently drop saves). Firestore keeps the full record; the sidecar is
+// the local-only fallback.
+const tableSnapshotKey = (tableId: string) => `${LOCAL_TABLES_KEY}_snapshot_${tableId}`;
+
+function readSnapshotSidecar(tableId: string): any | undefined {
+  if (typeof window === 'undefined' || !tableId) return undefined;
+  try {
+    const raw = localStorage.getItem(tableSnapshotKey(tableId));
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.sheets) return parsed;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function slimRecord(record: TableEntity): TableEntity {
+  const { univerSnapshot: _drop, ...rest } = record as any;
+  void _drop;
+  return rest as TableEntity;
+}
+
+/**
+ * Freshest-wins: a failed/slow Firestore write must never resurrect stale
+ * server state over a newer local edit (was: remote-first → cleared cells
+ * and deletes "came back" on reload). Tombstones make deletes stick when
+ * the remote delete silently fails.
+ */
+function tableUpdatedAt(t: TableEntity | null | undefined): number {
+  try {
+    const v = (t as any)?.updated_at || (t as any)?.updatedAt || 0;
+    const n = new Date(v).getTime();
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function pickFreshestTable(a: TableEntity | null, b: TableEntity | null): TableEntity | null {
+  if (!a) return b;
+  if (!b) return a;
+  // Tie (same save stamped both copies) → local (has sidecar attached).
+  return tableUpdatedAt(b) > tableUpdatedAt(a) ? b : a;
+}
+
+const LOCAL_TABLE_TOMBS_KEY = 'review_app_mock_tables_deleted';
+
+/** Session-level delete guard: blocks the Univer unmount-flush from
+ *  re-saving a table that was just deleted (its new timestamp would
+ *  otherwise defeat the tombstone and "resurrect" the values). */
+const sessionDeletedTables = new Set<string>();
+
+/** True when this session deleted the table — any further save must be skipped. */
+export function isTableDeletedInSession(tableId: string): boolean {
+  return !!tableId && sessionDeletedTables.has(tableId);
+}
+
+/** Clears the session delete guard (explicit re-create with the same id). */
+export function clearTableTombForRecreate(tableId: string): void {
+  try {
+    sessionDeletedTables.delete(tableId);
+    if (typeof window !== 'undefined') {
+      const tombs = readTombs();
+      if (tombs[tableId] !== undefined) {
+        delete tombs[tableId];
+        localStorage.setItem(LOCAL_TABLE_TOMBS_KEY, JSON.stringify(tombs));
+      }
+    }
+  } catch {}
+}
+
+function readTombs(): Record<string, number> {
+  try {
+    if (typeof window === 'undefined') return {};
+    const raw = localStorage.getItem(LOCAL_TABLE_TOMBS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeTomb(tableId: string): void {
+  try {
+    if (typeof window === 'undefined' || !tableId) return;
+    const tombs = readTombs();
+    tombs[tableId] = Date.now();
+    const keys = Object.keys(tombs);
+    // Cap: keep the newest 200 tombstones.
+    if (keys.length > 200) {
+      keys
+        .sort((x, y) => (tombs[x] || 0) - (tombs[y] || 0))
+        .slice(0, keys.length - 200)
+        .forEach((k) => delete tombs[k]);
+    }
+    localStorage.setItem(LOCAL_TABLE_TOMBS_KEY, JSON.stringify(tombs));
+  } catch {}
+}
+
+function isTombed(tableId: string, remoteUpdatedAt: number): boolean {
+  try {
+    const t = readTombs()[tableId];
+    // Tombstone wins unless the remote copy is NEWER than the delete
+    // (re-created after deletion on another device).
+    return typeof t === 'number' && t >= remoteUpdatedAt;
+  } catch {
+    return false;
+  }
+}
+
+function attachSidecar(record: TableEntity | null): TableEntity | null {
+  if (record && (!(record as any).univerSnapshot || !(record as any).univerSnapshot.sheets)) {
+    const sidecar = readSnapshotSidecar(record.id);
+    if (sidecar) (record as any).univerSnapshot = sidecar;
+  }
+  return record;
+}
+
+/**
+ * Drops a table's Univer snapshot sidecar (localStorage) so a stale canvas
+ * snapshot can never resurrect over fresh native-grid data. Used by the
+ * Arabic native grid on save (it persists derived-only records). A future
+ * Univer boot then re-migrates from the fresh derived cache automatically.
+ */
+export function clearTableSnapshot(tableId: string): void {
+  try {
+    if (typeof window !== 'undefined' && tableId) {
+      localStorage.removeItem(tableSnapshotKey(tableId));
+    }
+  } catch {}
 }
 
 export async function saveTable(table: TableEntity): Promise<TableEntity> {
+  // Session delete guard: a table deleted in this session must never be
+  // re-saved by a stale Univer unmount-flush (was: values "came back").
+  if (table && (table as any).id && sessionDeletedTables.has((table as any).id)) {
+    return table as TableEntity;
+  }
   const now = new Date().toISOString();
   const record: TableEntity = {
     ...table,
     updated_at: now,
   };
+  const snapshot = (record as any).univerSnapshot;
 
   if (isFirebaseConfigured && db) {
     try {
-      await setDoc(doc(db, 'tables', record.id), record, { merge: true });
+      // Firestore hard limit is 1MB/doc: oversized sheets persist the
+      // derived cache (always readable) instead of failing the whole write.
+      let payload: TableEntity = record;
+      try {
+        const size = snapshot ? JSON.stringify(snapshot).length : 0;
+        if (size > 800_000) {
+          console.warn('saveTable: snapshot exceeds Firestore budget, persisting derived-only', record.id);
+          payload = slimRecord(record);
+        }
+      } catch {}
+      await withTimeout(setDoc(doc(db, 'tables', record.id), payload, { merge: true }), 10000);
     } catch {}
   }
 
+  // Sidecar first (source of sheet truth locally), slim array second.
+  if (typeof window !== 'undefined' && snapshot && typeof snapshot === 'object') {
+    try {
+      localStorage.setItem(tableSnapshotKey(record.id), JSON.stringify(snapshot));
+    } catch (e) {
+      console.warn('saveTable: snapshot sidecar quota exceeded (derived cache kept)', record.id);
+    }
+  }
+  const slim = slimRecord(record);
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
-  const idx = all.findIndex((t) => t.id === record.id);
+  const idx = all.findIndex((t) => t.id === slim.id);
   if (idx !== -1) {
-    all[idx] = record;
+    all[idx] = slim;
     setLocal(LOCAL_TABLES_KEY, all);
   } else {
-    setLocal(LOCAL_TABLES_KEY, [record, ...all]);
+    setLocal(LOCAL_TABLES_KEY, [slim, ...all]);
   }
 
   return record;
@@ -400,17 +592,26 @@ export async function saveTable(table: TableEntity): Promise<TableEntity> {
 export async function getTableById(tableId: string): Promise<TableEntity | null> {
   if (!tableId) return null;
 
+  let remote: TableEntity | null = null;
   if (isFirebaseConfigured && db) {
     try {
-      const snap = await getDoc(doc(db, 'tables', tableId));
+      const snap = await withTimeout(getDoc(doc(db, 'tables', tableId)), 8000);
       if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as TableEntity;
+        remote = { id: snap.id, ...snap.data() } as TableEntity;
+        // Firestore record may be derived-only (oversized guard in
+        // saveTable): reattach a fresher local snapshot when available.
+        attachSidecar(remote);
       }
     } catch {}
   }
 
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
-  return all.find((t) => t.id === tableId) || null;
+  const rawLocal = all.find((t) => t.id === tableId) || null;
+  const local = attachSidecar(rawLocal ? { ...rawLocal } : null);
+
+  const best = pickFreshestTable(remote, local);
+  if (best && isTombed(best.id, tableUpdatedAt(best))) return null;
+  return best;
 }
 
 /**
@@ -418,20 +619,31 @@ export async function getTableById(tableId: string): Promise<TableEntity | null>
  * cell formats, merges, direction) from both Firestore and localStorage.
  * Used when a report (or a table node) is permanently removed.
  */
-export async function deleteTableEntity(tableId: string): Promise<void> {
-  if (!tableId) return;
+export async function deleteTableEntity(tableId: string): Promise<boolean> {
+  if (!tableId) return false;
+  // Mark first: any in-flight Univer flush after this point is dropped
+  // by saveTable's session guard instead of resurrecting the table.
+  sessionDeletedTables.add(tableId);
 
   if (isFirebaseConfigured && db) {
     try {
-      await deleteDoc(doc(db, 'tables', tableId));
-    } catch {}
+      await withTimeout(deleteDoc(doc(db, 'tables', tableId)), 8000);
+    } catch (e) {
+      // Remote delete failed — the tombstone below still hides it locally;
+      // it resurrects only if the server copy becomes NEWER (re-created).
+      console.warn('deleteTableEntity: remote delete failed, tombstoned locally', tableId);
+    }
   }
 
+  try {
+    if (typeof window !== 'undefined') localStorage.removeItem(tableSnapshotKey(tableId));
+  } catch {}
+  // Tombstone first: even if the remote delete above failed silently, the
+  // table stays deleted locally and never resurrects from stale reads.
+  writeTomb(tableId);
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
-  setLocal(
-    LOCAL_TABLES_KEY,
-    all.filter((t) => t.id !== tableId)
-  );
+  setLocal(LOCAL_TABLES_KEY, all.filter((t) => t.id !== tableId));
+  return true;
 }
 
 /**
@@ -442,6 +654,252 @@ export async function deleteTablesByReportId(reportId: string): Promise<void> {
   const tables = await getTablesByReportId(reportId);
   for (const t of tables) {
     await deleteTableEntity(t.id);
+  }
+}
+
+/** Public tombstone probe (Univer flush paths skip saves for deleted tables). */
+export function isTableTombed(tableId: string): boolean {
+  if (!tableId) return false;
+  if (sessionDeletedTables.has(tableId)) return true;
+  try {
+    return readTombs()[tableId] !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Clears ALL values inside a smart table (headers + cells + merges) while
+ * keeping the table itself. Used by the "مسح القيم" action — the user asked
+ * for an explicit way to empty a sheet whose values kept coming back.
+ * The session delete-guard is cleared so the emptied table saves normally.
+ */
+export async function clearTableValues(tableId: string): Promise<boolean> {
+  if (!tableId) return false;
+  try {
+    sessionDeletedTables.delete(tableId);
+    try {
+      if (typeof window !== 'undefined') {
+        const tombs = readTombs();
+        if (tombs[tableId] !== undefined) {
+          delete tombs[tableId];
+          localStorage.setItem(LOCAL_TABLE_TOMBS_KEY, JSON.stringify(tombs));
+        }
+      }
+    } catch {}
+    const existing = await getTableById(tableId);
+    const now = new Date().toISOString();
+    const base: any = existing || { id: tableId };
+    // Preserve direction on clear (Excel: clearing values never flips the
+    // sheet). RTL sheets keep Arabic locale + right default style.
+    const isRtl = base.direction === 'ltr' ? false : true;
+    const emptySnapshot: any = {
+      id: `wb-${tableId}`,
+      name: typeof base.name === 'string' && base.name ? base.name : 'Sheet',
+      appVersion: '0.25.1',
+      locale: isRtl ? 'arSA' : 'enUS',
+      styles: {},
+      sheetOrder: ['sheet-1'],
+      sheets: {
+        'sheet-1': {
+          id: 'sheet-1',
+          name: typeof base.name === 'string' && base.name ? String(base.name).slice(0, 60) : 'Sheet',
+          rowCount: 200,
+          columnCount: 26,
+          defaultColumnWidth: 140,
+          defaultRowHeight: 32,
+          mergeData: [],
+          cellData: {},
+          columnData: { 0: { w: 140 }, 1: { w: 140 }, 2: { w: 140 } },
+          rowData: {},
+          showGridlines: 1,
+          rightToLeft: isRtl ? 1 : 0,
+          rowHeader: { width: 44 },
+          columnHeader: { height: 24 },
+          ...(isRtl
+            ? { defaultStyle: { ff: 'Tahoma, "Segoe UI", Arial, sans-serif', fs: 11, ht: 3, vt: 2 } }
+            : {}),
+        },
+      },
+    };
+    const cleared: TableEntity = {
+      ...(base as TableEntity),
+      id: tableId,
+      name: typeof base.name === 'string' ? base.name : 'Sheet',
+      univerSnapshot: emptySnapshot,
+      columns_data: [
+        { id: 'A', name: 'A', type: 'text', width: 140 },
+        { id: 'B', name: 'B', type: 'text', width: 140 },
+        { id: 'C', name: 'C', type: 'text', width: 140 },
+      ] as any,
+      rows_data: [{ A: '', B: '', C: '' }],
+      cell_formats: {} as any,
+      merged_cells: [] as any,
+      updated_at: now,
+    } as TableEntity;
+    await saveTable(cleared);
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('smart-table-cleared', { detail: { tableId } }));
+        window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId } }));
+        window.dispatchEvent(new CustomEvent('smart-table-rebuild', { detail: { tableId } }));
+      }
+    } catch {}
+    return true;
+  } catch (e) {
+    console.warn('clearTableValues failed', tableId, e);
+    return false;
+  }
+}
+
+/** Current sheet direction ('rtl' default — Arabic reports). */
+export function getTableDirection(t: TableEntity | null | undefined): 'rtl' | 'ltr' {
+  return (t as any)?.direction === 'ltr' ? 'ltr' : 'rtl';
+}
+
+/**
+ * EXPLICIT repair: mirrors a table's columns (values, formulas, widths,
+ * merges, header names) inside its used extent. NEVER called implicitly —
+ * only from the "repair column order" button with user confirmation, for
+ * tables whose columns were swapped by the reverted auto-mirror experiment.
+ * Involution: running it twice restores the exact original, so a mistaken
+ * press is undone by pressing again. Direction flag/locale are untouched.
+ * Returns true on success.
+ */
+export async function mirrorTableColumns(tableId: string): Promise<boolean> {
+  if (!tableId) return false;
+  try {
+    if (sessionDeletedTables.has(tableId) || isTableTombed(tableId)) return false;
+    const existing = await getTableById(tableId);
+    if (!existing) return false;
+    const snap: any = (existing as any).univerSnapshot;
+    if (!snap || typeof snap !== 'object' || !snap.sheets) return false;
+    const {
+      mirrorSnapshotHorizontally,
+      snapshotUsedColCount,
+      applyColumnNames,
+      univerSnapshotToDerived,
+      mirrorColumnNames,
+    } = await import('@/lib/grid/univer-adapter');
+    const W = snapshotUsedColCount(snap);
+    if (W <= 1) return true; // Nothing to swap.
+    const mirrored = mirrorSnapshotHorizontally(snap);
+    try {
+      const derived = univerSnapshotToDerived(mirrored);
+      const prevNames: Array<string | undefined> = Array.isArray((existing as any).columns_data)
+        ? (existing as any).columns_data.map((c: any) => c?.name)
+        : [];
+      applyColumnNames(derived, mirrorColumnNames(prevNames, W));
+      (existing as any).columns_data = derived.columns;
+      (existing as any).rows_data = derived.rows;
+      (existing as any).cell_formats = derived.cellFormats;
+      (existing as any).merged_cells = derived.mergedCells;
+    } catch {}
+    await saveTable({ ...(existing as TableEntity), univerSnapshot: mirrored } as TableEntity);
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId } }));
+        window.dispatchEvent(new CustomEvent('smart-table-rebuild', { detail: { tableId } }));
+      }
+    } catch {}
+    return true;
+  } catch (e) {
+    console.warn('mirrorTableColumns failed', tableId, e);
+    return false;
+  }
+}
+
+/**
+ * Flips a smart table's direction (RTL ⇄ LTR).
+ *
+ * Engine limitation (verified in @univerjs sources, stable 0.25.1 AND
+ * 1.0.0-rc.0): the canvas grid frame NEVER mirrors — `rightToLeft` is
+ * model-only, no renderer consumes it. So this toggle deliberately does
+ * NOT move any data (a data-mirror without a frame flip only scrambles
+ * values). What it does flip, Excel-chrome-style:
+ *   - sheet UI locale (arSA ⇄ enUS) → toolbar language + menus flip,
+ *   - default cell style (Arabic right-aligned ⇄ default left),
+ *   - the toolbar/formula-bar DOM order (patched in UniverTable),
+ *   - the direction metadata readers/exports use.
+ * A_toggle_never_reorders_columns_or_rewrites_formulas.
+ * Returns the new direction.
+ */
+export async function toggleTableDirection(tableId: string): Promise<'rtl' | 'ltr' | null> {
+  if (!tableId) return null;
+  try {
+    if (sessionDeletedTables.has(tableId) || isTableTombed(tableId)) return null;
+    const existing = await getTableById(tableId);
+    if (!existing) return null;
+    const next: 'rtl' | 'ltr' = getTableDirection(existing) === 'rtl' ? 'ltr' : 'rtl';
+    const now = new Date().toISOString();
+    const snap: any = (existing as any).univerSnapshot;
+    if (snap && typeof snap === 'object' && snap.sheets) {
+      // Workbook locale follows direction so menus/formula-bar flip too.
+      try {
+        (snap as any).locale = next === 'rtl' ? 'arSA' : 'enUS';
+      } catch {}
+      const sheetId = (snap.sheetOrder || [])[0] || Object.keys(snap.sheets)[0];
+      const sheet = sheetId ? snap.sheets[sheetId] : null;
+      if (sheet && typeof sheet === 'object') {
+        // Metadata only (see header): the engine does not mirror the grid.
+        sheet.rightToLeft = next === 'rtl' ? 1 : 0;
+        // Default style flips with it: RTL sheets right-align Arabic text
+        // with an Arabic-capable font; LTR sheets restore Univer defaults.
+        try {
+          if (next === 'rtl') {
+            sheet.defaultStyle = {
+              ...(typeof sheet.defaultStyle === 'object' ? sheet.defaultStyle : {}),
+              ff: 'Tahoma, "Segoe UI", Arial, sans-serif',
+              fs: 11,
+              ht: 3,
+              vt: 2,
+            };
+          } else if (sheet.defaultStyle && typeof sheet.defaultStyle === 'object') {
+            const { ht: _ht, ff: _ff, ...rest } = sheet.defaultStyle as any;
+            void _ht;
+            void _ff;
+            if (Object.keys(rest).length > 0) sheet.defaultStyle = rest;
+            else delete sheet.defaultStyle;
+          }
+        } catch {}
+      }
+    }
+    await saveTable({ ...(existing as TableEntity), direction: next, univerSnapshot: snap, updated_at: now } as TableEntity);
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId } }));
+        window.dispatchEvent(new CustomEvent('smart-table-rebuild', { detail: { tableId } }));
+      }
+    } catch {}
+    return next;
+  } catch (e) {
+    console.warn('toggleTableDirection failed', tableId, e);
+    return null;
+  }
+}
+
+/**
+ * Heals old snapshots whose sheet rightToLeft disagrees with the entity
+ * direction (migrated before RTL support). Flag-only: it deliberately does
+ * NOT rewrite locale/defaultStyle on open — mass-rewriting snapshots at
+ * boot time is churn and risk; locale + style are set for new tables and
+ * on explicit direction toggle instead. Returns true when a repair save
+ * happened — callers should use the returned record afterwards.
+ */
+export async function repairTableDirection(entity: TableEntity): Promise<{ fixed: boolean; record: TableEntity }> {
+  try {
+    const wantRtl = getTableDirection(entity) === 'rtl' ? 1 : 0;
+    const snap: any = (entity as any).univerSnapshot;
+    if (!snap || typeof snap !== 'object' || !snap.sheets) return { fixed: false, record: entity };
+    const sheetId = (snap.sheetOrder || [])[0] || Object.keys(snap.sheets)[0];
+    const sheet = sheetId ? snap.sheets[sheetId] : null;
+    if (!sheet || typeof sheet !== 'object') return { fixed: false, record: entity };
+    if (sheet.rightToLeft === wantRtl) return { fixed: false, record: entity };
+    sheet.rightToLeft = wantRtl;
+    const saved = await saveTable({ ...(entity as TableEntity), univerSnapshot: snap } as TableEntity);
+    return { fixed: true, record: saved as TableEntity };
+  } catch {
+    return { fixed: false, record: entity };
   }
 }
 

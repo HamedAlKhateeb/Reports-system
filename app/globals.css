@@ -24,11 +24,14 @@
   --ring: 137 17% 22%;
   --radius: 0.75rem;
 
-  --bg-color: #FAFAF8;
-  --card-bg: #FFFFFF;
-  --border-color: #E7E6E2;
-  --text-main: #202020;
-  --text-muted: #6B6964;
+  /* Legacy aliases — single source is the HSL tokens above (bg-background,
+     bg-card, border-border, text-foreground/muted-foreground). Kept only for
+     print/export CSS that predates semantic tokens. */
+  --bg-color: hsl(var(--background));
+  --card-bg: hsl(var(--card));
+  --border-color: hsl(var(--border));
+  --text-main: hsl(var(--foreground));
+  --text-muted: hsl(var(--muted-foreground));
 
   --global-header-height: 56px;
   --report-actions-height: 52px;
@@ -57,11 +60,12 @@
   --input: 0 0% 25%;
   --ring: 135 16% 85%;
 
-  --bg-color: #161615;
-  --card-bg: #20201F;
-  --border-color: #383835;
-  --text-main: #F2F2EE;
-  --text-muted: #B5B3AD;
+  /* Legacy aliases → semantic tokens (see :root note). */
+  --bg-color: hsl(var(--background));
+  --card-bg: hsl(var(--card));
+  --border-color: hsl(var(--border));
+  --text-main: hsl(var(--foreground));
+  --text-muted: hsl(var(--muted-foreground));
 }
 
 @layer base {
@@ -481,9 +485,9 @@ html {
 }
 .smart-table-cell-selected {
   position: relative;
-  outline: 2px solid var(--editor-accent, #486450);
+  outline: 2px solid var(--editor-accent, hsl(var(--primary)));
   outline-offset: -2px;
-  background: rgba(72, 100, 80, 0.15);
+  background: hsl(var(--primary) / 0.15);
 }
 
 /* Formula bar: strictly LTR, isolated from surrounding RTL context */
@@ -494,6 +498,39 @@ html {
 .formula-bar-ltr input {
   direction: ltr;
   text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/* Smart-table (Univer) Arabic input: the sheet canvas mount stays LTR (the
+   engine assumes LTR DOM; visual RTL comes from the snapshot rightToLeft
+   flag), but every text entry surface must follow the typed text — otherwise
+   Arabic input appears reversed / left-anchored. plaintext bidi lets the
+   first strong character decide direction per input. */
+.smart-table-node-view input:not([data-smart-name-input]),
+.smart-table-node-view textarea,
+.smart-table-node-view [contenteditable="true"] {
+  unicode-bidi: plaintext;
+}
+.smart-table-node-view input:not([data-smart-name-input]):dir(rtl),
+.smart-table-node-view textarea:dir(rtl) {
+  text-align: right;
+}
+
+/* Univer comprehensive Arabization: RTL chrome (headerbar/footer/menus)
+   uses an Arabic-capable font; canvas mount itself stays LTR (engine
+   assumption) — only chrome flips via dir="rtl" set in UniverTable. */
+.smart-table-node-view [data-u-comp="headerbar"][dir="rtl"],
+.smart-table-node-view [data-u-comp="headerbar"][dir="rtl"] input,
+.smart-table-node-view [data-u-comp="headerbar"][dir="rtl"] button,
+.smart-table-node-view [data-u-comp="footer"][dir="rtl"],
+.smart-table-node-view [data-u-comp="footer"][dir="rtl"] button,
+.univer-context-menu[dir="rtl"],
+.univer-menu[dir="rtl"],
+[data-u-comp="context-menu"][dir="rtl"] {
+  font-family: Tahoma, "Segoe UI", Arial, sans-serif;
+}
+.smart-table-node-view [data-u-comp="headerbar"][dir="rtl"] input,
+.smart-table-node-view [data-u-comp="footer"][dir="rtl"] input {
   unicode-bidi: plaintext;
 }
 

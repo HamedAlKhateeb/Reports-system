@@ -12,7 +12,8 @@ import JSZip from 'jszip';
 export function tipTapJsonToMarkdown(
   json: any,
   report: ReportItem,
-  tablesMap?: Record<string, any>
+  tablesMap?: Record<string, any>,
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): string {
   const lang = report.language;
   const isAr = lang === 'ar';
@@ -243,6 +244,10 @@ export function tipTapJsonToMarkdown(
       case 'reportMindmap': {
         const title = String(node.attrs?.title || 'Mind map');
         const caption = String(node.attrs?.caption || '').trim();
+        const snap = node.attrs?.mindmapId ? mindmaps[String(node.attrs.mindmapId)] : undefined;
+        if (snap?.dataUrl) {
+          return `> 🧠 **${title}**\n>\n![${title}](screenshots/mindmap-${String(node.attrs.mindmapId)}.png)${caption ? `\n> ${caption}` : ''}\n\n`;
+        }
         let body = '';
         try {
           const trees = buildMindTrees(node.attrs?.nodes || [], node.attrs?.edges || []);
@@ -282,7 +287,8 @@ export function tipTapJsonToMarkdown(
  */
 export async function createMarkdownZip(
   report: ReportItem,
-  images: ReportImageItem[]
+  images: ReportImageItem[],
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): Promise<Blob> {
   const tablesMap: Record<string, any> = {};
   try {
@@ -295,7 +301,7 @@ export async function createMarkdownZip(
   }
 
   const zip = new JSZip();
-  const mdContent = tipTapJsonToMarkdown(report.contentJson, report, tablesMap);
+  const mdContent = tipTapJsonToMarkdown(report.contentJson, report, tablesMap, mindmaps);
   const lang = report.language;
 
   // Add the markdown file named after report title
@@ -306,6 +312,20 @@ export async function createMarkdownZip(
 
   // Add screenshots folder
   const screenshotsFolder = zip.folder('screenshots');
+
+  // Pre-rendered mind-map PNGs sit next to the screenshots.
+  if (screenshotsFolder) {
+    for (const [id, snap] of Object.entries(mindmaps || {})) {
+      try {
+        if (!snap?.dataUrl?.startsWith('data:image/')) continue;
+        const base64 = snap.dataUrl.split(',')[1];
+        if (!base64) continue;
+        screenshotsFolder.file(`mindmap-${id}.png`, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+      } catch (err) {
+        console.warn(`Could not add mindmap ${id} to ZIP`, err);
+      }
+    }
+  }
 
   if (screenshotsFolder && images.length > 0) {
     for (const img of images) {

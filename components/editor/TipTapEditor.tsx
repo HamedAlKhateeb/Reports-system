@@ -27,7 +27,7 @@ import { extractNativeTables, nativeFingerprint } from '@/lib/charts/engine';
 import { newChartId, normalizeChartType } from '@/lib/charts/types';
 import { schemaFromCreateParams } from '@/lib/charts/ai-tools';
 import { TextColor, TextHighlight } from './CustomColorMarks';
-import { FontSize } from './FontSizeMark';
+import { FontSize, DEFAULT_FONT_SIZE, resolveActiveFontSize } from './FontSizeMark';
 import { EditorToolbar } from './EditorToolbar';
 import { EditorContextMenu } from './EditorContextMenu';
 import { TableFillHandle } from './TableFillHandle';
@@ -184,9 +184,22 @@ export function TipTapEditor({
     return () => window.removeEventListener('editor-import-request', onImportRequest);
   }, []);
 
+  // Fingerprint of the last flushed doc: blur saves only on real change,
+  // so toolbar clicks (which blur the editor) never cause spurious saves
+  // and mid-click re-renders.
+  const lastFlushedJsonRef = useRef<string>('');
+  const fingerprintJson = (json: any): string => {
+    try {
+      return JSON.stringify(json);
+    } catch {
+      return '';
+    }
+  };
+
   const saveContent = useCallback(
     async (json: any) => {
       try {
+        lastFlushedJsonRef.current = fingerprintJson(json);
         setSaveStatus('saving');
         await onSave(json);
         setSaveStatus('saved');
@@ -353,7 +366,7 @@ export function TipTapEditor({
       }
     } catch (err) {
       console.error('Image upload failed', err);
-      alert(t('imageUploadFailed'));
+      toast.error(t('imageUploadFailed'));
     } finally {
       setUploadingImage(false);
     }
@@ -440,6 +453,45 @@ export function TipTapEditor({
           imageFiles.forEach((file, fileIdx) => handleImageFile(file, imageCountBefore + fileIdx));
           return true; // Handled
         }
+        // Text/HTML paste: normalize to the remembered ("current") font size.
+        // Pasted runs that carry no explicit size inherit it; runs with their
+        // own size (e.g. Word headings) are preserved. Runs AFTER TipTap's
+        // default paste handling (next tick) so the inserted range exists.
+        try {
+          const from = view.state.selection.from;
+          const oldTo = view.state.selection.to;
+          const sizeBefore = view.state.doc.content.size;
+          const remembered =
+            ((editorRef.current?.storage as any)?.fontSize?.current as string | undefined) ||
+            DEFAULT_FONT_SIZE;
+          window.setTimeout(() => {
+            try {
+              const ed = editorRef.current;
+              if (!ed) return;
+              const st = ed.state;
+              const markType = st.schema.marks.fontSize;
+              if (!markType) return;
+              // Exact inserted range from net doc growth (never touches
+              // pre-existing text outside the paste).
+              const inserted = st.doc.content.size - sizeBefore;
+              if (inserted <= 0) return;
+              const to = Math.min(oldTo + inserted, st.doc.content.size);
+              if (!(to > from)) return;
+              const tr = st.tr;
+              st.doc.nodesBetween(from, to, (node: any, pos: number) => {
+                // nodesBetween also visits nodes merely overlapping the
+                // range (ProseMirror merges adjacent text): clip strictly to
+                // the inserted slice so pre-existing text is never touched.
+                if (node?.isText && !node.marks.some((m: any) => m.type === markType)) {
+                  const s = Math.max(pos, from);
+                  const e = Math.min(pos + node.nodeSize, to);
+                  if (e > s) tr.addMark(s, e, markType.create({ size: remembered }));
+                }
+              });
+              if (tr.docChanged) ed.view.dispatch(tr);
+            } catch {}
+          }, 0);
+        } catch {}
         return false;
       },
       handleDrop: (view, event) => {
@@ -465,20 +517,26 @@ export function TipTapEditor({
         return false;
       },
       handleKeyDown: (view, event) => {
-        // GUARD: Backspace/Delete must never silently remove an image or mind-map.
-        // Both are atom block nodes: pressing Backspace with one selected would
-        // delete it instantly (then autosave persists the loss). Deletion is only
-        // allowed through the element toolbar's trash button with confirmation.
+        // GUARD: Backspace/Delete must never silently remove an image, mind-map,
+        // or smart table. All are atom block nodes: pressing Backspace with one
+        // selected would delete it instantly (then autosave persists the loss)
+        // while its entity (table) stays behind and "resurrects". Deletion is
+        // only allowed through the toolbar trash button with confirmation
+        // (which deletes the node AND its entity together).
         if (event.key === 'Backspace' || event.key === 'Delete') {
           try {
             const sel: any = view?.state?.selection;
             const selectedNode = sel?.node;
-            if (selectedNode?.type?.name === 'reportImage' || selectedNode?.type?.name === 'reportMindmap') {
+            if (selectedNode?.type?.name === 'reportImage' || selectedNode?.type?.name === 'reportMindmap' || selectedNode?.type?.name === 'smartTable') {
               event.preventDefault();
               toast.error(
                 reportLanguage === 'ar'
-                  ? 'لحماية المحتوى: احذف الصور والخرائط الذهنية بزر سلة المهملات في شريط العنصر (مع التأكيد)، وليس بزر الرجوع.'
-                  : 'Content protected: delete images and mind maps with the trash button on the element toolbar (with confirmation), not Backspace.'
+                  ? selectedNode?.type?.name === 'smartTable'
+                    ? 'لحماية البيانات: احذف الجدول الذكي بزر "حذف الجدول" في شريط الأدوات (مع التأكيد) — يحذف الجدول وقيمه نهائيًا.'
+                    : 'لحماية المحتوى: احذف الصور والخرائط الذهنية بزر سلة المهملات في شريط العنصر (مع التأكيد)، وليس بزر الرجوع.'
+                  : selectedNode?.type?.name === 'smartTable'
+                    ? 'Protected: delete smart tables with the "Delete Table" toolbar button (with confirmation) — it removes the table and its values.'
+                    : 'Content protected: delete images and mind maps with the trash button on the element toolbar (with confirmation), not Backspace.'
               );
               return true; // handled — node stays intact
             }
@@ -591,16 +649,7 @@ export function TipTapEditor({
           event.preventDefault();
           if (editorRef.current) {
             const ed = editorRef.current;
-            const sizeAttr = ed.getAttributes('fontSize').size;
-            let current = 16;
-            if (sizeAttr) {
-              const p = parseInt(sizeAttr, 10);
-              if (!isNaN(p) && p > 0) current = p;
-            } else if (ed.isActive('heading', { level: 1 })) current = 30;
-            else if (ed.isActive('heading', { level: 2 })) current = 24;
-            else if (ed.isActive('heading', { level: 3 })) current = 20;
-
-            const next = Math.min(72, current + 2);
+            const next = Math.min(72, resolveActiveFontSize(ed) + 2);
             ed.chain().focus().setFontSize(`${next}px`).run();
           }
           return true;
@@ -611,16 +660,7 @@ export function TipTapEditor({
           event.preventDefault();
           if (editorRef.current) {
             const ed = editorRef.current;
-            const sizeAttr = ed.getAttributes('fontSize').size;
-            let current = 16;
-            if (sizeAttr) {
-              const p = parseInt(sizeAttr, 10);
-              if (!isNaN(p) && p > 0) current = p;
-            } else if (ed.isActive('heading', { level: 1 })) current = 30;
-            else if (ed.isActive('heading', { level: 2 })) current = 24;
-            else if (ed.isActive('heading', { level: 3 })) current = 20;
-
-            const next = Math.max(10, current - 2);
+            const next = Math.max(10, resolveActiveFontSize(ed) - 2);
             ed.chain().focus().setFontSize(`${next}px`).run();
           }
           return true;
@@ -680,6 +720,44 @@ export function TipTapEditor({
       if (onContentChange) {
         onContentChange(json);
       }
+      // Smart-table GC: if a smartTable node disappeared from the doc by ANY
+      // path (cut, select-all+delete, drag, undo of an insert), its entity
+      // must go too — otherwise TablesTab keeps listing it and the values
+      // "come back". The toolbar delete already removes the entity first;
+      // this catches every other path (best-effort, debounced).
+      try {
+        const present = new Set<string>();
+        try {
+          ed.state.doc.descendants((node: any) => {
+            if (node?.type?.name === 'smartTable' && node.attrs?.tableId) {
+              present.add(String(node.attrs.tableId));
+            }
+          });
+        } catch {}
+        const prevIds: Set<string> = (ed.storage as any)?.__smartIds || new Set<string>();
+        const removed: string[] = [];
+        prevIds.forEach((id: string) => {
+          if (!present.has(id)) removed.push(id);
+        });
+        (ed.storage as any).__smartIds = present;
+        if (removed.length > 0) {
+          // Skip ids already handled by the toolbar delete (session tombstoned).
+          void (async () => {
+            try {
+              const mod = await import('@/lib/db-intelligence');
+              for (const rid of removed) {
+                try {
+                  if (mod.isTableDeletedInSession(rid) || mod.isTableTombed(rid)) continue;
+                  await mod.deleteTableEntity(rid);
+                  try {
+                    window.dispatchEvent(new CustomEvent('smart-table-deleted', { detail: { tableId: rid } }));
+                  } catch {}
+                } catch {}
+              }
+            } catch {}
+          })();
+        }
+      } catch {}
       try {
         const text: string = ed.getText() || '';
         const trimmed = text.trim();
@@ -696,6 +774,10 @@ export function TipTapEditor({
         debounceTimerRef.current = null;
       }
       const json = ed.getJSON();
+      // Skip no-op blur saves (toolbar interactions blur constantly).
+      try {
+        if (fingerprintJson(json) === lastFlushedJsonRef.current && lastFlushedJsonRef.current) return;
+      } catch {}
       saveContent(json);
     },
   });
@@ -706,11 +788,31 @@ export function TipTapEditor({
     if (editor && onEditorReady) {
       onEditorReady(editor);
     }
+    // Seed the smart-table id baseline so onUpdate diffing only fires for
+    // real removals (not for the initial load).
+    if (editor) {
+      try {
+        const ids = new Set<string>();
+        editor.state.doc.descendants((node: any) => {
+          if (node?.type?.name === 'smartTable' && node.attrs?.tableId) {
+            ids.add(String(node.attrs.tableId));
+          }
+        });
+        (editor.storage as any).__smartIds = ids;
+      } catch {}
+    }
   }, [editor, onEditorReady]);
 
   // Initial word/character count once the editor is ready.
   useEffect(() => {
     if (!editor) return;
+    // Baseline for the blur-save fingerprint: opening the editor must not
+    // count as a change (was: first toolbar click always triggered a save).
+    try {
+      if (!lastFlushedJsonRef.current) {
+        lastFlushedJsonRef.current = fingerprintJson(editor.getJSON());
+      }
+    } catch {}
     try {
       const text: string = editor.getText() || '';
       const trimmed = text.trim();
@@ -815,6 +917,55 @@ export function TipTapEditor({
       }
     };
   }, [reportId]);
+
+  // Backup smart-table delete path: strip residual smartTable node(s) by id.
+  // The node view header and the toolbar command delete the entity first and
+  // call deleteNode(); when that NodeView callback is stale (sheet never
+  // mounted, focus bridge inactive) the entity is gone but the block stays
+  // and "comes back" visually. These listeners guarantee the block is gone
+  // too — deletion is confirmed upstream, so no second prompt here.
+  useEffect(() => {
+    const stripNodeByTableId = (tableId: string) => {
+      const ed = editorRef.current;
+      if (!ed || !tableId) return;
+      try {
+        const matches: number[] = [];
+        ed.state.doc.descendants((node: any, pos: number) => {
+          if (node?.type?.name === 'smartTable' && String(node.attrs?.tableId || '') === tableId) {
+            matches.push(pos);
+          }
+        });
+        if (!matches.length) return;
+        // Delete back-to-front so positions stay valid.
+        let tr = ed.state.tr;
+        for (let i = matches.length - 1; i >= 0; i--) {
+          const pos = matches[i];
+          const node: any = ed.state.doc.nodeAt(pos);
+          if (node) tr = tr.delete(pos, pos + node.nodeSize);
+        }
+        if (tr.docChanged) {
+          ed.view.dispatch(tr);
+          const json = ed.getJSON();
+          if (onContentChange) onContentChange(json);
+          triggerAutosave(json);
+        }
+      } catch (err) {
+        console.warn('smart-table backup strip failed', tableId, err);
+      }
+    };
+    const onDeleted = (e: Event) => {
+      try {
+        const id = String((e as CustomEvent)?.detail?.tableId || '');
+        if (id) stripNodeByTableId(id);
+      } catch {}
+    };
+    window.addEventListener('smart-table-deleted', onDeleted);
+    window.addEventListener('smart-table-delete-node', onDeleted);
+    return () => {
+      window.removeEventListener('smart-table-deleted', onDeleted);
+      window.removeEventListener('smart-table-delete-node', onDeleted);
+    };
+  }, [onContentChange, triggerAutosave]);
 
   const saveContentRef = useRef(saveContent);
   saveContentRef.current = saveContent;
@@ -945,7 +1096,7 @@ export function TipTapEditor({
   }, []);
 
   useEffect(() => {
-    const onChartButton = (e: Event) => {
+    const onChartButton = async (e: Event) => {
       const detail = (e as CustomEvent)?.detail || {};
       const ed = editorRef.current;
       // Case 1: cursor inside a native table → use it directly
@@ -963,8 +1114,16 @@ export function TipTapEditor({
         openBuilderFor({ tableId: detail.smartTableId, kind: 'smart' });
         return;
       }
-      // Case 2: selection mode
-      refreshChartTables();
+      // Case 2: selection mode — but never an empty dead end.
+      const list = await refreshChartTables().catch(() => [] as Array<{ tableId: string; kind: 'smart' | 'native'; name: string }>);
+      if (!list.length) {
+        toast.info(
+          reportLanguage === 'ar'
+            ? 'أدرج جدولًا (عاديًا أو ذكيًا) أولًا ثم أنشئ الرسم منه'
+            : 'Insert a table (normal or smart) first, then build a chart from it'
+        );
+        return;
+      }
       setChartSelectedSource(null);
       setChartSelectMode(true);
     };
@@ -1190,8 +1349,8 @@ export function TipTapEditor({
             parent.querySelectorAll(':scope > .chart-pick-badge').forEach((b) => b.remove());
           }
         });
-        // smart tables
-        const smarts = wrap.querySelectorAll('.smart-table-wrapper');
+        // smart tables (Univer node views; legacy hand-rolled class kept as fallback)
+        const smarts = wrap.querySelectorAll('.smart-table-node-view, .smart-table-wrapper');
         smarts.forEach((el) => {
           const h = el as HTMLElement;
           const id = h.getAttribute('data-table-id') || h.querySelector('[data-table-id]')?.getAttribute('data-table-id') || '';
@@ -1219,14 +1378,15 @@ export function TipTapEditor({
     const onClick = (ev: MouseEvent) => {
       const t = ev.target as HTMLElement | null;
       if (!t || typeof t.closest !== 'function') return;
-      const smartEl = t.closest('.smart-table-wrapper') as HTMLElement | null;
+      const smartEl = t.closest('.smart-table-node-view, .smart-table-wrapper') as HTMLElement | null;
       if (smartEl) {
         ev.preventDefault(); ev.stopPropagation();
-        // resolve tableId: search chartTables smart list by matching DOM order
-        const allSmarts = Array.from(wrap.querySelectorAll('.smart-table-wrapper'));
+        // resolve tableId: prefer the embedded id, else match DOM order
+        const directId = smartEl.getAttribute('data-table-id') || smartEl.querySelector('[data-table-id]')?.getAttribute('data-table-id') || '';
+        const allSmarts = Array.from(wrap.querySelectorAll('.smart-table-node-view, .smart-table-wrapper'));
         const idx = allSmarts.indexOf(smartEl);
         const smartOpts = chartTables.filter((x) => x.kind === 'smart');
-        const pick = smartOpts[idx] || smartOpts[0];
+        const pick = (directId && smartOpts.find((x) => x.tableId === directId)) || smartOpts[idx] || smartOpts[0];
         if (pick) setChartSelectedSource(pick);
         return;
       }
@@ -1248,7 +1408,7 @@ export function TipTapEditor({
           const h = el as HTMLElement;
           h.style.outline = ''; h.style.outlineOffset = ''; h.style.cursor = '';
         });
-        wrap.querySelectorAll('.smart-table-wrapper').forEach((el) => {
+        wrap.querySelectorAll('.smart-table-node-view, .smart-table-wrapper').forEach((el) => {
           const h = el as HTMLElement;
           h.style.outline = ''; h.style.outlineOffset = ''; h.style.cursor = '';
         });
@@ -1315,6 +1475,7 @@ export function TipTapEditor({
         <EditorToolbar
           editor={editor}
           reportId={reportId}
+          reportLanguage={reportLanguage}
           onImageUpload={handleImageFile}
           uploadingImage={uploadingImage}
         />
@@ -1385,6 +1546,12 @@ export function TipTapEditor({
         ref={editorContentWrapRef}
         dir={dir}
         onContextMenu={(e) => {
+          // The smart sheet (Univer) owns its context menu: never stack
+          // ours on top of it (was: two overlapping menus).
+          try {
+            const t = e.target as HTMLElement | null;
+            if (t && typeof t.closest === 'function' && t.closest('.smart-table-node-view')) return;
+          } catch {}
           e.preventDefault();
           setContextMenu({
             isOpen: true,

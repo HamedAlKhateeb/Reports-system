@@ -17,12 +17,14 @@ export interface MergeRange {
   colSpan?: number;
 }
 
+import { parseCellRef } from './formula-parser';
+
 function splitCoord(coord: string): { colId: string; row: number } | null {
-  const m = /^([A-Z0-9_]+?)(\d+)$/.exec(String(coord || '').toUpperCase());
-  if (!m) return null;
-  const row = parseInt(m[2], 10);
-  if (!Number.isInteger(row) || row < 1) return null;
-  return { colId: m[1], row };
+  // Canonical row parsing via parseCellRef (single $-aware parser);
+  // column stays as letter-id because merges are keyed by column position.
+  const ref = parseCellRef(String(coord || ''));
+  if (!ref) return null;
+  return { colId: ref.colName, row: ref.rowNumber };
 }
 
 function colIndex(columns: Array<{ id?: string }>, colId: string): number {

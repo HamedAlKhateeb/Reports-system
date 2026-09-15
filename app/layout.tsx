@@ -65,14 +65,20 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="تقارير" />
       </head>
-      <body className="font-sans antialiased text-[#202020] bg-[#FAFAF8] dark:bg-[#161615] dark:text-[#F2F2EE] transition-colors duration-200 overflow-x-clip">
+      <body className="font-sans antialiased bg-background text-foreground transition-colors duration-200 overflow-x-clip">
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>
               <AIContextProvider>
                 <Navbar />
                 <AuthGuard>
-                  <main className="min-h-[calc(100vh-4rem)]">{children}</main>
+                  <a
+                    href="#main-content"
+                    className="sr-only focus:not-sr-only focus:absolute focus:start-2 focus:top-2 focus:z-[100] focus:rounded-lg focus:bg-primary focus:px-3 focus:py-2 focus:text-xs focus:font-bold focus:text-primary-foreground"
+                  >
+                    تخطَّ إلى المحتوى / Skip to content
+                  </a>
+                  <main id="main-content" className="min-h-[calc(100vh-4rem)]" tabIndex={-1}>{children}</main>
                 </AuthGuard>
                 <PwaInstallPrompt />
                 <AiFloatingTrigger />
