@@ -11,30 +11,6 @@ import { Navbar } from '@/components/layout/Navbar';
 import { AuthGuard } from '@/components/layout/AuthGuard';
 import { PwaInstallPrompt } from '@/components/pwa/PwaInstallPrompt';
 import { Toaster } from '@/components/ui/toast';
-
-import { Tajawal, Amiri, Inter } from 'next/font/google';
-
-const tajawal = Tajawal({
-  subsets: ['arabic', 'latin'],
-  weight: ['400', '500', '700', '800'],
-  variable: '--font-tajawal',
-  display: 'swap',
-});
-
-const amiri = Amiri({
-  subsets: ['arabic', 'latin'],
-  weight: ['400', '700'],
-  variable: '--font-amiri',
-  display: 'swap',
-});
-
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-inter',
-  display: 'swap',
-});
-
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -72,7 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="تقارير" />
       </head>
-      <body className={`${tajawal.variable} ${amiri.variable} ${inter.variable} font-sans antialiased bg-background text-foreground transition-colors duration-200 overflow-x-clip`}>
+      <body className="font-sans antialiased bg-background text-foreground transition-colors duration-200 overflow-x-clip">
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>
