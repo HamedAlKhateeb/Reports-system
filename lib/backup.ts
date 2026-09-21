@@ -9,6 +9,8 @@ import {
   type ScopeOpts,
 } from './db';
 import type { CommentItem, FolderItem, IssueItem, ReportImageItem, ReportItem, TableEntity } from './types';
+import type { ProjectItem, Team } from './projects-types';
+import type { Board } from './boards-types';
 
 export const BACKUP_VERSION = 1;
 export const BACKUP_KIND = 'review-reports-backup';
@@ -18,13 +20,26 @@ export interface BackupFile {
   version: number;
   exportedAt: string;
   exportedByUid: string;
-  counts: { reports: number; folders: number; issues: number; images: number; comments: number; tables: number };
+  counts: {
+    reports: number;
+    folders: number;
+    issues: number;
+    images: number;
+    comments: number;
+    tables: number;
+    projects?: number;
+    teams?: number;
+    boards?: number;
+  };
   reports: ReportItem[];
   folders: FolderItem[];
   issues: IssueItem[];
   images: ReportImageItem[];
   comments: Array<CommentItem & { issueId: string }>;
   tables: TableEntity[];
+  projects?: ProjectItem[];
+  teams?: Team[];
+  boards?: Board[];
 }
 
 export interface BackupProgress {
@@ -70,6 +85,9 @@ function validateBackupFile(raw: unknown): BackupFile {
       images: Array.isArray(f.images) ? f.images.length : 0,
       comments: Array.isArray(f.comments) ? f.comments.length : 0,
       tables: Array.isArray((f as Partial<BackupFile>).tables) ? (f as Partial<BackupFile>).tables!.length : 0,
+      projects: Array.isArray((f as Partial<BackupFile>).projects) ? (f as Partial<BackupFile>).projects!.length : 0,
+      teams: Array.isArray((f as Partial<BackupFile>).teams) ? (f as Partial<BackupFile>).teams!.length : 0,
+      boards: Array.isArray((f as Partial<BackupFile>).boards) ? (f as Partial<BackupFile>).boards!.length : 0,
     },
     reports: f.reports,
     folders: f.folders,
@@ -77,6 +95,9 @@ function validateBackupFile(raw: unknown): BackupFile {
     images: Array.isArray(f.images) ? f.images : [],
     comments: Array.isArray(f.comments) ? f.comments : [],
     tables: Array.isArray((f as Partial<BackupFile>).tables) ? (f as Partial<BackupFile>).tables as TableEntity[] : [],
+    projects: Array.isArray((f as Partial<BackupFile>).projects) ? (f as Partial<BackupFile>).projects as ProjectItem[] : [],
+    teams: Array.isArray((f as Partial<BackupFile>).teams) ? (f as Partial<BackupFile>).teams as Team[] : [],
+    boards: Array.isArray((f as Partial<BackupFile>).boards) ? (f as Partial<BackupFile>).boards as Board[] : [],
   };
 }
 
@@ -158,19 +179,57 @@ export async function buildUserBackup(
       } catch {}
     }
   } catch {}
+
+  // Projects & Teams
+  const projects: ProjectItem[] = [];
+  const teams: Team[] = [];
+  try {
+    const { getUserAccessibleProjects, getTeamByProjectId } = await import('./teams-db');
+    const accessible = await getUserAccessibleProjects(userUid, userEmail);
+    projects.push(...accessible);
+    for (const p of accessible) {
+      try {
+        const tm = await getTeamByProjectId(p.id, userUid, userEmail);
+        if (tm) teams.push(tm);
+      } catch {}
+    }
+  } catch {}
+
+  // Visual Boards (and tasks inside boards)
+  const boards: Board[] = [];
+  try {
+    const { getBoards, getArchivedBoards } = await import('./boards-db');
+    const bList = await getBoards(userUid);
+    const archList = await getArchivedBoards(userUid);
+    boards.push(...bList, ...archList);
+  } catch {}
+
   onProgress?.({ stage: 'done', done: 4, total: 4 });
   return {
     kind: BACKUP_KIND,
     version: BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
     exportedByUid: userUid,
-    counts: { reports: reports.length, folders: folders.length, issues: issues.length, images: images.length, comments: comments.length, tables: tables.length },
+    counts: {
+      reports: reports.length,
+      folders: folders.length,
+      issues: issues.length,
+      images: images.length,
+      comments: comments.length,
+      tables: tables.length,
+      projects: projects.length,
+      teams: teams.length,
+      boards: boards.length,
+    },
     reports,
     folders,
     issues,
     images,
     comments,
     tables,
+    projects,
+    teams,
+    boards,
   };
 }
 
@@ -193,7 +252,16 @@ export function downloadBackup(file: BackupFile, lang: string): void {
 }
 
 async function restoreToFirestore(uid: string, file: BackupFile, onProgress?: (p: BackupProgress) => void): Promise<void> {
-  const total = file.folders.length + file.reports.length + file.issues.length + file.images.length + file.comments.length + (file.tables?.length || 0);
+  const total =
+    file.folders.length +
+    file.reports.length +
+    file.issues.length +
+    file.images.length +
+    file.comments.length +
+    (file.tables?.length || 0) +
+    (file.projects?.length || 0) +
+    (file.teams?.length || 0) +
+    (file.boards?.length || 0);
   let done = 0;
   const tick = (stage: string) => {
     done++;
@@ -246,6 +314,27 @@ async function restoreToFirestore(uid: string, file: BackupFile, onProgress?: (p
     await setDoc(doc(db!, 'tables', id), payload, { merge: true });
     tick('tables');
   }
+  for (const p of file.projects || []) {
+    const id = String((p as ProjectItem).id || '');
+    if (!id) { tick('projects'); continue; }
+    const payload = sanitizeForFirestore({ ...(p as object), owner_id: uid, ownerUid: uid, updatedAt: new Date().toISOString() });
+    await setDoc(doc(db!, 'projects', id), payload, { merge: true });
+    tick('projects');
+  }
+  for (const tm of file.teams || []) {
+    const id = String((tm as Team).id || '');
+    if (!id) { tick('teams'); continue; }
+    const payload = sanitizeForFirestore({ ...(tm as object), updatedAt: new Date().toISOString() });
+    await setDoc(doc(db!, 'teams', id), payload, { merge: true });
+    tick('teams');
+  }
+  for (const b of file.boards || []) {
+    const id = String((b as Board).id || '');
+    if (!id) { tick('boards'); continue; }
+    const payload = sanitizeForFirestore({ ...(b as object), ownerUid: uid, updatedAt: new Date().toISOString() });
+    await setDoc(doc(db!, 'boards', id), payload, { merge: true });
+    tick('boards');
+  }
 }
 
 function restoreToLocal(uid: string, file: BackupFile): void {
@@ -278,6 +367,36 @@ function restoreToLocal(uid: string, file: BackupFile): void {
   getLocal<TableEntity[]>(tKey, []).forEach((t) => mergedTables.set(t.id, t));
   (file.tables || []).forEach((t) => mergedTables.set(t.id, { ...t }));
   setLocal(tKey, Array.from(mergedTables.values()));
+
+  if (file.projects && file.projects.length > 0) {
+    const pKey = `review_app_mock_projects_${uid}`;
+    const mergedProjects = new Map<string, ProjectItem>();
+    getLocal<ProjectItem[]>(pKey, []).forEach((p) => mergedProjects.set(p.id, p));
+    file.projects.forEach((p) => mergedProjects.set(p.id, { ...p, owner_id: uid, ownerUid: uid }));
+    setLocal(pKey, Array.from(mergedProjects.values()));
+
+    const globalPKey = 'review_app_mock_projects';
+    const globalMerged = new Map<string, ProjectItem>();
+    getLocal<ProjectItem[]>(globalPKey, []).forEach((p) => globalMerged.set(p.id, p));
+    file.projects.forEach((p) => globalMerged.set(p.id, { ...p, owner_id: uid, ownerUid: uid }));
+    setLocal(globalPKey, Array.from(globalMerged.values()));
+  }
+
+  if (file.teams && file.teams.length > 0) {
+    const tmKey = 'review_app_teams';
+    const mergedTeams = new Map<string, Team>();
+    getLocal<Team[]>(tmKey, []).forEach((t) => mergedTeams.set(t.id, t));
+    file.teams.forEach((t) => mergedTeams.set(t.id, { ...t }));
+    setLocal(tmKey, Array.from(mergedTeams.values()));
+  }
+
+  if (file.boards && file.boards.length > 0) {
+    const bKey = `review_app_boards_${uid}`;
+    const mergedBoards = new Map<string, Board>();
+    getLocal<Board[]>(bKey, []).forEach((b) => mergedBoards.set(b.id, b));
+    file.boards.forEach((b) => mergedBoards.set(b.id, { ...b, ownerUid: uid }));
+    setLocal(bKey, Array.from(mergedBoards.values()));
+  }
   // Comments live inside Firestore subcollections; on the local path they are
   // embedded in issue docs by the app — no separate restore needed.
 }

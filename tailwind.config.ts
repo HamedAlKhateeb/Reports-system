@@ -11,9 +11,9 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Tajawal', 'Readex Pro', 'system-ui', 'sans-serif'],
-        serif: ['Amiri', 'serif'],
-        heading: ['IBM Plex Sans Arabic', 'Noto Sans Arabic', 'sans-serif'],
+        sans: ['var(--font-tajawal)', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Tajawal', 'Readex Pro', 'system-ui', 'sans-serif'],
+        serif: ['var(--font-amiri)', 'Amiri', 'serif'],
+        heading: ['var(--font-tajawal)', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'sans-serif'],
       },
       colors: {
         // Editorial Warm Palette

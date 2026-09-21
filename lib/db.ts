@@ -24,6 +24,7 @@ import { db, storage, auth, isFirebaseConfigured } from './firebase';
 import { ReportItem, ReportImageItem, IssueItem, CommentItem, AuthorizedUser, SeverityConfigItem, FolderItem, ApiKeyItem } from './types';
 import { normalizeSeverity } from './i18n/dictionary';
 import { t } from './i18n/dictionary';
+import { createNotification } from './notifications-db';
 
 // Default authorized users whitelist for demo / bootstrap
 const DEFAULT_WHITELIST: string[] = [
@@ -491,6 +492,7 @@ export function sortReportsNewestFirst(list: ReportItem[]): ReportItem[] {
 export interface ScopeOpts {
   /** Include archived items (default false — archive leaves all lists). */
   includeArchived?: boolean;
+  projectId?: string;
 }
 
 export async function getReports(
@@ -505,8 +507,15 @@ export async function getReports(
   }
   const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
   // Archive lifecycle: archived reports leave default lists.
-  const visible = (r: ReportItem): boolean =>
-    !!opts?.includeArchived || !isArchivedReport(r);
+  const visible = (r: ReportItem): boolean => {
+    const archivePass = !!opts?.includeArchived || !isArchivedReport(r);
+    if (!archivePass) return false;
+    if (opts?.projectId) {
+      const pid = r.projectId || r.project_id;
+      return pid === opts.projectId || (!pid && opts.projectId === 'proj_default');
+    }
+    return true;
+  };
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
@@ -1468,8 +1477,15 @@ export async function getIssues(userUid?: string, userEmail?: string, opts?: Sco
   }
   const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
   // Archive lifecycle: archived issues leave the board by default.
-  const visibleIssue = (i: IssueItem): boolean =>
-    !!opts?.includeArchived || !isArchivedIssue(i);
+  const visibleIssue = (i: IssueItem): boolean => {
+    const archivePass = !!opts?.includeArchived || !isArchivedIssue(i);
+    if (!archivePass) return false;
+    if (opts?.projectId) {
+      const pid = i.projectId || i.project_id;
+      return pid === opts.projectId || (!pid && opts.projectId === 'proj_default');
+    }
+    return true;
+  };
 
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
@@ -1727,6 +1743,37 @@ export async function createIssue(
   return resultIssue;
 }
 
+export async function getIssueById(id: string): Promise<IssueItem | null> {
+  if (isFirebaseConfigured && db) {
+    try {
+      const docSnap = await getDoc(doc(db, 'issues', id));
+      if (docSnap.exists()) {
+        return { id: docSnap.id, ...docSnap.data() } as IssueItem;
+      }
+    } catch (e) {
+      console.error('Failed to get issue by id in Firestore', e);
+    }
+  }
+
+  const issues = getLocal<IssueItem[]>(LOCAL_ISSUES_KEY, []);
+  const found = issues.find((i) => i.id === id);
+  if (found) return found;
+
+  if (typeof window !== 'undefined') {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${LOCAL_ISSUES_KEY}_`)) {
+          const uIssues = getLocal<IssueItem[]>(key, []);
+          const uFound = uIssues.find((item) => item.id === id);
+          if (uFound) return uFound;
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
 export async function updateIssue(id: string, partial: Partial<IssueItem>): Promise<void> {
   const now = new Date().toISOString();
   if (isFirebaseConfigured && db && auth?.currentUser) {
@@ -1978,19 +2025,27 @@ export async function getReportByShareToken(
 // FOLDERS MANAGEMENT
 // ==========================================
 
-export async function getFolders(userUid?: string, userEmail?: string): Promise<FolderItem[]> {
+export async function getFolders(userUid?: string, userEmail?: string, projectId?: string): Promise<FolderItem[]> {
   // CRITICAL SECURITY FIX: Never return folders if userUid is missing!
   if (!userUid || typeof userUid !== 'string' || !userUid.trim()) {
     return [];
   }
   const email = (userEmail || currentUserEmail() || '').trim().toLowerCase();
 
+  const visibleFolder = (f: FolderItem): boolean => {
+    if (projectId) {
+      const pid = f.projectId;
+      return pid === projectId || (!pid && projectId === 'proj_default');
+    }
+    return true;
+  };
+
   // Guest users are strictly local-storage isolated; never query or pollute Firestore!
   const isGuest = userUid.startsWith('guest_') || userUid === 'guest_user_session';
   if (isGuest) {
     const userKey = `${LOCAL_FOLDERS_KEY}_${userUid}`;
     const folders = getLocal<FolderItem[]>(userKey, []);
-    return [...folders.filter((f) => f.ownerUid === userUid)].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return [...folders.filter((f) => f.ownerUid === userUid && visibleFolder(f))].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   }
 
   if (isFirebaseConfigured && db && auth?.currentUser) {
@@ -2018,7 +2073,7 @@ export async function getFolders(userUid?: string, userEmail?: string): Promise<
           });
         } catch {}
       }
-      return list.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      return list.filter(visibleFolder).sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } catch (e) {
       console.warn('Firestore getFolders failed, using local storage fallback', e);
     }
@@ -2035,7 +2090,7 @@ export async function getFolders(userUid?: string, userEmail?: string): Promise<
     });
   }
   return Array.from(merged.values())
-    .filter((f) => f.ownerUid === userUid || (email && isEmailInvited(f.sharedWithEmails, email)))
+    .filter((f) => (f.ownerUid === userUid || (email && isEmailInvited(f.sharedWithEmails, email))) && visibleFolder(f))
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 }
 
@@ -2079,6 +2134,7 @@ export async function createFolder(data: {
   parentId: string | null;
   color?: string;
   ownerUid?: string;
+  projectId?: string;
 }): Promise<FolderItem> {
   const now = new Date().toISOString();
   const folderName = data.name.trim();
@@ -2092,6 +2148,7 @@ export async function createFolder(data: {
         parentId: data.parentId || null,
         color: data.color || null,
         ownerUid: data.ownerUid || '',
+        projectId: data.projectId || null,
         createdAt: now,
         updatedAt: now,
       });
@@ -2102,6 +2159,7 @@ export async function createFolder(data: {
         parentId: data.parentId || null,
         color: data.color,
         ownerUid: data.ownerUid || '',
+        projectId: data.projectId,
         createdAt: now,
         updatedAt: now,
       };
@@ -2124,6 +2182,7 @@ export async function createFolder(data: {
     parentId: data.parentId || null,
     color: data.color,
     ownerUid: data.ownerUid || '',
+    projectId: data.projectId,
     createdAt: now,
     updatedAt: now,
   };
@@ -2278,6 +2337,28 @@ export async function inviteToReport(
   const rep = await getReportById(reportId, requesterUid);
   if (!rep || !isShareManager(rep.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
   const ok = await writeReportShares(reportId, [...(rep.sharedWithEmails || []), norm]);
+  if (ok) {
+    try {
+      const sender = auth?.currentUser;
+      const repTitle = rep.title || `تقرير #${rep.reportNumber}`;
+      void createNotification({
+        recipientEmail: norm,
+        senderUid: requesterUid,
+        senderName: sender?.displayName || sender?.email || 'مستخدم',
+        type: 'report_shared',
+        title: `تمت مشاركة تقرير معك: ${repTitle}`,
+        titleAr: `تمت مشاركة تقرير معك: ${repTitle}`,
+        titleEn: `A report has been shared with you: ${repTitle}`,
+        body: `قام ${sender?.displayName || sender?.email || 'مستخدم'} بمشاركة التقرير "${repTitle}" معك.`,
+        bodyAr: `قام ${sender?.displayName || sender?.email || 'مستخدم'} بمشاركة التقرير "${repTitle}" معك.`,
+        bodyEn: `${sender?.displayName || sender?.email || 'Someone'} shared report "${repTitle}" with you.`,
+        link: `/reports/${reportId}`,
+        entityId: reportId,
+      });
+    } catch (e) {
+      console.warn('Failed to send notification for report invite:', e);
+    }
+  }
   return ok ? { ok: true } : { ok: false, error: 'save-failed' };
 }
 
@@ -2308,6 +2389,27 @@ export async function inviteToFolder(
   const folder = await getFolderById(folderId, requesterUid);
   if (!folder || !isShareManager(folder.ownerUid, requesterUid)) return { ok: false, error: 'forbidden' };
   const ok = await writeFolderShares(folderId, [...(folder.sharedWithEmails || []), norm]);
+  if (ok) {
+    try {
+      const sender = auth?.currentUser;
+      void createNotification({
+        recipientEmail: norm,
+        senderUid: requesterUid,
+        senderName: sender?.displayName || sender?.email || 'مستخدم',
+        type: 'report_shared',
+        title: `تمت مشاركة مجلد تقارير معك: ${folder.name}`,
+        titleAr: `تمت مشاركة مجلد تقارير معك: ${folder.name}`,
+        titleEn: `A reports folder has been shared with you: ${folder.name}`,
+        body: `قام ${sender?.displayName || sender?.email || 'مستخدم'} بمشاركة المجلد "${folder.name}" معك.`,
+        bodyAr: `قام ${sender?.displayName || sender?.email || 'مستخدم'} بمشاركة المجلد "${folder.name}" معك.`,
+        bodyEn: `${sender?.displayName || sender?.email || 'Someone'} shared folder "${folder.name}" with you.`,
+        link: `/reports`,
+        entityId: folderId,
+      });
+    } catch (e) {
+      console.warn('Failed to send notification for folder invite:', e);
+    }
+  }
   return ok ? { ok: true } : { ok: false, error: 'save-failed' };
 }
 

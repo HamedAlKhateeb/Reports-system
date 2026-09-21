@@ -13,7 +13,8 @@ export function tipTapJsonToMarkdown(
   json: any,
   report: ReportItem,
   tablesMap?: Record<string, any>,
-  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
+  drawings: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): string {
   const lang = report.language;
   const isAr = lang === 'ar';
@@ -258,6 +259,17 @@ export function tipTapJsonToMarkdown(
         return `> 🧠 **${title}**\n>\n${body.split('\n').map((l) => `> ${l}`).join('\n')}${caption ? `\n> ${caption}` : ''}\n\n`;
       }
 
+      case 'reportDrawing': {
+        const dTitle = String(node.attrs?.title || 'Drawing');
+        const dCaption = String(node.attrs?.caption || '').trim();
+        const dSnap = node.attrs?.drawingId ? drawings[String(node.attrs.drawingId)] : undefined;
+        if (dSnap?.dataUrl) {
+          return `> **${dTitle}**\n>\n![${dTitle}](screenshots/drawing-${String(node.attrs.drawingId)}.png)${dCaption ? `\n> ${dCaption}` : ''}\n\n`;
+        }
+        const dCount = Array.isArray(node.attrs?.elements) ? node.attrs.elements.length : 0;
+        return `> **${dTitle}** (${dCount})${dCaption ? `\n> ${dCaption}` : ''}\n\n`;
+      }
+
       case 'latexInline': {
         const latex = node.attrs?.latex || '';
         return latex ? `$${latex}$` : '';
@@ -288,7 +300,8 @@ export function tipTapJsonToMarkdown(
 export async function createMarkdownZip(
   report: ReportItem,
   images: ReportImageItem[],
-  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
+  drawings: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): Promise<Blob> {
   const tablesMap: Record<string, any> = {};
   try {
@@ -301,7 +314,7 @@ export async function createMarkdownZip(
   }
 
   const zip = new JSZip();
-  const mdContent = tipTapJsonToMarkdown(report.contentJson, report, tablesMap, mindmaps);
+  const mdContent = tipTapJsonToMarkdown(report.contentJson, report, tablesMap, mindmaps, drawings);
   const lang = report.language;
 
   // Add the markdown file named after report title
@@ -313,7 +326,7 @@ export async function createMarkdownZip(
   // Add screenshots folder
   const screenshotsFolder = zip.folder('screenshots');
 
-  // Pre-rendered mind-map PNGs sit next to the screenshots.
+  // Pre-rendered mind-map + drawing PNGs sit next to the screenshots.
   if (screenshotsFolder) {
     for (const [id, snap] of Object.entries(mindmaps || {})) {
       try {
@@ -323,6 +336,16 @@ export async function createMarkdownZip(
         screenshotsFolder.file(`mindmap-${id}.png`, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
       } catch (err) {
         console.warn(`Could not add mindmap ${id} to ZIP`, err);
+      }
+    }
+    for (const [id, snap] of Object.entries(drawings || {})) {
+      try {
+        if (!snap?.dataUrl?.startsWith('data:image/')) continue;
+        const base64 = snap.dataUrl.split(',')[1];
+        if (!base64) continue;
+        screenshotsFolder.file(`drawing-${id}.png`, Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+      } catch (err) {
+        console.warn(`Could not add drawing ${id} to ZIP`, err);
       }
     }
   }

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -51,8 +51,6 @@ import {
   updateFolder,
   deleteFolderSafe,
   moveReportToFolder,
-  inviteToFolder,
-  revokeFolderInvite,
   findOrphanedReportOwners,
   archiveReport,
   unarchiveReport,
@@ -64,6 +62,7 @@ import { toast } from '@/components/ui/toast';
 import { ReportItem, FolderItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
+import { useProject } from '@/lib/project-context';
 import { getTemplateContent, TemplateType } from '@/components/editor/templates';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import {
@@ -100,7 +99,6 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { FolderTreeView } from '@/components/reports/FolderTreeView';
 import { FolderBreadcrumb } from '@/components/reports/FolderBreadcrumb';
 import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
-import { InviteDialog } from '@/components/collaboration/InviteDialog';
 
 const COLOR_PRESETS = [
   '#2E4034', // Forest Olive
@@ -118,6 +116,7 @@ export default function ReportsPage() {
   const { lang, defaultReportLang, t } = useLanguage();
   const isAr = lang === 'ar';
   const { user, loading: authLoading } = useAuth();
+  const { activeProject } = useProject();
 
   const [reports, setReports] = useState<ReportItem[]>([]);
   const [folders, setFolders] = useState<FolderItem[]>([]);
@@ -153,11 +152,6 @@ export default function ReportsPage() {
   const [folderToDelete, setFolderToDelete] = useState<FolderItem | null>(null);
   const [deletingFolder, setDeletingFolder] = useState(false);
 
-  // Collaboration (folder invites) state
-  const [folderToShare, setFolderToShare] = useState<FolderItem | null>(null);
-  const [inviteBusy, setInviteBusy] = useState(false);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-
   // Archive lifecycle state: archive view lists archived reports only.
   const [archiveView, setArchiveView] = useState(false);
   const [archivedReports, setArchivedReports] = useState<ReportItem[]>([]);
@@ -169,7 +163,7 @@ export default function ReportsPage() {
       return;
     }
     try {
-      const all = await getReports(user.uid, user.email, { includeArchived: true });
+      const all = await getReports(user.uid, user.email, { includeArchived: true, projectId: activeProject?.id });
       setArchivedReports(all.filter(isArchivedReport));
     } catch (err) {
       console.error('Failed to load archived reports', err);
@@ -224,7 +218,7 @@ export default function ReportsPage() {
       }
       toast.success(isAr ? `تمت الأرشفة${res.archivedIssues ? ` مع ${res.archivedIssues} مشكلة` : ''}` : `Archived${res.archivedIssues ? ` with ${res.archivedIssues} issue(s)` : ''}`);
       const [updatedReports] = await Promise.all([
-        getReports(user.uid),
+        getReports(user.uid, user.email, { projectId: activeProject?.id }),
         loadArchived(),
       ]);
       setReports(updatedReports);
@@ -251,7 +245,7 @@ export default function ReportsPage() {
         return;
       }
       const [updatedReports] = await Promise.all([
-        getReports(user.uid),
+        getReports(user.uid, user.email, { projectId: activeProject?.id }),
         loadArchived(),
       ]);
       setReports(updatedReports);
@@ -273,7 +267,7 @@ export default function ReportsPage() {
   const [templateTab, setTemplateTab] = useState<'builtin' | 'custom'>('builtin');
   const [selectedCustomTemplateId, setSelectedCustomTemplateId] = useState<string | null>(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (authLoading) return;
     if (!user) {
       setReports([]);
@@ -286,8 +280,8 @@ export default function ReportsPage() {
       // Perf: single reports fan-out — split active/archived locally instead of
       // fetching getReports() twice (each call fans out to shared+folder queries).
       const [allReports, foldersData] = await Promise.all([
-        getReports(user.uid, user.email, { includeArchived: true }),
-        getFolders(user.uid, user.email),
+        getReports(user.uid, user.email, { includeArchived: true, projectId: activeProject?.id }),
+        getFolders(user.uid, user.email, activeProject?.id),
       ]);
       setReports(allReports.filter((r) => !isArchivedReport(r)));
       setFolders(foldersData);
@@ -301,7 +295,7 @@ export default function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [authLoading, user, activeProject?.id]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -339,7 +333,7 @@ export default function ReportsPage() {
       window.removeEventListener('report-deleted', handleReportsChanged);
       window.removeEventListener('local-storage-full', handleStorageFull);
     };
-  }, [user?.uid, authLoading, isAr]);
+  }, [user?.uid, authLoading, isAr, activeProject?.id, loadData]);
 
   const handleCopyLink = (e: React.MouseEvent, id: string) => {
     e.preventDefault();
@@ -384,6 +378,7 @@ export default function ReportsPage() {
             backgroundColor: customTpl.backgroundColor || 'white',
             ownerUid: user.uid,
             folderId: targetFolderId,
+            projectId: activeProject?.id,
           });
 
           setShowTemplateModal(false);
@@ -439,6 +434,7 @@ export default function ReportsPage() {
         contentJson: initialContent,
         ownerUid: user.uid,
         folderId: targetFolderId,
+        projectId: activeProject?.id,
       });
 
       setShowTemplateModal(false);
@@ -472,6 +468,7 @@ export default function ReportsPage() {
         contentJson: initialContent,
         ownerUid: user.uid,
         folderId: folderId,
+        projectId: activeProject?.id,
       });
 
       router.push(`/reports/${created.id}`);
@@ -560,8 +557,9 @@ export default function ReportsPage() {
         parentId: createFolderParentId,
         color: newFolderColor,
         ownerUid: user.uid,
+        projectId: activeProject?.id,
       });
-      const updated = await getFolders(user.uid);
+      const updated = await getFolders(user.uid, user.email, activeProject?.id);
       setFolders(updated);
       setShowCreateFolderModal(false);
       setNewFolderName('');
@@ -586,7 +584,7 @@ export default function ReportsPage() {
     try {
       setSavingFolder(true);
       await updateFolder(folderToEdit.id, { name: renameFolderName.trim() });
-      const updated = await getFolders(user?.uid);
+      const updated = await getFolders(user?.uid, user?.email, activeProject?.id);
       setFolders(updated);
       setFolderToEdit(null);
     } catch (err: any) {
@@ -603,8 +601,8 @@ export default function ReportsPage() {
       setDeletingFolder(true);
       await deleteFolderSafe(folderToDelete.id);
       const [updatedReports, updatedFolders] = await Promise.all([
-        getReports(user?.uid),
-        getFolders(user?.uid),
+        getReports(user?.uid, user?.email, { projectId: activeProject?.id }),
+        getFolders(user?.uid, user?.email, activeProject?.id),
       ]);
       setReports(updatedReports);
       setFolders(updatedFolders);
@@ -620,69 +618,10 @@ export default function ReportsPage() {
     }
   };
 
-  // Collaboration: folder invites (owner only — enforced in db + rules)
-  const describeInviteError = (code?: string): string => {
-    if (isAr) {
-      if (code === 'invalid-email') return 'بريد إلكتروني غير صالح.';
-      if (code === 'cannot-invite-self') return 'لا يمكنك دعوة نفسك.';
-      if (code === 'forbidden') return 'فقط مالك المجلد يمكنه إدارة الدعوات.';
-      return 'فشل حفظ الدعوة. تحقق من الاتصال وحاول مجددًا.';
-    }
-    if (code === 'invalid-email') return 'Invalid email address.';
-    if (code === 'cannot-invite-self') return 'You cannot invite yourself.';
-    if (code === 'forbidden') return 'Only the folder owner can manage invites.';
-    return 'Failed to save the invite. Check your connection and retry.';
-  };
-
-  const refreshFolders = async () => {
-    const updated = await getFolders(user?.uid);
-    setFolders(updated);
-    if (folderToShare) {
-      const fresh = updated.find((f) => f.id === folderToShare.id) || null;
-      setFolderToShare(fresh);
-    }
-  };
-
-  const handleInviteToFolder = async (email: string) => {
-    if (!folderToShare || !user) return;
-    setInviteBusy(true);
-    setInviteError(null);
-    try {
-      const res = await inviteToFolder(folderToShare.id, email, user.uid);
-      if (!res.ok) {
-        setInviteError(describeInviteError(res.error));
-        return;
-      }
-      await refreshFolders();
-    } catch (err: any) {
-      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
-  const handleRevokeFolderInvite = async (email: string) => {
-    if (!folderToShare || !user) return;
-    setInviteBusy(true);
-    setInviteError(null);
-    try {
-      const res = await revokeFolderInvite(folderToShare.id, email, user.uid);
-      if (!res.ok) {
-        setInviteError(describeInviteError(res.error));
-        return;
-      }
-      await refreshFolders();
-    } catch (err: any) {
-      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
   const handleDropReportOnFolder = async (reportId: string, targetFolderId: string | null) => {
     try {
       await moveReportToFolder(reportId, targetFolderId);
-      const updatedReports = await getReports(user?.uid);
+      const updatedReports = await getReports(user?.uid, user?.email, { projectId: activeProject?.id });
       setReports(updatedReports);
     } catch (err) {
       console.error('Failed to move report to folder on drop:', err);
@@ -693,11 +632,11 @@ export default function ReportsPage() {
     if (!itemToMove) return;
     if (itemToMove.type === 'report') {
       await moveReportToFolder(itemToMove.item.id, targetFolderId);
-      const updatedReports = await getReports(user?.uid);
+      const updatedReports = await getReports(user?.uid, user?.email, { projectId: activeProject?.id });
       setReports(updatedReports);
     } else {
       await updateFolder(itemToMove.item.id, { parentId: targetFolderId });
-      const updatedFolders = await getFolders(user?.uid);
+      const updatedFolders = await getFolders(user?.uid, user?.email, activeProject?.id);
       setFolders(updatedFolders);
     }
   };
@@ -911,10 +850,6 @@ export default function ReportsPage() {
               }}
               onDeleteFolder={(f) => {
                 setFolderToDelete(f);
-              }}
-              onShareFolder={(f) => {
-                setInviteError(null);
-                setFolderToShare(f);
               }}
               onDropReportOnFolder={handleDropReportOnFolder}
               onNewReportInFolder={handleCreateReportInFolder}
@@ -1504,24 +1439,6 @@ export default function ReportsPage() {
           reportToMove={itemToMove.type === 'report' ? itemToMove.item : null}
           folderToMove={itemToMove.type === 'folder' ? itemToMove.item : null}
           onConfirmMove={handleConfirmMoveModal}
-        />
-      )}
-
-      {/* Collaboration: folder invites (owner only — enforced in db + rules) */}
-      {folderToShare && (
-        <InviteDialog
-          isOpen={Boolean(folderToShare)}
-          onClose={() => {
-            setFolderToShare(null);
-            setInviteError(null);
-          }}
-          subjectName={folderToShare.name}
-          kind="folder"
-          emails={folderToShare.sharedWithEmails || []}
-          busy={inviteBusy}
-          error={inviteError}
-          onInvite={handleInviteToFolder}
-          onRevoke={handleRevokeFolderInvite}
         />
       )}
 

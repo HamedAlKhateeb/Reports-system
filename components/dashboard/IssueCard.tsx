@@ -1,9 +1,11 @@
 'use client';
 
 import React, { memo, useState } from 'react';
-import { Link2, GripVertical, ChevronUp, ChevronDown } from 'lucide-react';
+import { Link2, GripVertical, ChevronUp, ChevronDown, UserCheck, Timer, Play } from 'lucide-react';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAuth } from '@/lib/auth-context';
+import { usePomodoro } from '@/lib/pomodoro-context';
 import { getSeverityLabel, IssueSeverity } from '@/lib/i18n/dictionary';
 import { Card, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -43,7 +45,14 @@ export const IssueCard = memo(function IssueCard({
   canMoveDown = false,
 }: IssueCardProps) {
   const { lang, t } = useLanguage();
+  const { user } = useAuth();
+  const { activeTask, isRunning, startTaskPomodoro } = usePomodoro();
   const [canDrag, setCanDrag] = useState(false);
+  const isPomodoroActive = activeTask?.id === issue.id && isRunning;
+  const isAssignedToMe = !!user && (
+    issue.assigneeUid === user.uid ||
+    (!!user.email && !!issue.assigneeEmail && issue.assigneeEmail.toLowerCase() === user.email.toLowerCase())
+  );
 
   // 5 Canonical severities using standard shadcn badge variants
   const getSeverityBadgeVariant = (
@@ -99,7 +108,8 @@ export const IssueCard = memo(function IssueCard({
         style={{ touchAction: 'pan-y' }}
         className={cn(
           "group relative transition-all hover:border-primary/60 hover:shadow-md select-none overflow-hidden",
-          canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+          canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+          isAssignedToMe && "border-amber-500/50 dark:border-amber-500/40 bg-amber-500/[0.03]"
         )}
       >
         <CardHeader className="p-3.5 pb-2">
@@ -125,6 +135,17 @@ export const IssueCard = memo(function IssueCard({
                 <span className="size-1.5 rounded-full bg-current" />
                 <span>{getSeverityLabel(issue.severity, lang)}</span>
               </Badge>
+
+              {isAssignedToMe && (
+                <Badge
+                  variant="outline"
+                  className="gap-1 px-1.5 py-0.5 text-[10px] font-bold border-amber-500/50 bg-amber-500/15 text-amber-800 dark:text-amber-300"
+                  title={lang === 'ar' ? 'أنت المسؤول عن تنفيذ هذه المهمة' : 'You are assigned to this task'}
+                >
+                  <span>⭐</span>
+                  <span>{lang === 'ar' ? 'مهمتك' : 'Your task'}</span>
+                </Badge>
+              )}
             </div>
 
             <div className="flex items-center gap-1">
@@ -173,8 +194,57 @@ export const IssueCard = memo(function IssueCard({
           <CardTitle className="text-sm font-bold text-foreground group-hover:text-primary transition-colors line-clamp-2 leading-snug">
             {issue.title}
           </CardTitle>
-        </CardHeader>
 
+          {/* Footer: Assignee & Pomodoro stats */}
+          <div className="flex items-center justify-between gap-1.5 pt-2 mt-2 border-t border-border/40 text-[11px]">
+            {issue.assigneeEmail || issue.assigneeName ? (
+              <div
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/10 text-primary font-medium max-w-[140px] truncate"
+                title={lang === 'ar' ? `المسؤول: ${issue.assigneeName || issue.assigneeEmail}` : `Assignee: ${issue.assigneeName || issue.assigneeEmail}`}
+              >
+                <UserCheck className="size-3 shrink-0" />
+                <span className="truncate">{issue.assigneeName || issue.assigneeEmail}</span>
+              </div>
+            ) : (
+              <div />
+            )}
+
+            <div className="flex items-center gap-1">
+              {isPomodoroActive ? (
+                <span
+                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/15 text-rose-600 dark:text-rose-400 animate-pulse"
+                  title={lang === 'ar' ? 'جلسة بومودورو نشطة لهذه المهمة' : 'Active Pomodoro session'}
+                >
+                  <span className="size-1.5 rounded-full bg-rose-500" />
+                  <span>🍅 جارية</span>
+                </span>
+              ) : (issue.pomodoroSessions && issue.pomodoroSessions > 0) ? (
+                <span
+                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold text-muted-foreground bg-muted/50"
+                  title={lang === 'ar' ? `${issue.pomodoroSessions} جلسة بومودورو مكتملة` : `${issue.pomodoroSessions} pomodoro sessions`}
+                >
+                  <span>🍅</span>
+                  <span>{issue.pomodoroSessions}</span>
+                </span>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  startTaskPomodoro(issue.id, issue.title);
+                }}
+                className={cn(
+                  "p-1 rounded text-muted-foreground hover:text-rose-600 hover:bg-rose-500/10 transition-colors",
+                  isPomodoroActive ? "text-rose-500 font-bold" : "opacity-0 group-hover:opacity-100"
+                )}
+                title={lang === 'ar' ? 'بدء جلسة بومودورو لهذه المهمة' : 'Start Pomodoro for this task'}
+              >
+                <Timer className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        </CardHeader>
       </Card>
 
       {/* Drop indicator: After */}

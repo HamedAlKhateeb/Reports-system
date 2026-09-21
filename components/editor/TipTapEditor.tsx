@@ -17,6 +17,7 @@ import { ReportImage } from './ReportImageNode';
 import { SmartTableNode } from './SmartTableNode';
 import { ReportChart } from './ReportChartNode';
 import { ReportMindmap } from './ReportMindmapNode';
+import { ReportDrawing } from './ReportDrawingNode';
 import { LatexInline } from './LatexInlineNode';
 import { convertLatexDelimitersToNodes } from '@/lib/latex';
 import { ChartBuilderPanel } from './ChartBuilderPanel';
@@ -409,6 +410,7 @@ export function TipTapEditor({
       SmartTableNode,
       ReportChart,
       ReportMindmap,
+      ReportDrawing,
       LatexInline,
       TextColor,
       TextHighlight,
@@ -527,7 +529,7 @@ export function TipTapEditor({
           try {
             const sel: any = view?.state?.selection;
             const selectedNode = sel?.node;
-            if (selectedNode?.type?.name === 'reportImage' || selectedNode?.type?.name === 'reportMindmap' || selectedNode?.type?.name === 'smartTable') {
+            if (selectedNode?.type?.name === 'reportImage' || selectedNode?.type?.name === 'reportMindmap' || selectedNode?.type?.name === 'reportDrawing' || selectedNode?.type?.name === 'smartTable') {
               event.preventDefault();
               toast.error(
                 reportLanguage === 'ar'
@@ -823,87 +825,8 @@ export function TipTapEditor({
     } catch {}
   }, [editor]);
 
-  // Listen for AI Agent report content mutation events and revert events
-  useEffect(() => {
-    const handleAiUpdateContent = (e: any) => {
-      const ed = editorRef.current;
-      if (!ed) return;
-      const detail = e.detail || {};
-      const mode = detail.mode || 'append';
-      const content = detail.content || '';
-
-      // Capture pre-mutation backup snapshot
-      const previousSnapshot = ed.getJSON();
-      if (reportId && typeof window !== 'undefined') {
-        try {
-          localStorage.setItem(`report_ai_backup_${reportId}`, JSON.stringify(previousSnapshot));
-          localStorage.setItem(`report_ai_backup_timestamp_${reportId}`, Date.now().toString());
-          (window as any).__lastReportAiSnapshot = previousSnapshot;
-        } catch (_) {}
-      }
-
-      if (typeof detail.onSnapshotSaved === 'function') {
-        detail.onSnapshotSaved(previousSnapshot);
-      }
-
-      window.dispatchEvent(
-        new CustomEvent('ai-report-snapshot-saved', {
-          detail: { reportId, snapshot: previousSnapshot },
-        })
-      );
-
-      if (mode === 'replace_all') {
-        const parsed = typeof content === 'string' ? parseTextToTipTapContent(content) : content;
-        ed.commands.setContent(parsed || '');
-      } else if (mode === 'append') {
-        const endPos = ed.state.doc.content.size;
-        ed.chain().focus().insertContentAt(endPos, content).run();
-      } else if (mode === 'prepend') {
-        ed.chain().focus().insertContentAt(0, content).run();
-      } else if (mode === 'replace_selection') {
-        ed.chain().focus().insertContent(content).run();
-      }
-
-      const json = ed.getJSON();
-      if (onContentChange) {
-        onContentChange(json);
-      }
-      triggerAutosave(json);
-    };
-
-    const handleAiRevertContent = (e: any) => {
-      const ed = editorRef.current;
-      if (!ed) return;
-      const detail = e.detail || {};
-      let snapshot = detail.snapshot;
-      if (!snapshot && reportId && typeof window !== 'undefined') {
-        try {
-          const saved = localStorage.getItem(`report_ai_backup_${reportId}`);
-          if (saved) snapshot = JSON.parse(saved);
-        } catch (_) {}
-      }
-      if (snapshot) {
-        ed.commands.setContent(snapshot);
-        const json = ed.getJSON();
-        if (onContentChange) {
-          onContentChange(json);
-        }
-        triggerAutosave(json);
-        toast.success(
-          lang === 'ar'
-            ? 'تم استرجاع النسخة السابقة من التقرير بنجاح'
-            : 'Previous report content restored successfully'
-        );
-      }
-    };
-
-    window.addEventListener('ai-update-report-content', handleAiUpdateContent);
-    window.addEventListener('ai-revert-report-content', handleAiRevertContent);
-    return () => {
-      window.removeEventListener('ai-update-report-content', handleAiUpdateContent);
-      window.removeEventListener('ai-revert-report-content', handleAiRevertContent);
-    };
-  }, [reportId, onContentChange, triggerAutosave, lang]);
+  // AI bridge removed in the unified-editor refactor: the editor no longer
+  // listens for assistant mutations. Kept as a no-op effect for clarity.
 
   // Reset selection when switching reports or unmounting
   useEffect(() => {
@@ -1309,12 +1232,10 @@ export function TipTapEditor({
     window.addEventListener('chart-button-pressed', onChartButton);
     window.addEventListener('chart-edit-request', onEditReq);
     window.addEventListener('chart-duplicate-request', onDuplicateReq);
-    window.addEventListener('chart-ai-action', onAiAction);
     return () => {
       window.removeEventListener('chart-button-pressed', onChartButton);
       window.removeEventListener('chart-edit-request', onEditReq);
       window.removeEventListener('chart-duplicate-request', onDuplicateReq);
-      window.removeEventListener('chart-ai-action', onAiAction);
     };
   }, [findNativeTableAtSelection, openBuilderFor, refreshChartTables, reportLanguage, chartTables]);
 

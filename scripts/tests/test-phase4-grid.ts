@@ -183,8 +183,8 @@ async function runPhase4Tests() {
   assertEqual(autofillRes.newCells['A3'], 'PRB-003', 'Autofill row 3 col A -> PRB-003');
   assertEqual(autofillRes.newCells['B2'], 101, 'Autofill row 2 col B -> 101');
   assertEqual(autofillRes.newCells['B3'], 102, 'Autofill row 3 col B -> 102');
-  assertEqual(autofillRes.newCells['C2'], '=B2 * 2', 'Autofill row 2 col C adjusted formula -> =B2 * 2');
-  assertEqual(autofillRes.newCells['C3'], '=B3 * 2', 'Autofill row 3 col C adjusted formula -> =B3 * 2');
+  assertEqual(autofillRes.newCells['C2'], '=B2 * 2', 'Autofill row 2 col C relative formula -> =B2 * 2');
+  assertEqual(autofillRes.newCells['C3'], '=B3 * 2', 'Autofill row 3 col C relative formula -> =B3 * 2');
 
   // Summary
   console.log('\n=============================================');

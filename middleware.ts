@@ -30,7 +30,10 @@ export function middleware(request: NextRequest) {
     localMarker === 'guest';
 
   // Public paths
-  const isPublicPath = pathname === '/login';
+  const isPublicPath =
+    pathname === '/login' ||
+    pathname === '/reset-password' ||
+    pathname.startsWith('/auth/');
 
   // API paths: ensure Cache-Control: private, no-store
   if (pathname.startsWith('/api/')) {
@@ -43,11 +46,22 @@ export function middleware(request: NextRequest) {
 
   // Protected paths
   const isProtectedPath =
+    pathname.startsWith('/projects') ||
     pathname.startsWith('/reports') ||
     pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/boards') ||
     pathname.startsWith('/issues') ||
     pathname.startsWith('/settings') ||
     pathname === '/';
+
+  // Root path instant redirect — skips client spinner roundtrip
+  if (pathname === '/') {
+    if (hasSessionCookie) {
+      return NextResponse.redirect(new URL('/projects', request.url));
+    } else {
+      return NextResponse.redirect(new URL('/login', request.url));
+    }
+  }
 
   // If visiting protected page without session, redirect to /login.
   // `reason=invalid-session` marks the case where a cookie EXISTED but was
@@ -73,11 +87,7 @@ export function middleware(request: NextRequest) {
     return redirectResponse;
   }
 
-  const response = NextResponse.next();
-  response.headers.set('Cache-Control', 'private, no-cache, no-store, must-revalidate');
-  response.headers.set('Pragma', 'no-cache');
-  response.headers.set('Expires', '0');
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {

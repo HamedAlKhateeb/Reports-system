@@ -48,8 +48,24 @@ export async function GET(
     );
   }
 
-  // getReportById already enforced owner/collab/folder/public. No second
-  // owner-only check here (that was the B12 regression).
+  // If report is tied to a project, enforce project membership / team access
+  if (report.projectId && userUid) {
+    const { checkProjectAccess } = await import('@/lib/teams-db');
+    const access = await checkProjectAccess(report.projectId, userUid, userEmail);
+    if (!access.hasAccess && report.ownerUid !== userUid) {
+      return NextResponse.json(
+        { success: false, error: { code: 'FORBIDDEN', message: 'Unauthorized project access.' } },
+        {
+          status: 403,
+          headers: {
+            'Cache-Control': 'private, no-cache, no-store, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0',
+          },
+        }
+      );
+    }
+  }
 
   return NextResponse.json(
     { success: true, data: report },

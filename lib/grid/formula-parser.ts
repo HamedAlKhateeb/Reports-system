@@ -610,11 +610,11 @@ export class FormulaEvaluator {
       if (isFormulaError(left)) return left;
       if (isFormulaError(right)) return right;
 
-      const numL = Number(left);
-      const numR = Number(right);
-      if (left === '' || right === '' || isNaN(numL) || isNaN(numR)) {
-        if (typeof left !== 'string' || typeof right !== 'string') return ERROR_VALUES.VALUE;
-        // Excel cannot add text values arithmetically
+      const valL = left === '' ? 0 : left;
+      const valR = right === '' ? 0 : right;
+      const numL = Number(valL);
+      const numR = Number(valR);
+      if (isNaN(numL) || isNaN(numR)) {
         return ERROR_VALUES.VALUE;
       }
 
@@ -651,9 +651,11 @@ export class FormulaEvaluator {
       if (isFormulaError(left)) return left;
       if (isFormulaError(right)) return right;
 
-      const numL = Number(left);
-      const numR = Number(right);
-      if (left === '' || right === '' || isNaN(numL) || isNaN(numR)) return ERROR_VALUES.VALUE;
+      const valL = left === '' ? 0 : left;
+      const valR = right === '' ? 0 : right;
+      const numL = Number(valL);
+      const numR = Number(valR);
+      if (isNaN(numL) || isNaN(numR)) return ERROR_VALUES.VALUE;
 
       if (op === '*') {
         left = numL * numR;

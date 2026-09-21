@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ReportItem, WidgetEntity, InsightEntity, IssueItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import {
@@ -76,11 +76,7 @@ export function AnalyticsTab({
   const closedCount = issues.filter((i) => isDoneStatus(i.status)).length;
   const closureRate = totalCount > 0 ? Math.round((closedCount / totalCount) * 100) : 0;
 
-  useEffect(() => {
-    loadAnalytics();
-  }, [report.id]);
-
-  const loadAnalytics = async () => {
+  const loadAnalytics = useCallback(async () => {
     try {
       setLoading(true);
       // Ensure report dashboard exists
@@ -150,7 +146,11 @@ export function AnalyticsTab({
     } finally {
       setLoading(false);
     }
-  };
+  }, [dashboardId, isAr, report.id, report.reportNumber, userUid]);
+
+  useEffect(() => {
+    loadAnalytics();
+  }, [loadAnalytics]);
 
   const handleRecalculate = async () => {
     try {

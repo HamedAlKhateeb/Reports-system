@@ -2,7 +2,6 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: true,
-  swcMinify: true,
   compress: true,
   experimental: {
     optimizePackageImports: [
@@ -37,7 +36,7 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: '/((?!_next/static|_next/image|favicon.ico|images).*)',
+        source: '/api/:path*',
         headers: [
           {
             key: 'Cache-Control',

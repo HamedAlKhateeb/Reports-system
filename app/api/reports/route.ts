@@ -36,7 +36,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const reports = await getReports(userUid);
+    const projectId = req.nextUrl.searchParams.get('projectId') || undefined;
+    const reports = await getReports(userUid, undefined, { projectId });
     return NextResponse.json(
       { success: true, count: reports.length, data: reports },
       {

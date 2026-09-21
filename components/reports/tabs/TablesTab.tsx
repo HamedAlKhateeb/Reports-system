@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { ReportItem, TableEntity } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
@@ -25,18 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { getTablesByReportId, saveTable, updateReport, deleteTableEntity, clearTableValues } from '@/lib/db';
 import { toast } from '@/components/ui/toast';
-// Univer editor (heavy, client-only) — replaces the hand-rolled SmartTable.
-const UniverTable = dynamic(
-  () => import('@/components/editor/grid/UniverTable').then((m) => m.UniverTable),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex min-h-[300px] items-center justify-center">
-        <PageLoading label="…" className="flex-col" spinnerClassName="size-6" />
-      </div>
-    ),
-  }
-);
+import { MiniSpreadsheet } from '@/components/editor/grid/MiniSpreadsheet';
 
 interface TablesTabProps {
   report: ReportItem;
@@ -63,11 +52,7 @@ export function TablesTab({
   const [movingToReport, setMovingToReport] = useState(false);
   const [confirmNode, askConfirm] = useConfirm();
 
-  useEffect(() => {
-    loadTables();
-  }, [report.id]);
-
-  const loadTables = async () => {
+  const loadTables = useCallback(async () => {
     try {
       setLoading(true);
       const list = await getTablesByReportId(report.id);
@@ -86,7 +71,11 @@ export function TablesTab({
     } finally {
       setLoading(false);
     }
-  };
+  }, [report.id]);
+
+  useEffect(() => {
+    loadTables();
+  }, [loadTables]);
 
   const handleAddNewTable = async () => {
     const nextIdx = tables.length + 1;
@@ -554,9 +543,9 @@ export function TablesTab({
               </Button>
             </div>
 
-            {/* Render Univer spreadsheet directly */}
+            {/* Render MiniSpreadsheet directly */}
             <div className="rounded-xl border border-border bg-card shadow-2xs overflow-hidden">
-              <UniverTable tableId={activeTable.id} reportId={report.id} mode="embedded-edit" />
+              <MiniSpreadsheet tableId={activeTable.id} reportId={report.id} />
             </div>
           </div>
         )
@@ -564,19 +553,36 @@ export function TablesTab({
 
       {/* FULLSCREEN SPREADSHEET MODAL */}
       {isFullScreenOpen && activeTable && (
-        <UniverTable
-          tableId={activeTable.id}
-          reportId={report.id}
-          mode="full-screen"
-          onCloseFullScreen={() => {
-            setIsFullScreenOpen(false);
-            loadTables();
-          }}
-          onNavigateToContent={() => {
-            setIsFullScreenOpen(false);
-            onNavigateTab?.('content');
-          }}
-        />
+        <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur flex flex-col p-4">
+          <div className="flex items-center justify-between pb-3 border-b border-border">
+            <h3 className="text-sm font-semibold">{activeTable.name || (isAr ? 'الجدول' : 'Table')}</h3>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setIsFullScreenOpen(false);
+                  onNavigateTab?.('content');
+                }}
+              >
+                {isAr ? 'الانتقال إلى محتوى التقرير' : 'Go to Report Content'}
+              </Button>
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  setIsFullScreenOpen(false);
+                  loadTables();
+                }}
+              >
+                {isAr ? 'إغلاق ملء الشاشة' : 'Close Fullscreen'}
+              </Button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-hidden pt-3">
+            <MiniSpreadsheet tableId={activeTable.id} reportId={report.id} />
+          </div>
+        </div>
       )}
       {confirmNode}
     </div>

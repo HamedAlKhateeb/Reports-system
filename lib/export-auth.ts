@@ -107,6 +107,13 @@ export async function authorizeExport(
   req: NextRequest,
   sharePassword?: unknown
 ): Promise<{ uid: string } | { error: NextResponse }> {
+  const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'anon';
+  const { checkRateLimit } = await import('./rate-limit');
+  const rl = checkRateLimit(`export_${ip}`, 30, 60 * 1000);
+  if (!rl.allowed) {
+    return { error: rl.response! };
+  }
+
   if (!report) {
     return {
       error: NextResponse.json({ error: 'Missing report data' }, { status: 400 }),

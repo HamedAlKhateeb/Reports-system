@@ -1,2031 +1,384 @@
 'use client';
 
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Download,
-  FileCode,
-  FileText,
-  FileDown,
-  Globe,
-  User as UserIcon,
-  UserPlus,
-  Cpu,
-  Layers,
-  Check,
-  AlertCircle,
-  Images,
-  ExternalLink,
-  Briefcase,
-  Building2,
-  PenTool,
-  Palette,
-  Edit3,
-  Calendar,
-  BookmarkPlus,
-  BookmarkCheck,
-  Share2,
-  Phone,
-  Mail,
-  Plus,
-  Trash2,
-  Tag,
-  Award,
-  Folder,
-  CheckCircle2,
-  Copy,
-  SlidersHorizontal,
-  RotateCcw,
-  Archive,
-  ArchiveRestore,
-  LayoutDashboard,
-  AlertOctagon,
-  BarChart3,
-  Settings,
-  Lock,
-} from 'lucide-react';
 import dynamic from 'next/dynamic';
+import { ArrowLeft, ArrowRight, FileCode, FileText, FileDown, Share2, Archive, Check, Folder, BookmarkPlus } from 'lucide-react';
 import {
   getReportById,
   updateReport,
   getReportImages,
-  getIssuesByReportId,
   createOrUpdateShareToken,
   revokeShareToken,
-  inviteToReport,
-  revokeReportInvite,
   archiveReport,
   unarchiveReport,
   isArchivedReport,
   getFolders,
-  getReportIssues,
-  getProjectById,
-  isReportNumberTaken,
-  isValidReportNumber,
-  DEFAULT_PROJECT_ID,
 } from '@/lib/db';
-import {
-  extractCandidates,
-  CandidateScanResult,
-} from '@/lib/issue-intelligence-engine';
-import {
-  ReportItem,
-  ReportImageItem,
-  IssueItem,
-  CustomFieldItem,
-  FolderItem,
-  ProjectItem,
-  ReportIssueItem,
-} from '@/lib/types';
+import type { ReportItem, ReportImageItem, FolderItem } from '@/lib/types';
 import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
-import { InviteDialog } from '@/components/collaboration/InviteDialog';
-import { SharePasswordForm } from '@/components/collaboration/SharePasswordForm';
-import { AnalysisTable } from '@/components/reports/AnalysisTable';
-import { CandidateReviewModal } from '@/components/reports/CandidateReviewModal';
-import { DiscrepancyInspectorModal } from '@/components/reports/DiscrepancyInspectorModal';
-import {
-  CreateWidgetFromElementModal,
-  WidgetCreationSourceTarget,
-} from '@/components/reports/CreateWidgetFromElementModal';
-import { OverviewTab } from '@/components/reports/tabs/OverviewTab';
-import { ContentTab } from '@/components/reports/tabs/ContentTab';
-import { IssuesTab } from '@/components/reports/tabs/IssuesTab';
-import { AnalyticsTab } from '@/components/reports/tabs/AnalyticsTab';
-import { SettingsTab } from '@/components/reports/tabs/SettingsTab';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
-import { AppLanguage } from '@/lib/i18n/dictionary';
+import type { AppLanguage } from '@/lib/i18n/dictionary';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { Button } from '@/components/ui/button';
 import { PageLoading } from '@/components/ui/loading';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { toast } from '@/components/ui/toast';
-import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from '@/components/ui/table';
 import { saveCustomTemplate } from '@/lib/custom-templates';
 import { useAuth } from '@/lib/auth-context';
-import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
-import { ContactLinkItem, getReportContactLinks, formatWhatsAppUrl } from '@/lib/contact-links';
-import { buildReportEmail } from '@/lib/email-share';
-import { cn } from '@/lib/utils';
-import { useAIContext } from '@/lib/ai-context';
 
-const TipTapEditor = dynamic(
-  () => import('@/components/editor/TipTapEditor').then((m) => m.TipTapEditor),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex h-96 items-center justify-center">
-        <PageLoading />
-      </div>
-    ),
-  }
-);
+const TipTapEditor = dynamic(() => import('@/components/editor/TipTapEditor').then((m) => m.TipTapEditor), {
+  ssr: false,
+  loading: () => (
+    <div className="flex h-96 items-center justify-center">
+      <PageLoading />
+    </div>
+  ),
+});
 
-export default function ReportDetailPage() {
+export default function ReportEditorPage() {
   const params = useParams();
   const router = useRouter();
   const reportId = params.id as string;
-
   const { lang, t } = useLanguage();
   const { user, loading: authLoading } = useAuth();
-  const { setActiveReportInfo, updateActiveReportContent } = useAIContext();
 
   const [report, setReport] = useState<ReportItem | null>(null);
   const [images, setImages] = useState<ReportImageItem[]>([]);
-  const [linkedIssues, setLinkedIssues] = useState<IssueItem[]>([]);
+  const [folders, setFolders] = useState<FolderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<string | null>(null);
-  const [exportNotice, setExportNotice] = useState<string | null>(null);
-  // Phase 2.2 (B8): explicit save status — a failed save must never look
-  // like a success. `lastFailedSaveRef` holds a retry closure for the banner.
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Phase-1 unified draft pipeline: every field edit marks dirty and flows
-  // through ONE debounced full save (no field persists via its own path).
   const [hasUnsaved, setHasUnsaved] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  const [confirmNode, askConfirm] = useConfirm();
+
+  const [title, setTitle] = useState('');
+  const [systemUnderReview, setSystemUnderReview] = useState('');
+  const [author, setAuthor] = useState('');
+  const [themeColor, setThemeColor] = useState('olive');
+  const [backgroundColor, setBackgroundColor] = useState('white');
+  const [reportLanguage, setReportLanguage] = useState<AppLanguage>('ar');
+
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [sharingAction, setSharingAction] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+  const [customTemplateName, setCustomTemplateName] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
+  const latestContentRef = useRef<any>(null);
   const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hasUnsavedRef = useRef(false);
-  const saveStatusRef = useRef(saveStatus);
-  saveStatusRef.current = saveStatus;
-  hasUnsavedRef.current = hasUnsaved;
-  const lastFailedSaveRef = useRef<(() => Promise<void>) | null>(null);
-  const savedClearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveFailedMessage = lang === 'ar' ? 'فشل حفظ التقرير — تحقق من الاتصال ثم أعد المحاولة.' : 'Failed to save the report — check your connection and retry.';
+  const isOwner = !!report && !!user && report.ownerUid === user.uid;
+
   const markSaved = useCallback(() => {
     setSaveStatus('saved');
     setSaveError(null);
     setHasUnsaved(false);
     setLastSavedAt(new Date().toISOString());
-    lastFailedSaveRef.current = null;
-    if (savedClearTimer.current) clearTimeout(savedClearTimer.current);
-    savedClearTimer.current = setTimeout(() => setSaveStatus('idle'), 3000);
+    setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 3000);
   }, []);
-  const markSaveFailed = useCallback(
-    (message: string, retry: () => Promise<void>) => {
-      setSaveStatus('error');
-      setSaveError(message);
-      setHasUnsaved(true);
-      lastFailedSaveRef.current = retry;
-    },
-    []
-  );
-  const saveFailedMessage = lang === 'ar'
-    ? 'فشل حفظ التقرير — تحقق من الاتصال ثم أعد المحاولة. التعديلات المحلية ما زالت ظاهرة لكنها غير محفوظة على الخادم.'
-    : 'Failed to save the report — check your connection and retry. Local edits are still visible but not saved on the server.';
-  const latestContentRef = useRef<any>(null);
-  const liveEditorRef = useRef<any>(null);
 
-  // Tab navigation state — deep-linkable (?tab=issues): refresh/back/forward
-  // and shared links preserve the tab.
-  type MainTabKey = 'overview' | 'content' | 'issues' | 'analytics' | 'settings';
-  const MAIN_TAB_KEYS: MainTabKey[] = ['overview', 'content', 'issues', 'analytics', 'settings'];
-  const [activeMainTab, setActiveMainTab] = useState<MainTabKey>(() => {
-    try {
-      const q = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '').get('tab');
-      return (MAIN_TAB_KEYS as string[]).includes(q || '') ? (q as MainTabKey) : 'overview';
-    } catch {
-      return 'overview';
-    }
-  });
-  const [activeIssueFilter, setActiveIssueFilter] = useState<{ severity?: string; status?: string; search?: string } | null>(null);
-
-  const changeMainTab = (key: MainTabKey) => {
-    setActiveMainTab(key);
-    try {
-      const u = new URL(window.location.href);
-      u.searchParams.set('tab', key);
-      window.history.replaceState(null, '', u.toString());
-    } catch {}
-  };
-
-  const handleNavigateTab = (tabKey: string, meta?: any) => {
-    const targetTab = tabKey === 'tables' ? 'content' : tabKey;
-    changeMainTab((MAIN_TAB_KEYS as string[]).includes(targetTab) ? (targetTab as MainTabKey) : 'overview');
-    if (targetTab === 'issues' && meta) {
-      setActiveIssueFilter(meta);
-    }
-  };
-
-  // Intelligence Modals & relations state
-  const [showCandidateModal, setShowCandidateModal] = useState(false);
-  const [candidateScanResult, setCandidateScanResult] = useState<CandidateScanResult | null>(null);
-  const [isScanningCandidates, setIsScanningCandidates] = useState(false);
-  const [showInspectorModal, setShowInspectorModal] = useState(false);
-  const [showCreateWidgetModal, setShowCreateWidgetModal] = useState(false);
-  const [widgetCreationSource, setWidgetCreationSource] = useState<WidgetCreationSourceTarget | null>(null);
-  const [reportIssues, setReportIssues] = useState<ReportIssueItem[]>([]);
-  const [project, setProject] = useState<ProjectItem | null>(null);
-
-  // Metadata form states
-  const [title, setTitle] = useState('');
-  const [reportNumber, setReportNumber] = useState<number | string>(1);
-  const [author, setAuthor] = useState('');
-  const [authorTitle, setAuthorTitle] = useState('');
-  const [organization, setOrganization] = useState('');
-  const [signatureData, setSignatureData] = useState('');
-  const [themeColor, setThemeColor] = useState('olive');
-  const [backgroundColor, setBackgroundColor] = useState('white');
-  const [systemUnderReview, setSystemUnderReview] = useState('');
-  const [reportLanguage, setReportLanguage] = useState<AppLanguage>('ar');
-  const [contactLinks, setContactLinks] = useState<ContactLinkItem[]>([]);
-  const [customFields, setCustomFields] = useState<CustomFieldItem[]>([]);
-  const [customFooterFields, setCustomFooterFields] = useState<CustomFieldItem[]>([]);
-
-  // Custom Template states
-  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
-  const [customTemplateName, setCustomTemplateName] = useState('');
-  const [customTemplateDesc, setCustomTemplateDesc] = useState('');
-  const [savingTemplate, setSavingTemplate] = useState(false);
-  const [templateSaveSuccess, setTemplateSaveSuccess] = useState(false);
-
-  const handleConfirmSaveTemplate = () => {
-    if (!customTemplateName.trim() || !report) return;
-    const content = latestContentRef.current || report.contentJson;
-    saveCustomTemplate(
-      {
-        name: customTemplateName.trim(),
-        description:
-          customTemplateDesc.trim() ||
-          (reportLanguage === 'ar'
-            ? 'قالب مخصص تم حفظه من التقرير'
-            : 'Custom template saved from report'),
-        contentJson: content,
-        themeColor,
-        backgroundColor,
-        language: reportLanguage,
-      },
-      user?.uid
-    );
-    setTemplateSaveSuccess(true);
-    setTimeout(() => {
-      setTemplateSaveSuccess(false);
-      setShowSaveTemplateModal(false);
-      setCustomTemplateDesc('');
-    }, 1500);
-  };
-
-  // Folder states
-  const [folders, setFolders] = useState<FolderItem[]>([]);
-
-  // AI Pre-mutation Backup state
-  const [hasAiBackup, setHasAiBackup] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && reportId) {
-      const backup = localStorage.getItem(`report_ai_backup_${reportId}`);
-      setHasAiBackup(Boolean(backup));
-    }
-    const handleSnapshotSaved = (e: any) => {
-      if (e.detail?.reportId === reportId) {
-        setHasAiBackup(true);
-      }
-    };
-    window.addEventListener('ai-report-snapshot-saved', handleSnapshotSaved);
-    return () => window.removeEventListener('ai-report-snapshot-saved', handleSnapshotSaved);
-  }, [reportId]);
-
-  const handleRestoreAiBackup = () => {
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('ai-revert-report-content', {
-          detail: {},
-        })
-      );
-    }
-  };
-
-  const handleScanCandidates = async () => {
-    if (!report) return;
-    try {
-      setIsScanningCandidates(true);
-      const scanResult = await extractCandidates(reportId, user?.uid);
-      setCandidateScanResult(scanResult);
-      setShowCandidateModal(true);
-    } catch (err: any) {
-      console.error('Candidate scan error:', err);
-      toast.error((lang === 'ar' ? 'فشل فحص التشابه: ' : 'Similarity check failed: ') + err.message);
-    } finally {
-      setIsScanningCandidates(false);
-    }
-  };
-
-  const handleOpenInspector = () => {
-    setShowInspectorModal(true);
-  };
-
-  const [showFolderModal, setShowFolderModal] = useState(false);
-
-  // Web Sharing states
-  const [showShareModal, setShowShareModal] = useState(false);
-  const [sharingAction, setSharingAction] = useState(false);
-  const [sharePwdDraft, setSharePwdDraft] = useState('');
-  const [copiedShareLink, setCopiedShareLink] = useState(false);
-
-  // Collaboration (invites) states
-  const [showInviteDialog, setShowInviteDialog] = useState(false);
-  const [inviteBusy, setInviteBusy] = useState(false);
-  const [inviteError, setInviteError] = useState<string | null>(null);
-  const isReportOwner = !!report && !!user && report.ownerUid === user.uid;
-
-  const describeInviteError = (code?: string): string => {
-    if (lang === 'ar') {
-      if (code === 'invalid-email') return 'بريد إلكتروني غير صالح.';
-      if (code === 'cannot-invite-self') return 'لا يمكنك دعوة نفسك.';
-      if (code === 'forbidden') return 'فقط مالك التقرير يمكنه إدارة الدعوات.';
-      return 'فشل حفظ الدعوة. تحقق من الاتصال وحاول مجددًا.';
-    }
-    if (code === 'invalid-email') return 'Invalid email address.';
-    if (code === 'cannot-invite-self') return 'You cannot invite yourself.';
-    if (code === 'forbidden') return 'Only the report owner can manage invites.';
-    return 'Failed to save the invite. Check your connection and retry.';
-  };
-
-  const handleInviteCollaborator = async (email: string) => {
-    if (!report || !user) return;
-    setInviteBusy(true);
-    setInviteError(null);
-    try {
-      const res = await inviteToReport(report.id, email, user.uid);
-      if (!res.ok) {
-        setInviteError(describeInviteError(res.error));
-        return;
-      }
-      const updated = await getReportById(report.id, user.uid);
-      if (updated) setReport(updated);
-    } catch (err: any) {
-      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
-  const handleRevokeCollaborator = async (email: string) => {
-    if (!report || !user) return;
-    setInviteBusy(true);
-    setInviteError(null);
-    try {
-      const res = await revokeReportInvite(report.id, email, user.uid);
-      if (!res.ok) {
-        setInviteError(describeInviteError(res.error));
-        return;
-      }
-      const updated = await getReportById(report.id, user.uid);
-      if (updated) setReport(updated);
-    } catch (err: any) {
-      setInviteError(describeInviteError() + (err?.message ? ` (${err.message})` : ''));
-    } finally {
-      setInviteBusy(false);
-    }
-  };
-
-  const handleCreateShareLink = async () => {
-    if (!report) return;
-    try {
-      setSharingAction(true);
-      const token = await createOrUpdateShareToken(reportId);
-      setReport((prev) => (prev ? { ...prev, shareToken: token, isShared: true, sharedAt: new Date().toISOString() } : null));
-    } catch (err: any) {
-      console.error('Failed to create share link', err);
-      toast.error((lang === 'ar' ? 'فشل إنشاء رابط المشاركة: ' : 'Failed to create share link: ') + err.message);
-    } finally {
-      setSharingAction(false);
-    }
-  };
-
-  const handleRevokeShareLink = async () => {
-    if (!report) return;
-    if (!(await askConfirm(lang === 'ar' ? 'هل أنت متأكد من إلغاء المشاركة؟ سيتوقف الرابط القديم عن العمل فوراً.' : 'Are you sure you want to revoke this link? The current link will immediately stop working.'))) {
-      return;
-    }
-    try {
-      setSharingAction(true);
-      await revokeShareToken(reportId);
-      setReport((prev) => (prev ? { ...prev, shareToken: null, isShared: false, sharedAt: null, sharePasswordHash: null } : null));
-    } catch (err: any) {
-      console.error('Failed to revoke share link', err);
-      toast.error((lang === 'ar' ? 'فشل إلغاء المشاركة: ' : 'Failed to revoke share link: ') + err.message);
-    } finally {
-      setSharingAction(false);
-    }
-  };
-
-  // Optional share-link password (owner only). Only the SHA-256 hash is
-  // persisted; the plaintext never leaves this dialog except to unlock.
-  const handleSetSharePassword = async () => {
-    if (!report || !isReportOwner) return;
-    const pwd = sharePwdDraft;
-    const { evaluateSharePassword } = await import('@/lib/share-password');
-    if (!evaluateSharePassword(pwd).passed) {
-      toast.error(lang === 'ar' ? 'كلمة السر لا تطابق المعايير أدناه' : 'Password does not meet the criteria below');
-      return;
-    }
-    try {
-      setSharingAction(true);
-      const { sha256Hex } = await import('@/lib/share-password');
-      const hash = await sha256Hex(pwd);
-      const ok = await updateReport(reportId, { sharePasswordHash: hash });
-      if (!ok) throw new Error('save failed');
-      setReport((prev) => (prev ? { ...prev, sharePasswordHash: hash } : null));
-      setSharePwdDraft('');
-      toast.success(lang === 'ar' ? 'تم تفعيل كلمة السر للرابط' : 'Share link password enabled');
-    } catch (err: any) {
-      console.error('Set share password failed', err);
-      toast.error(lang === 'ar' ? 'فشل حفظ كلمة السر' : 'Failed to save password');
-    } finally {
-      setSharingAction(false);
-    }
-  };
-
-  const handleRemoveSharePassword = async () => {
-    if (!report || !isReportOwner) return;
-    try {
-      setSharingAction(true);
-      const ok = await updateReport(reportId, { sharePasswordHash: null });
-      if (!ok) throw new Error('save failed');
-      setReport((prev) => (prev ? { ...prev, sharePasswordHash: null } : null));
-      toast.success(lang === 'ar' ? 'تمت إزالة كلمة السر' : 'Password removed');
-    } catch (err: any) {
-      console.error('Remove share password failed', err);
-      toast.error(lang === 'ar' ? 'فشل إزالة كلمة السر' : 'Failed to remove password');
-    } finally {
-      setSharingAction(false);
-    }
-  };
-
-  const handleCopyShareLink = async () => {
-    if (!report?.shareToken) return;
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const url = `${origin}/share/${report.shareToken}`;
-    // Primary: async Clipboard API (HTTPS/localhost). Fallback: hidden textarea
-    // + execCommand for HTTP contexts where navigator.clipboard is unavailable.
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(url);
-      } else {
-        throw new Error('clipboard-api-unavailable');
-      }
-    } catch {
-      try {
-        const ta = document.createElement('textarea');
-        ta.value = url;
-        ta.setAttribute('readonly', '');
-        ta.style.position = 'fixed';
-        ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        const ok = document.execCommand('copy');
-        ta.remove();
-        if (!ok) throw new Error('execCommand-copy-failed');
-      } catch (fallbackErr) {
-        console.error('Copy share link failed:', fallbackErr);
-        return;
-      }
-    }
-    setCopiedShareLink(true);
-    setTimeout(() => setCopiedShareLink(false), 2000);
-  };
-
-  // Archive lifecycle (owner only — enforced in db + rules).
-  const [archiving, setArchiving] = useState(false);
-  const [confirmNode, askConfirm] = useConfirm();
-  const handleArchiveReport = async () => {
-    if (!report || !user) return;
-    const openCount = linkedIssues.filter((i) => !(i.archived_at || (i as any).archivedAt)).length;
-    const confirmMsg = lang === 'ar'
-      ? openCount > 0
-        ? `أرشفة هذا التقرير؟ سيختفي من القوائم، وستُؤرشف معه ${openCount} مشكلة مفتوحة. الاستعادة لاحقًا تعيد التقرير فقط — المشاكل تبقى مؤرشفة.`
-        : 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا (المشاكل المؤرشفة معه سابقًا تبقى مؤرشفة).'
-      : openCount > 0
-        ? `Archive this report? It will leave all lists, and ${openCount} open issue(s) will be archived with it. Restoring later brings back the report only — issues stay archived.`
-        : 'Archive this report? It will leave all lists and can be restored later (issues archived with it stay archived).';
-    if (!(await askConfirm(confirmMsg))) {
-      return;
-    }
-    try {
-      setArchiving(true);
-      const res = await archiveReport(report.id, user.uid);
-      if (!res.ok) {
-        toast.error(lang === 'ar' ? 'فشل الأرشفة.' : 'Archive failed.');
-        return;
-      }
-      toast.success(lang === 'ar' ? `تمت الأرشفة${res.archivedIssues ? ` مع ${res.archivedIssues} مشكلة` : ''}` : `Archived${res.archivedIssues ? ` with ${res.archivedIssues} issue(s)` : ''}`);
-      const updated = await getReportById(report.id, user.uid);
-      if (updated) {
-        setReport(updated);
-        setLinkedIssues(await getIssuesByReportId(report.id, user.uid).catch(() => []));
-      }
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  const handleUnarchiveReport = async () => {
-    if (!report || !user) return;
-    if (!(await askConfirm(lang === 'ar' ? 'استعادة هذا التقرير؟ سيعود للقوائم، لكن المشاكل التي أُرشفت معه تبقى مؤرشفة — استعدها كل على حدة.' : 'Restore this report? It returns to lists, but issues archived with it stay archived — restore them individually.'))) {
-      return;
-    }
-    try {
-      setArchiving(true);
-      const res = await unarchiveReport(report.id, user.uid);
-      if (!res.ok) {
-        toast.error(lang === 'ar' ? 'فشل الاستعادة.' : 'Restore failed.');
-        return;
-      }
-      const updated = await getReportById(report.id, user.uid);
-      if (updated) setReport(updated);
-    } finally {
-      setArchiving(false);
-    }
-  };
-
-  const handleMoveReportToFolder = async (targetFolderId: string | null) => {
-    await updateReport(reportId, { folderId: targetFolderId });
-    setReport((prev) => (prev ? { ...prev, folderId: targetFolderId } : null));
-  };
-
-  const loadReportData = useCallback(async () => {
+  const load = useCallback(async () => {
     if (authLoading) return;
     try {
       setLoading(true);
-      if (!user) {
-        router.push('/reports');
-        return;
-      }
-      const [rep, imgs, issues, flds, rIssues] = await Promise.all([
+      if (!user) { router.push('/reports'); return; }
+      const [rep, imgs, flds] = await Promise.all([
         getReportById(reportId, user.uid),
-        getReportImages(reportId),
-        getIssuesByReportId(reportId, user.uid),
+        (await import('@/lib/db')).getReportImages(reportId),
         getFolders(user.uid),
-        getReportIssues(reportId),
       ]);
-
-      if (!rep) {
-        router.push('/reports');
-        return;
-      }
+      if (!rep) { router.push('/reports'); return; }
       setReport(rep);
+      setImages(imgs);
       setFolders(flds);
-      setReportIssues(rIssues);
-
-      // Load project details if available
-      const projId = rep.project_id || rep.projectId || DEFAULT_PROJECT_ID;
-      getProjectById(projId, user.uid).then(setProject).catch(() => {});
       latestContentRef.current = rep.contentJson;
       setTitle(rep.title || '');
-      setReportNumber(rep.reportNumber ?? 1);
       setAuthor(rep.author || '');
-      setAuthorTitle(rep.authorTitle || '');
-      setOrganization(rep.organization || '');
-      setSignatureData(rep.signatureData || '');
+      setSystemUnderReview(rep.systemUnderReview || '');
       setThemeColor(rep.themeColor || 'olive');
       setBackgroundColor(rep.backgroundColor || 'white');
-      setSystemUnderReview(rep.systemUnderReview || '');
       setReportLanguage(rep.language || 'ar');
-      const defaultLinks = getReportContactLinks(user?.uid);
-      const activeLinks = rep.contactLinks && rep.contactLinks.length > 0 ? rep.contactLinks : defaultLinks;
-      setContactLinks(activeLinks);
-      setCustomFields(rep.customFields || []);
-      setCustomFooterFields(rep.customFooterFields || []);
-      setImages(imgs);
-      setLinkedIssues(issues);
-      // Invite inbox: opening a shared report marks its invite as seen.
-      try {
-        if (user && rep.ownerUid !== user.uid) {
-          const { markInviteSeen } = await import('@/lib/invites');
-          markInviteSeen(user.uid, rep.id);
-        }
-      } catch {}
-      // Persisted baseline for the autosave fingerprint (mirrors the sets above).
-      try {
-        lastPersistedMetaRef.current = metaFingerprint({
-          title: rep.title || '',
-          reportNumber: rep.reportNumber ?? 1,
-          author: rep.author || '',
-          authorTitle: rep.authorTitle || '',
-          organization: rep.organization || '',
-          signatureData: rep.signatureData || '',
-          themeColor: rep.themeColor || 'olive',
-          backgroundColor: rep.backgroundColor || 'white',
-          contactLinks: activeLinks,
-          systemUnderReview: rep.systemUnderReview || '',
-          reportLanguage: rep.language || 'ar',
-          customFields: rep.customFields || [],
-          customFooterFields: rep.customFooterFields || [],
-        });
-      } catch {}
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [reportId, router, user, authLoading]);
 
-      // Register active report with AI Context bridge
-      setActiveReportInfo({
-        id: rep.id,
-        title: rep.title || '',
-        contentJson: rep.contentJson,
-        folder: rep.folderId || 'root',
-        createdAt: rep.createdAt,
-        updatedAt: rep.updatedAt,
-        issues: issues.map((iss) => ({
-          id: iss.id,
-          title: iss.title,
-          severity: iss.severity,
-          status: iss.status,
-        })),
-      });
-    } catch (err) {
-      console.error('Failed to load report', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [reportId, router, user, authLoading, setActiveReportInfo]);
+  useEffect(() => { void load(); }, [load]);
 
-  useEffect(() => {
-    loadReportData();
-  }, [loadReportData]);
-
-  // Sync state in real time when AI assistant or background tasks update this report or its issues
-  useEffect(() => {
-    const handleReportUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent<{ reportId: string; updates: any }>;
-      if (customEvent.detail?.reportId === reportId) {
-        const { updates } = customEvent.detail;
-        if (updates.title !== undefined) setTitle(updates.title);
-        if (updates.systemUnderReview !== undefined) setSystemUnderReview(updates.systemUnderReview);
-        if (updates.summary !== undefined) {
-          loadReportData();
-        } else {
-          setReport((prev) => (prev ? { ...prev, ...updates } : null));
-        }
-      }
-    };
-
-    const handleIssuesChanged = () => {
-      // Perf: collapse back-to-back issue events (each reload is a query round-trip).
-      const now = Date.now();
-      const last = (handleIssuesChanged as any).__last || 0;
-      if (now - last < 400) {
-        clearTimeout((handleIssuesChanged as any).__timer);
-        (handleIssuesChanged as any).__timer = setTimeout(() => {
-          getIssuesByReportId(reportId).then(setLinkedIssues).catch(() => {});
-        }, 400);
-        return;
-      }
-      (handleIssuesChanged as any).__last = now;
-      getIssuesByReportId(reportId).then(setLinkedIssues).catch(() => {});
-    };
-
-    window.addEventListener('report-updated', handleReportUpdated);
-    window.addEventListener('issue-updated', handleIssuesChanged);
-    window.addEventListener('issue-created', handleIssuesChanged);
-    return () => {
-      window.removeEventListener('report-updated', handleReportUpdated);
-      window.removeEventListener('issue-updated', handleIssuesChanged);
-      window.removeEventListener('issue-created', handleIssuesChanged);
-    };
-  }, [reportId, loadReportData]);
-
-  // Real-time editor content tracking synced with AIContext
-  const handleContentChange = useCallback(
-    (contentJson: any) => {
-      latestContentRef.current = contentJson;
-      updateActiveReportContent(contentJson);
-    },
-    [updateActiveReportContent]
-  );
-
-  // Autosave TipTap JSON content
-  const handleEditorSave = async (contentJson: any) => {
-    latestContentRef.current = contentJson;
-    updateActiveReportContent(contentJson);
+  const persist = useCallback(async (patch: Partial<ReportItem> & { contentJson?: any }) => {
     setSaveStatus('saving');
     setSaveError(null);
+    try {
+      const ok = await updateReport(reportId, patch as any);
+      if (!ok) throw new Error(saveFailedMessage);
+      setReport((prev) => (prev ? { ...prev, ...patch } : null));
+      markSaved();
+    } catch (err: any) {
+      setSaveStatus('error');
+      setSaveError(err?.message || saveFailedMessage);
+      setHasUnsaved(true);
+    }
+  }, [reportId, markSaved, saveFailedMessage]);
+
+  const scheduleMetaSave = useCallback(() => {
+    setHasUnsaved(true);
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      void persist({ title, author, systemUnderReview, themeColor, backgroundColor, language: reportLanguage, contentJson: latestContentRef.current });
+    }, 1800);
+  }, [persist, title, author, systemUnderReview, themeColor, backgroundColor, reportLanguage]);
+
+  const handleContentChange = useCallback((contentJson: any) => { latestContentRef.current = contentJson; }, []);
+  const handleEditorSave = useCallback(async (contentJson: any) => {
+    latestContentRef.current = contentJson;
+    setSaveStatus('saving');
     try {
       const ok = await updateReport(reportId, { contentJson });
       if (!ok) throw new Error(saveFailedMessage);
       setReport((prev) => (prev ? { ...prev, contentJson } : null));
-      // refresh images in case a new image was uploaded
       const updatedImages = await getReportImages(reportId);
       setImages(updatedImages);
       markSaved();
     } catch (err: any) {
-      console.error('Editor save failed:', err);
-      markSaveFailed(err?.message || saveFailedMessage, () => handleEditorSave(contentJson));
-    }
-  };
-
-  // Phase 2.1 (B7): strict number validation — positive integer and unique
-  // within the user's scope. Invalid/duplicates revert with a visible error.
-  const resolveValidReportNumber = useCallback(async (): Promise<{ ok: boolean; numVal: number | string }> => {
-    const raw = reportNumber;
-    if (!isValidReportNumber(raw)) {
       setSaveStatus('error');
-      setSaveError(
-        lang === 'ar'
-          ? `رقم التقرير غير صالح ("${String(raw)}") — يجب أن يكون عددًا صحيحًا موجبًا. تمت إعادة القيمة السابقة.`
-          : `Invalid report number ("${String(raw)}") — it must be a positive integer. Reverted to the previous value.`
-      );
-      if (report) setReportNumber(report.reportNumber ?? 1);
-      lastFailedSaveRef.current = null;
-      return { ok: false, numVal: report?.reportNumber ?? 1 };
+      setSaveError(err?.message || saveFailedMessage);
+      setHasUnsaved(true);
     }
-    const numVal = Number(raw);
-    if (report && (await isReportNumberTaken(user?.uid, numVal, reportId))) {
-      setSaveStatus('error');
-      setSaveError(
-        lang === 'ar'
-          ? `رقم التقرير #${numVal} مستخدم بالفعل في تقرير آخر — اختر رقمًا غير مستخدم. تمت إعادة القيمة السابقة.`
-          : `Report #${numVal} is already used by another report — pick an unused number. Reverted to the previous value.`
-      );
-      setReportNumber(report.reportNumber ?? 1);
-      lastFailedSaveRef.current = null;
-      return { ok: false, numVal: report.reportNumber ?? 1 };
-    }
-    return { ok: true, numVal };
-  }, [report, reportId, reportNumber, lang, user?.uid]);
+  }, [reportId, markSaved, saveFailedMessage]);
 
-  // Update metadata
-  const handleMetaBlur = async () => {
-    if (!report) return;
-    const { ok, numVal } = await resolveValidReportNumber();
-    if (!ok) return;
-    setSaveStatus('saving');
-    setSaveError(null);
-    try {
-      const success = await updateReport(reportId, {
-        title,
-        reportNumber: numVal,
-        author,
-        authorTitle,
-        organization,
-        signatureData,
-        themeColor,
-        backgroundColor,
-        contactLinks,
-        systemUnderReview,
-        language: reportLanguage,
-        customFields,
-        customFooterFields,
-      });
-      if (!success) throw new Error(saveFailedMessage);
-      if (report) {
-        setReport({
-          ...report,
-          title,
-          reportNumber: numVal,
-          author,
-          authorTitle,
-          organization,
-          signatureData,
-          themeColor,
-          backgroundColor,
-          contactLinks,
-          systemUnderReview,
-          language: reportLanguage,
-          customFields,
-          customFooterFields,
-        });
-      }
-      try {
-        lastPersistedMetaRef.current = metaFingerprint({
-          title, reportNumber: numVal, author, authorTitle, organization, signatureData,
-          themeColor, backgroundColor, contactLinks, systemUnderReview,
-          reportLanguage, customFields, customFooterFields,
-        });
-      } catch {}
-      markSaved();
-    } catch (err: any) {
-      console.error('Metadata save failed:', err);
-      markSaveFailed(err?.message || saveFailedMessage, () => handleMetaBlur());
-    }
-  };
+  const handleSaveNow = useCallback(async () => {
+    if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; }
+    await persist({ title, author, systemUnderReview, themeColor, backgroundColor, language: reportLanguage, contentJson: latestContentRef.current });
+  }, [persist, title, author, systemUnderReview, themeColor, backgroundColor, reportLanguage]);
 
-  const handleSaveImmediately = useCallback(async () => {
-    if (!report) return;
-    if (draftTimer.current) {
-      clearTimeout(draftTimer.current);
-      draftTimer.current = null;
-    }
-    const { ok, numVal } = await resolveValidReportNumber();
-    if (!ok) return;
-    const content = latestContentRef.current || report.contentJson;
-    const updatedData = {
-      title,
-      reportNumber: numVal,
-      author,
-      authorTitle,
-      organization,
-      signatureData,
-      themeColor,
-      backgroundColor,
-      contactLinks,
-      systemUnderReview,
-      language: reportLanguage,
-      contentJson: content,
-      customFields,
-      customFooterFields,
-    };
-    setSaveStatus('saving');
-    setSaveError(null);
-    try {
-      const success = await updateReport(reportId, updatedData);
-      if (!success) throw new Error(saveFailedMessage);
-      setReport((prev) => (prev ? { ...prev, ...updatedData } : null));
-      try {
-        lastPersistedMetaRef.current = metaFingerprint({
-          title, reportNumber: numVal, author, authorTitle, organization, signatureData,
-          themeColor, backgroundColor, contactLinks, systemUnderReview,
-          reportLanguage, customFields, customFooterFields,
-        });
-      } catch {}
-      markSaved();
-    } catch (err: any) {
-      console.error('Immediate save failed:', err);
-      markSaveFailed(err?.message || saveFailedMessage, () => handleSaveImmediately());
-    }
-  }, [
-    report,
-    reportId,
-    title,
-    author,
-    authorTitle,
-    organization,
-    signatureData,
-    themeColor,
-    backgroundColor,
-    contactLinks,
-    systemUnderReview,
-    reportLanguage,
-    customFields,
-    customFooterFields,
-    markSaved,
-    markSaveFailed,
-    saveFailedMessage,
-    resolveValidReportNumber,
-  ]);
-
-  // Single draft pipeline: any meta/field edit marks dirty and debounces
-  // into the SAME full save above. No field owns a persistence path.
-  const saveImmediateRef = useRef(handleSaveImmediately);
-  saveImmediateRef.current = handleSaveImmediately;
-  const draftLoadedRef = useRef(false);
-  // Fingerprint of the last PERSISTED meta snapshot. The autosave effect
-  // compares current fields against it: programmatic syncs (loads, restores,
-  // AI updates) reproduce persisted values exactly → skipped, never dirty.
-  // Only genuine user edits diverge → dirty + scheduled save. No flags that
-  // can swallow a real edit.
-  const lastPersistedMetaRef = useRef<string>('');
-  const metaFingerprint = (v: {
-    title: unknown; reportNumber: unknown; author: unknown; authorTitle: unknown;
-    organization: unknown; signatureData: unknown; themeColor: unknown; backgroundColor: unknown;
-    contactLinks: unknown; systemUnderReview: unknown; reportLanguage: unknown;
-    customFields: unknown; customFooterFields: unknown;
-  }): string => {
-    try {
-      return JSON.stringify(v);
-    } catch {
-      return '';
-    }
-  };
-  const currentMetaFingerprint = (): string => metaFingerprint({
-    title, reportNumber, author, authorTitle, organization, signatureData,
-    themeColor, backgroundColor, contactLinks, systemUnderReview,
-    reportLanguage, customFields, customFooterFields,
-  });
   useEffect(() => {
-    if (loading || !report) return;
-    if (!draftLoadedRef.current) {
-      draftLoadedRef.current = true;
-      return;
-    }
-    if (currentMetaFingerprint() === lastPersistedMetaRef.current) {
-      if (draftTimer.current) {
-        clearTimeout(draftTimer.current);
-        draftTimer.current = null;
-      }
-      setHasUnsaved(false);
-      return;
-    }
-    setHasUnsaved(true);
-    if (draftTimer.current) clearTimeout(draftTimer.current);
-    draftTimer.current = setTimeout(() => {
-      void saveImmediateRef.current();
-    }, 2000);
-    return () => {
-      if (draftTimer.current) clearTimeout(draftTimer.current);
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsaved || saveStatus === 'saving' || saveStatus === 'error') { e.preventDefault(); (e as any).returnValue = ''; }
     };
-    // NOTE: intentionally keyed on field states only (never `report` —
-    // setReport on save success must not retrigger this effect).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, reportId, title, reportNumber, author, authorTitle, organization, signatureData, themeColor, backgroundColor, contactLinks, systemUnderReview, reportLanguage, customFields, customFooterFields]);
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, [hasUnsaved, saveStatus]);
 
-  // Leave guard: dirty, saving, or failed — never lose edits silently.
-  useEffect(() => {
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Flush a pending draft first (best effort), then warn if needed.
-      try {
-        if (draftTimer.current) {
-          clearTimeout(draftTimer.current);
-          draftTimer.current = null;
-          void saveImmediateRef.current();
-        }
-      } catch {}
-      if (hasUnsavedRef.current || saveStatusRef.current === 'saving' || saveStatusRef.current === 'error') {
-        e.preventDefault();
-        (e as any).returnValue = '';
-      }
-    };
-    window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, []);
-
-  const handleAddCustomField = () => {
-    const newField: CustomFieldItem = {
-      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cf_${Date.now()}`,
-      label: lang === 'ar' ? 'قسم جديد' : 'New Field',
-      value: '',
-    };
-    const updated = [...customFields, newField];
-    setCustomFields(updated);
-    setReport((prev) => (prev ? { ...prev, customFields: updated } : null));
-  };
-
-  const handleUpdateCustomField = (id: string, key: 'label' | 'value', val: string) => {
-    const updated = customFields.map((f) => (f.id === id ? { ...f, [key]: val } : f));
-    setCustomFields(updated);
-  };
-
-  const handleRemoveCustomField = (id: string) => {
-    const updated = customFields.filter((f) => f.id !== id);
-    setCustomFields(updated);
-    setReport((prev) => (prev ? { ...prev, customFields: updated } : null));
-  };
-
-  const handleAddCustomFooterField = () => {
-    const newField: CustomFieldItem = {
-      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `cff_${Date.now()}`,
-      label: lang === 'ar' ? 'اعتماد إضافي' : 'Additional Endorsement',
-      value: '',
-    };
-    const updated = [...customFooterFields, newField];
-    setCustomFooterFields(updated);
-    setReport((prev) => (prev ? { ...prev, customFooterFields: updated } : null));
-  };
-
-  const handleUpdateCustomFooterField = (id: string, key: 'label' | 'value', val: string) => {
-    const updated = customFooterFields.map((f) => (f.id === id ? { ...f, [key]: val } : f));
-    setCustomFooterFields(updated);
-  };
-
-  const handleRemoveCustomFooterField = (id: string) => {
-    const updated = customFooterFields.filter((f) => f.id !== id);
-    setCustomFooterFields(updated);
-    setReport((prev) => (prev ? { ...prev, customFooterFields: updated } : null));
-  };
-
-  const handleThemeChange = async (newTheme: string) => {
-    setThemeColor(newTheme);
-    setReport((prev) => (prev ? { ...prev, themeColor: newTheme } : null));
-  };
-
-  const handleBackgroundChange = async (newBg: string) => {
-    setBackgroundColor(newBg);
-    setReport((prev) => (prev ? { ...prev, backgroundColor: newBg } : null));
-  };
-
-  const handleLanguageToggle = async (newLang: AppLanguage) => {
-    setReportLanguage(newLang);
-    if (report) {
-      setReport({ ...report, language: newLang });
-    }
-  };
-
-  // Export handlers
   const handleExport = async (format: 'md' | 'docx' | 'pdf') => {
     if (!report) return;
     try {
       setExporting(format);
-      setExportNotice(null);
-
-      const numVal = Number(reportNumber) || reportNumber;
       const currentImgs = await getReportImages(reportId);
       const contentJsonToExport = latestContentRef.current || report.contentJson;
-      // Mind-maps export/share as PNG images (client pre-render).
       let mindmapSnaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {};
+      let drawingSnaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {};
       try {
         const { snapshotMindmaps } = await import('@/lib/mindmap-export');
         mindmapSnaps = await snapshotMindmaps(contentJsonToExport);
-      } catch {
-        mindmapSnaps = {};
-      }
-
-      const currentReportData: ReportItem = {
-        ...report,
-        title,
-        reportNumber: numVal,
-        author,
-        authorTitle,
-        organization,
-        signatureData,
-        themeColor,
-        backgroundColor,
-        contactLinks,
-        systemUnderReview,
-        language: reportLanguage,
-        contentJson: contentJsonToExport,
-        customFields,
-        customFooterFields,
+      } catch { mindmapSnaps = {}; }
+      try {
+        const { snapshotDrawings } = await import('@/lib/drawing-export');
+        drawingSnaps = await snapshotDrawings(contentJsonToExport);
+      } catch { drawingSnaps = {}; }
+      const current: ReportItem = {
+        ...report, title, author, systemUnderReview, themeColor, backgroundColor,
+        language: reportLanguage, contentJson: contentJsonToExport,
       };
-
       if (format === 'pdf') {
-        // Direct, high-fidelity PDF print/generation with native browser rendering and 100% RTL support
-        printReportAsPdf(currentReportData, currentImgs, [], mindmapSnaps);
+        printReportAsPdf(current, currentImgs, [], mindmapSnaps, drawingSnaps as any);
         setExporting(null);
         return;
       }
-
       const res = await fetch(`/api/export/${format}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          report: currentReportData,
-          images: currentImgs,
-          mindmaps: mindmapSnaps,
-        }),
+        body: JSON.stringify({ report: current, images: currentImgs, mindmaps: mindmapSnaps, drawings: drawingSnaps }),
       });
-
-      if (!res.ok) {
-        throw new Error(`Export failed with status: ${res.status}`);
-      }
-
-      // Standard binary blob download
+      if (!res.ok) throw new Error(`Export failed: ${res.status}`);
       const blob = await res.blob();
-      const disposition = res.headers.get('content-disposition') || '';
-      
-      const rawTitle = (title || report.title || (reportLanguage === 'ar' ? 'تقرير' : 'report')).trim();
-      const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
-      let filename = `${sanitizedTitle} - #${numVal}.${format === 'md' ? 'zip' : format}`;
-      
-      const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
-      if (match && match[1]) {
-        try {
-          filename = decodeURIComponent(match[1].replace(/["']/g, ''));
-        } catch {
-          filename = match[1].replace(/["']/g, '');
-        }
-      }
-
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      const safe = (title || report.title || 'report').replace(/[/\\:*?"<>|]/g, '_').trim();
+      a.download = `${safe} - #${report.reportNumber}.${format === 'md' ? 'zip' : format}`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err: any) {
-      console.error('Export error:', err);
-      // Revive exportNotice (was dead state): surface the failure inline in
-      // addition to the alert so the message survives dismissal context.
-      try {
-        setExportNotice(`${t('exportError')}: ${err?.message || err}`);
-      } catch {}
-      toast.error(t('exportError') + ': ' + err.message);
-    } finally {
-      setExporting(null);
-    }
+      toast.error(t('exportError') + ': ' + (err?.message || err));
+    } finally { setExporting(null); }
+  };
+
+  const handleArchive = async () => {
+    if (!report || !user) return;
+    if (!(await askConfirm(lang === 'ar' ? 'أرشفة هذا التقرير؟ سيختفي من القوائم ويمكن استعادته لاحقًا.' : 'Archive this report?'))) return;
+    try {
+      setArchiving(true);
+      const res = await archiveReport(report.id, user.uid);
+      if (!res.ok) { toast.error(lang === 'ar' ? 'فشل الأرشفة.' : 'Archive failed.'); return; }
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) setReport(updated);
+      toast.success(lang === 'ar' ? 'تمت الأرشفة' : 'Archived');
+    } finally { setArchiving(false); }
+  };
+  const handleUnarchive = async () => {
+    if (!report || !user) return;
+    try {
+      setArchiving(true);
+      await unarchiveReport(report.id, user.uid);
+      const updated = await getReportById(report.id, user.uid);
+      if (updated) setReport(updated);
+    } finally { setArchiving(false); }
   };
 
   if (loading || !report) {
-    return (
-      <div className="flex h-screen w-full items-center justify-center">
-        <PageLoading />
-      </div>
-    );
+    return <div className="flex h-screen w-full items-center justify-center"><PageLoading /></div>;
   }
 
   const BackIcon = lang === 'ar' ? ArrowRight : ArrowLeft;
-  const currentTheme = getReportTheme(themeColor);
-  const currentBg = getReportBackground(backgroundColor);
+  const archived = isArchivedReport(report);
 
   return (
-    <div className="mx-auto max-w-6xl px-2.5 sm:px-6 lg:px-8 py-6 sm:py-8 w-full max-w-full">
-      {/* Top Navigation & Actions Bar */}
-      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="mx-auto w-full max-w-6xl px-2.5 py-6 sm:px-6 lg:px-8 sm:py-8">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground self-start rounded-lg"
-          >
-            <Link href="/reports">
-              <BackIcon className="h-4 w-4" />
-              <span>{t('reports')}</span>
-            </Link>
+          <Button asChild variant="ghost" size="sm" className="h-9 gap-1.5 rounded-lg text-xs font-semibold text-muted-foreground hover:text-foreground">
+            <Link href="/reports"><BackIcon className="h-4 w-4" /><span>{t('reports')}</span></Link>
           </Button>
-
-          {/* Folder Selector (owner only — collaborators cannot move) */}
-          {isReportOwner ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowFolderModal(true)}
-              className="h-9 gap-1.5 rounded-lg text-xs font-semibold text-muted-foreground hover:text-foreground shadow-2xs"
-              title={lang === 'ar' ? 'نقل التقرير إلى مجلد' : 'Move report to folder'}
-            >
+          {isOwner ? (
+            <Button type="button" variant="outline" size="sm" onClick={() => setShowFolderModal(true)} className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs">
               <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-              <span>
-                {folders.find((f) => f.id === report.folderId)?.name ||
-                  (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
-              </span>
+              <span>{folders.find((f) => f.id === report.folderId)?.name || (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}</span>
             </Button>
-          ) : (
-            <span className="inline-flex items-center gap-1.5 h-9 px-2 text-xs font-semibold text-muted-foreground">
-              <Folder className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-              <span>
-                {folders.find((f) => f.id === report.folderId)?.name ||
-                  (lang === 'ar' ? 'بدون مجلد' : 'Uncategorized')}
-              </span>
-            </span>
-          )}
+          ) : null}
+          {archived ? <span className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-bold text-amber-700">{lang === 'ar' ? 'مؤرشف' : 'Archived'}</span> : null}
         </div>
-
-        {/* Export & Action Buttons with Unified Styling */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Visible Save: same pipeline as autosave + persistent state */}
           <div className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-card px-1.5 py-1 shadow-2xs">
-            <Button
-              type="button"
-              size="sm"
-              disabled={saveStatus === 'saving'}
-              onClick={() => void handleSaveImmediately()}
-              className="h-7 gap-1 rounded-md bg-[#2E4034] px-2.5 text-[11px] font-bold text-white hover:bg-[#24382F] disabled:opacity-60"
-              title={lang === 'ar' ? 'حفظ التقرير الآن (Ctrl+S)' : 'Save report now (Ctrl+S)'}
-            >
-              <Check className="h-3.5 w-3.5" />
-              <span>{lang === 'ar' ? 'حفظ' : 'Save'}</span>
+            <Button type="button" size="sm" disabled={saveStatus === 'saving'} onClick={() => void handleSaveNow()} className="h-7 gap-1 rounded-md bg-[#2E4034] px-2.5 text-[11px] font-bold text-white hover:bg-[#24382F] disabled:opacity-60">
+              <Check className="h-3.5 w-3.5" /><span>{lang === 'ar' ? 'حفظ' : 'Save'}</span>
             </Button>
-            <span
-              role="status"
-              className="flex items-center gap-1 px-1 text-[10px] font-semibold text-muted-foreground whitespace-nowrap"
-              title={
-                saveStatus === 'error'
-                  ? saveError || ''
-                  : lastSavedAt
-                    ? `${lang === 'ar' ? 'آخر حفظ' : 'Last saved'}: ${new Date(lastSavedAt).toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
-                    : ''
-              }
-            >
-              {(hasUnsaved || saveStatus === 'saving') && (
-                <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" aria-label={lang === 'ar' ? 'تعديلات غير محفوظة' : 'Unsaved changes'} />
-              )}
-              {saveStatus === 'saved' && !hasUnsaved && (
-                <span className="h-2 w-2 rounded-full bg-emerald-500" aria-label={lang === 'ar' ? 'محفوظ' : 'Saved'} />
-              )}
-              {saveStatus === 'error' && (
-                <span className="h-2 w-2 rounded-full bg-red-500" aria-label={lang === 'ar' ? 'فشل الحفظ' : 'Save failed'} />
-              )}
-              <span>
-                {saveStatus === 'saving'
-                  ? lang === 'ar' ? 'جارٍ الحفظ…' : 'Saving…'
-                  : saveStatus === 'error'
-                    ? lang === 'ar' ? 'فشل الحفظ' : 'Save failed'
-                    : hasUnsaved
-                      ? lang === 'ar' ? 'غير محفوظ' : 'Unsaved'
-                      : lastSavedAt
-                        ? `${lang === 'ar' ? 'حُفظ' : 'Saved'} ${new Date(lastSavedAt).toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
-                        : lang === 'ar' ? 'محفوظ' : 'Saved'}
-              </span>
+            <span role="status" className="flex items-center gap-1 px-1 text-[10px] font-semibold text-muted-foreground whitespace-nowrap">
+              {(hasUnsaved || saveStatus === 'saving') && <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />}
+              {saveStatus === 'saved' && !hasUnsaved && <span className="h-2 w-2 rounded-full bg-emerald-500" />}
+              {saveStatus === 'error' && <span className="h-2 w-2 rounded-full bg-red-500" />}
+              <span>{saveStatus === 'saving' ? (lang === 'ar' ? 'جارٍ الحفظ…' : 'Saving…') : saveStatus === 'error' ? (saveError || (lang === 'ar' ? 'فشل الحفظ' : 'Save failed')) : hasUnsaved ? (lang === 'ar' ? 'غير محفوظ' : 'Unsaved') : lastSavedAt ? `${lang === 'ar' ? 'حُفظ' : 'Saved'} ${new Date(lastSavedAt).toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' })}` : (lang === 'ar' ? 'محفوظ' : 'Saved')}</span>
             </span>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!!exporting}
-            onClick={() => handleExport('md')}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
-            title={t('exportMarkdown')}
-          >
-            <FileCode className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span>Markdown (ZIP)</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!!exporting}
-            onClick={() => handleExport('docx')}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
-            title={t('exportDocx')}
-          >
-            <FileText className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-            <span>Word (DOCX)</span>
-          </Button>
-
-          <Button
-            type="button"
-            size="sm"
-            disabled={!!exporting}
-            onClick={() => handleExport('pdf')}
-            className="h-9 gap-1.5 rounded-lg bg-[#2E4034] hover:bg-[#24382F] text-white text-xs font-semibold shadow-xs"
-            title={t('exportPdf')}
-          >
-            <FileDown className="h-3.5 w-3.5" />
-            <span>{exporting === 'pdf' ? t('exporting') : 'PDF'}</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setShowShareModal(true)}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs text-teal-700 dark:text-teal-400 border-teal-200 dark:border-teal-800 hover:bg-teal-50 dark:hover:bg-teal-950"
-            title={lang === 'ar' ? 'مشاركة التقرير كصفحة ويب مستقلة' : 'Share report as standalone web page'}
-          >
-            <Share2 className="h-3.5 w-3.5" />
-            <span>{lang === 'ar' ? 'مشاركة' : 'Share'}</span>
-            {report.isShared && report.shareToken && (
-              <span className="h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-950 animate-pulse" />
-            )}
-          </Button>
-
-          {/* Archive lifecycle (owner only) */}
-          {isReportOwner && !isArchivedReport(report) && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => void handleArchiveReport()}
-              disabled={archiving}
-              className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"
-              title={lang === 'ar' ? 'أرشفة التقرير' : 'Archive report'}
-            >
-              <Archive className="h-3.5 w-3.5 text-muted-foreground" />
-              <span>{lang === 'ar' ? 'أرشفة' : 'Archive'}</span>
-            </Button>
-          )}
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setCustomTemplateName(title || report.title || '');
-              setShowSaveTemplateModal(true);
-            }}
-            className="h-9 gap-1.5 rounded-lg text-xs font-semibold border-olive-300/80 text-olive-800 dark:border-olive-800 dark:text-olive-300 hover:bg-olive-50 dark:hover:bg-olive-950 shadow-2xs"
-            title={lang === 'ar' ? 'حفظ هذا التقرير كقالب مخصص دائم' : 'Save as permanent custom template'}
-          >
-            <BookmarkPlus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" />
-            <span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span>
-          </Button>
-
+          <Button type="button" variant="outline" size="sm" disabled={!!exporting} onClick={() => handleExport('md')} className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"><FileCode className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" /><span>Markdown (ZIP)</span></Button>
+          <Button type="button" variant="outline" size="sm" disabled={!!exporting} onClick={() => handleExport('docx')} className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"><FileText className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" /><span>Word (DOCX)</span></Button>
+          <Button type="button" size="sm" disabled={!!exporting} onClick={() => handleExport('pdf')} className="h-9 gap-1.5 rounded-lg bg-[#2E4034] text-xs font-semibold text-white hover:bg-[#24382F] shadow-xs"><FileDown className="h-3.5 w-3.5" /><span>{exporting === 'pdf' ? t('exporting') : 'PDF'}</span></Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => setShowShareModal(true)} className="h-9 gap-1.5 rounded-lg border-teal-200 text-xs font-semibold text-teal-700 shadow-2xs dark:border-teal-800 dark:text-teal-400"><Share2 className="h-3.5 w-3.5" /><span>{lang === 'ar' ? 'مشاركة' : 'Share'}</span>{report.isShared && report.shareToken ? <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" /> : null}</Button>
+          {isOwner && !archived ? <Button type="button" variant="outline" size="sm" onClick={() => void handleArchive()} disabled={archiving} className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"><Archive className="h-3.5 w-3.5 text-muted-foreground" /><span>{lang === 'ar' ? 'أرشفة' : 'Archive'}</span></Button> : null}
+          {isOwner && archived ? <Button type="button" variant="outline" size="sm" onClick={() => void handleUnarchive()} disabled={archiving} className="h-9 gap-1.5 rounded-lg text-xs font-semibold shadow-2xs"><Archive className="h-3.5 w-3.5" /><span>{lang === 'ar' ? 'استعادة' : 'Restore'}</span></Button> : null}
+          <Button type="button" variant="outline" size="sm" onClick={() => { setCustomTemplateName(title || report.title || ''); setShowSaveTemplateModal(true); }} className="h-9 gap-1.5 rounded-lg border-olive-300/80 text-xs font-semibold text-olive-800 shadow-2xs dark:border-olive-800 dark:text-olive-300"><BookmarkPlus className="h-3.5 w-3.5 text-olive-600 dark:text-olive-400" /><span>{lang === 'ar' ? 'حفظ كقالب' : 'Save Template'}</span></Button>
         </div>
       </div>
 
-      {/* Export Fallback Alert if applicable */}
-      {exportNotice && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-xs text-amber-800 flex items-start gap-2">
-          <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">{exportNotice}</div>
-          <button
-            type="button"
-            onClick={() => setExportNotice(null)}
-            className="text-amber-500 hover:text-amber-700 font-bold"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Save status: saving/saved live ONLY in the header cluster. The error
-          state is a fixed bottom overlay — an in-flow banner here shifts the
-          whole page mid-click (buttons under the cursor move and clicks get
-          swallowed). Never render layout-shifting status UI. */}
-      {saveStatus === 'error' && (
-        <div
-          role="alert"
-          className="fixed bottom-4 inset-x-4 z-[90] sm:inset-x-auto sm:end-6 sm:max-w-md rounded-xl border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/95 text-red-900 dark:text-red-100 p-3.5 text-xs flex flex-col gap-2.5 shadow-2xl animate-fade-in"
-        >
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span className="font-medium flex-1">{saveError || saveFailedMessage}</span>
-            <button
-              type="button"
-              onClick={() => {
-                setSaveStatus('idle');
-                setSaveError(null);
-                lastFailedSaveRef.current = null;
-              }}
-              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5 shrink-0"
-              title={lang === 'ar' ? 'إخفاء' : 'Dismiss'}
-            >
-              ×
-            </button>
+      <div className="mb-4 rounded-xl border border-border/70 bg-card/60 p-3.5 backdrop-blur-xs">
+        <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'عنوان التقرير' : 'Report title'}</label>
+        <Input id="report-title-input" value={title} onChange={(e) => { setTitle(e.target.value); scheduleMetaSave(); }} placeholder={lang === 'ar' ? 'عنوان التقرير…' : 'Report title…'} className="h-10 text-sm font-bold" />
+        <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'النظام قيد المراجعة' : 'System under review'}</label>
+            <Input value={systemUnderReview} onChange={(e) => { setSystemUnderReview(e.target.value); scheduleMetaSave(); }} className="h-9 text-xs" />
           </div>
-          {lastFailedSaveRef.current && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const retry = lastFailedSaveRef.current;
-                lastFailedSaveRef.current = null;
-                setSaveError(null);
-                if (retry) void retry();
-              }}
-              className="h-8 text-xs font-semibold gap-1.5 bg-card"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span>{lang === 'ar' ? 'إعادة المحاولة' : 'Retry'}</span>
-            </Button>
-          )}
-        </div>
-      )}
-
-      {/* Archive lifecycle banner */}
-      {report && isArchivedReport(report) && (
-        <div className="mb-6 rounded-xl border border-amber-300 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/40 p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs">
-          <div className="flex items-center gap-2 text-amber-950 dark:text-amber-100">
-            <Archive className="h-4 w-4 text-amber-700 dark:text-amber-400 shrink-0" />
-            <span className="font-medium">
-              {lang === 'ar'
-                ? 'هذا التقرير مؤرشف — مخفي من القوائم والمؤشرات. يمكنك استعادته أو حذفه نهائيًا من صفحة التقارير.'
-                : 'This report is archived — hidden from lists and metrics. You can restore it or delete it permanently from the reports page.'}
-            </span>
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'الكاتب' : 'Author'}</label>
+            <Input value={author} onChange={(e) => { setAuthor(e.target.value); scheduleMetaSave(); }} className="h-9 text-xs" />
           </div>
-          {isReportOwner && (
-            <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => void handleUnarchiveReport()}
-                disabled={archiving}
-                className="h-7 text-xs font-semibold gap-1.5 border-amber-400 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900 shadow-2xs"
-              >
-                <ArchiveRestore className="h-3.5 w-3.5" />
-                <span>{lang === 'ar' ? 'استعادة من الأرشيف' : 'Restore from archive'}</span>
-              </Button>
+          <div>
+            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'اللغة / المظهر' : 'Language / Theme'}</label>
+            <div className="flex items-center gap-1.5">
+              <select value={reportLanguage} onChange={(e) => { setReportLanguage(e.target.value as AppLanguage); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
+                <option value="ar">العربية</option>
+                <option value="en">English</option>
+              </select>
+              <select value={themeColor} onChange={(e) => { setThemeColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
+                <option value="olive">Olive</option>
+                <option value="blue">Blue</option>
+                <option value="emerald">Emerald</option>
+                <option value="amber">Amber</option>
+                <option value="slate">Slate</option>
+              </select>
+              <select value={backgroundColor} onChange={(e) => { setBackgroundColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
+                <option value="white">White</option>
+                <option value="cream">Cream</option>
+                <option value="cool">Cool</option>
+              </select>
             </div>
-          )}
-        </div>
-      )}
-
-      {/* AI Pre-modification Backup Notification Banner */}
-      {hasAiBackup && (
-        <div className="mb-6 rounded-xl border border-olive-300 dark:border-olive-800 bg-olive-50/70 dark:bg-olive-950/40 p-3.5 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-2xs">
-          <div className="flex items-center gap-2 text-olive-950 dark:text-olive-100">
-            <RotateCcw className="h-4 w-4 text-olive-700 dark:text-olive-400 shrink-0" />
-            <span className="font-medium">
-              {lang === 'ar'
-                ? 'توجد نسخة احتياطية محفوظة لهذا التقرير تم أخذها تلقائياً قبل تعديل المساعد الذكي.'
-                : 'An automatic backup of this report exists from before the AI assistant modification.'}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleRestoreAiBackup}
-              className="h-7 text-xs font-semibold gap-1.5 border-olive-400 dark:border-olive-700 hover:bg-olive-100 dark:hover:bg-olive-900 shadow-2xs"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span>{t('restorePreAiBackup')}</span>
-            </Button>
-            <button
-              type="button"
-              onClick={() => {
-                if (typeof window !== 'undefined') {
-                  localStorage.removeItem(`report_ai_backup_${reportId}`);
-                  setHasAiBackup(false);
-                }
-              }}
-              className="text-muted-foreground hover:text-foreground p-1 text-xs rounded-md hover:bg-black/5 dark:hover:bg-white/5"
-              title={lang === 'ar' ? 'إخفاء التنبيه وحذف النسخة الاحتياطية' : 'Dismiss backup'}
-            >
-              ×
-            </button>
           </div>
         </div>
-      )}
-
-      {/* Modern Intelligence Tab Navigation Bar */}
-      <div className="mb-6 border-b border-border/80 pb-px">
-        <nav className="-mb-px flex space-x-1 sm:space-x-2 overflow-x-auto no-scrollbar" aria-label="Tabs">
-          {[
-            { id: 'overview', label: lang === 'ar' ? 'نظرة عامة' : 'Overview', icon: LayoutDashboard },
-            { id: 'content', label: lang === 'ar' ? 'المحتوى والتحرير' : 'Content & Editor', icon: FileText },
-            { id: 'issues', label: lang === 'ar' ? 'المشاكل والمطابقة' : 'Issues & Deduplication', icon: AlertOctagon, badge: linkedIssues.length },
-            { id: 'analytics', label: lang === 'ar' ? 'التحليلات والمؤشرات' : 'Analytics', icon: BarChart3 },
-            { id: 'settings', label: lang === 'ar' ? 'الإعدادات والتصدير' : 'Settings & Export', icon: Settings },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeMainTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                role="tab"
-                aria-selected={isActive}
-                onClick={() => changeMainTab(tab.id as MainTabKey)}
-                className={cn(
-                  'group inline-flex items-center gap-2 py-3 px-3.5 border-b-2 font-medium text-xs sm:text-sm whitespace-nowrap transition-all cursor-pointer rounded-t-lg',
-                  isActive
-                    ? 'border-[#2E4034] text-[#2E4034] dark:border-emerald-400 dark:text-emerald-300 bg-[#2E4034]/5 font-semibold'
-                    : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border hover:bg-muted/30'
-                )}
-              >
-                <Icon className={cn('h-4 w-4', isActive ? 'text-[#2E4034] dark:text-emerald-400' : 'text-muted-foreground')} />
-                <span>{tab.label}</span>
-                {typeof tab.badge === 'number' && tab.badge > 0 && (
-                  <span
-                    className={cn(
-                      'ms-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
-                      isActive ? 'bg-[#2E4034] text-white' : 'bg-muted text-muted-foreground'
-                    )}
-                  >
-                    {tab.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </nav>
+        <p className="mt-2 text-[11px] text-muted-foreground">{lang === 'ar' ? 'يفتح التقرير على المحرر مباشرة — النصوص والجداول الذكية والرسوم والخرائط الذهنية في مساحة واحدة. من أي جدول ذكي يمكنك إرسال نسخة للوحة التتبع بزر «للتتبع».' : 'The report opens directly in the unified editor — text, smart tables, drawings and mind maps in one place. From any smart table press “Track” to send a copy to the tracking board.'}</p>
       </div>
 
-      {/* Tab Panels */}
-      <div className="transition-all duration-200">
-        {activeMainTab === 'overview' && (
-          <OverviewTab
-            report={report}
-            project={project}
-            issues={linkedIssues}
-            userUid={user?.uid}
-            onNavigateTab={handleNavigateTab}
-            onReportUpdate={(updatedReport) => setReport(updatedReport)}
-          />
-        )}
-
-        {activeMainTab === 'content' && (
-          <div className="space-y-6">
-            {/* Quick Title & Report # Header for Content Tab */}
-            <div className="rounded-xl border border-border/80 bg-card p-4 sm:p-5 shadow-2xs space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2 flex-1 min-w-[240px]">
-                  <span className="text-xs font-bold text-muted-foreground">#</span>
-                  <input
-                    type="text"
-                    value={reportNumber}
-                    onChange={(e) => setReportNumber(e.target.value)}
-                    onBlur={handleMetaBlur}
-                    placeholder="101"
-                    className="w-16 rounded-md border border-border bg-background px-2 py-1 text-xs font-bold"
-                  />
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    onBlur={handleMetaBlur}
-                    placeholder={t('reportTitle')}
-                    className="w-full text-lg sm:text-xl font-bold bg-transparent border-b border-transparent hover:border-border focus:border-olive-600 focus:outline-none py-1 transition-colors"
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-xs">
-                    {reportLanguage === 'ar' ? 'العربية (RTL)' : 'English (LTR)'}
-                  </Badge>
-                </div>
-              </div>
-            </div>
-
-            <ContentTab
-              report={report}
-              reportLanguage={reportLanguage}
-              themeColor={themeColor}
-              backgroundColor={backgroundColor}
-              onEditorSave={handleEditorSave}
-              onContentChange={handleContentChange}
-              onSaveImmediately={handleSaveImmediately}
-              onEditorReady={(ed) => {
-                liveEditorRef.current = ed;
-              }}
-            />
-          </div>
-        )}
-
-        {activeMainTab === 'issues' && (
-          <IssuesTab
-            report={report}
-            issues={linkedIssues}
-            reportIssues={reportIssues}
-            liveEditorRef={liveEditorRef}
-            onReportUpdate={(updatedReport) => setReport(updatedReport)}
-            onOpenScanner={handleScanCandidates}
-            onOpenInspector={handleOpenInspector}
-            onRefreshIssues={loadReportData}
-            activeFilter={activeIssueFilter}
-            onClearActiveFilter={() => setActiveIssueFilter(null)}
-          />
-        )}
-
-
-        {activeMainTab === 'analytics' && (
-          <AnalyticsTab
-            report={report}
-            issues={linkedIssues}
-            userUid={user?.uid}
-            onOpenCreateWidgetModal={() => {
-              setWidgetCreationSource({
-                type: 'report_issues',
-                reportId: report.id,
-                projectId: report.projectId,
-                issues: linkedIssues,
-                elementName: report.title,
-              });
-              setShowCreateWidgetModal(true);
-            }}
-          />
-        )}
-
-        {activeMainTab === 'settings' && (
-          <SettingsTab
-            report={report}
-            reportLanguage={reportLanguage}
-            themeColor={themeColor}
-            backgroundColor={backgroundColor}
-            signatureData={signatureData}
-            signatureType="text"
-            customFields={customFields}
-            customFooterFields={customFooterFields}
-            exporting={exporting}
-            onLanguageChange={handleLanguageToggle}
-            onThemeChange={handleThemeChange}
-            onBackgroundChange={handleBackgroundChange}
-            onSignatureChange={setSignatureData}
-            onExport={handleExport}
-            onSaveTemplate={() => {
-              setCustomTemplateName(title || report.title || '');
-              setShowSaveTemplateModal(true);
-            }}
-            onOpenShareModal={() => setShowShareModal(true)}
-            onAddCustomField={handleAddCustomField}
-            onRemoveCustomField={handleRemoveCustomField}
-            onUpdateCustomField={handleUpdateCustomField}
-            onAddCustomFooterField={handleAddCustomFooterField}
-            onRemoveCustomFooterField={handleRemoveCustomFooterField}
-            onUpdateCustomFooterField={handleUpdateCustomFooterField}
-          />
-        )}
+      {/* overflow-visible (not hidden): position:sticky toolbar only sticks when no ancestor clips overflow */}
+      <div className="overflow-visible rounded-xl border border-border/70 bg-card shadow-2xs">
+        <TipTapEditor
+          reportId={reportId}
+          initialContent={report.contentJson}
+          reportLanguage={reportLanguage}
+          onSave={handleEditorSave}
+          onContentChange={handleContentChange}
+          onSaveImmediately={handleSaveNow}
+          themeColor={themeColor}
+          backgroundColor={backgroundColor}
+        />
       </div>
 
-      {/* Save as Custom Template Modal */}
-      {showSaveTemplateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div
-            dir={lang === 'ar' ? 'rtl' : 'ltr'}
-            className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl space-y-4"
-          >
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-olive-100 dark:bg-olive-950 text-olive-800 dark:text-olive-300">
-                <BookmarkPlus className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-foreground">
-                  {lang === 'ar' ? 'حفظ التقرير كقالب مخصص' : 'Save as Custom Template'}
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {lang === 'ar'
-                    ? 'سيتم حفظ هيكل التقرير وجداوله وتنسيقاته لاستخدامه مستقبلاً في أي وقت.'
-                    : 'The report structure, tables, and styles will be saved for future reports.'}
-                </p>
-              </div>
-            </div>
-
-            {templateSaveSuccess ? (
-              <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 p-4 text-center text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center justify-center gap-2">
-                <BookmarkCheck className="h-4 w-4 text-emerald-600" />
-                <span>{lang === 'ar' ? 'تم حفظ القالب بنجاح!' : 'Template saved successfully!'}</span>
-              </div>
-            ) : (
-              <>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground">
-                    {lang === 'ar' ? 'اسم القالب:' : 'Template Name:'}
-                  </label>
-                  <input
-                    type="text"
-                    value={customTemplateName}
-                    onChange={(e) => setCustomTemplateName(e.target.value)}
-                    placeholder={lang === 'ar' ? 'مثال: تقرير تدقيق دوري مخصص' : 'e.g. Custom Audit Report'}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground">
-                    {lang === 'ar' ? 'وصف مختصر (اختياري):' : 'Description (Optional):'}
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={customTemplateDesc}
-                    onChange={(e) => setCustomTemplateDesc(e.target.value)}
-                    placeholder={lang === 'ar' ? 'اكتب نبذة عن استخدامات هذا القالب...' : 'Describe when to use this template...'}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-xs text-foreground focus:border-olive-600 focus:outline-none focus:ring-1 focus:ring-olive-600 resize-none"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowSaveTemplateModal(false)}
-                  >
-                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!customTemplateName.trim()}
-                    onClick={handleConfirmSaveTemplate}
-                    className="bg-[#2E4034] text-white hover:bg-[#24382F]"
-                  >
-                    <BookmarkPlus className="h-3.5 w-3.5 me-1.5" />
-                    <span>{lang === 'ar' ? 'حفظ القالب' : 'Save Template'}</span>
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-      {/* Share Report Modal */}
-      {showShareModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-2xl text-card-foreground animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex items-start gap-3 mb-4">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300">
-                <Share2 className="h-5 w-5" />
-              </div>
-              <div className="flex-1">
-                <h3 className="text-base font-bold text-foreground">
-                  {lang === 'ar' ? 'مشاركة التقرير كصفحة ويب' : 'Share Report as Web Page'}
-                </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {lang === 'ar'
-                    ? 'رابط ويب مستقل (للقراءة فقط) بتصميم احترافي يتيح تصدير PDF و Word مباشرة.'
-                    : 'A standalone read-only web page allowing direct PDF and Word exports.'}
-                </p>
-              </div>
-            </div>
-
-            {/* Collaboration: invite registered users (owner only) */}
-            {isReportOwner && (
-              <div className="mb-4 flex items-center justify-between rounded-xl border border-border/80 bg-muted/30 p-3">
-                <div className="text-xs">
-                  <div className="font-bold text-foreground">
-                    {lang === 'ar' ? 'المتعاونون' : 'Collaborators'}
-                    {(report.sharedWithEmails?.length || 0) > 0 && (
-                      <span className="ms-1.5 rounded-full bg-teal-100 dark:bg-teal-900 px-2 py-0.5 text-[10px] font-bold text-teal-700 dark:text-teal-300">
-                        {report.sharedWithEmails!.length}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5">
-                    {lang === 'ar'
-                      ? 'دعوة بالبريد لعرض التقرير وتعديله والتعليق على مشاكله'
-                      : 'Invite by email to view, edit and comment on issues'}
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    setInviteError(null);
-                    setShowInviteDialog(true);
-                  }}
-                  className="h-8 text-xs shrink-0"
-                >
-                  <UserPlus className="h-3.5 w-3.5 me-1" />
-                  <span>{lang === 'ar' ? 'إدارة الدعوات' : 'Manage invites'}</span>
-                </Button>
-              </div>
-            )}
-
-            {report.isShared && report.shareToken ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-between rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 p-3 text-xs">
-                  <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-semibold">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                    <span>{lang === 'ar' ? 'المشاركة مفعّلة حالياً' : 'Sharing is currently active'}</span>
-                  </div>
-                  <Badge variant="outline" className="text-[10px] bg-emerald-100 dark:bg-emerald-900 border-emerald-300">
-                    {lang === 'ar' ? 'نشط' : 'Active'}
-                  </Badge>
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground">
-                    {lang === 'ar' ? 'رابط المشاركة المباشر:' : 'Share Link:'}
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      dir="ltr"
-                      value={typeof window !== 'undefined' ? `${window.location.origin}/share/${report.shareToken}` : ''}
-                      className="w-full rounded-xl border border-border bg-muted/60 px-3 py-2 text-xs font-mono text-foreground focus:outline-none select-all"
-                    />
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={handleCopyShareLink}
-                      className="h-9 px-3 shrink-0 rounded-xl bg-[#2E4034] text-white hover:bg-[#24382F]"
-                    >
-                      {copiedShareLink ? (
-                        <>
-                          <Check className="h-3.5 w-3.5 me-1 text-emerald-400" />
-                          <span>{lang === 'ar' ? 'تم النسخ' : 'Copied'}</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="h-3.5 w-3.5 me-1" />
-                          <span>{lang === 'ar' ? 'نسخ' : 'Copy'}</span>
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    asChild
-                    className="h-8 text-xs"
-                  >
-                    <a
-                      href={
-                        buildReportEmail(report, {
-                          shareUrl:
-                            typeof window !== 'undefined'
-                              ? `${window.location.origin}/share/${report.shareToken}`
-                              : null,
-                          issuesTotal: linkedIssues.length,
-                          lang,
-                        }).mailto
-                      }
-                    >
-                      <Mail className="h-3.5 w-3.5 me-1" />
-                      <span>{lang === 'ar' ? 'إرسال بالإيميل' : 'Send via email'}</span>
-                    </a>
-                  </Button>
-                  <span className="text-[10px] text-muted-foreground">
-                    {lang === 'ar' ? 'يفتح بريدك بمسودة جاهزة' : 'Opens your mail app with a ready draft'}
-                  </span>
-                </div>
-
-                <div className="rounded-xl border border-border/80 bg-muted/30 p-3 text-[11px] text-muted-foreground leading-relaxed flex items-start gap-2">
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0 mt-0.5 text-teal-600 dark:text-teal-400" />
-                  <div>
-                    {lang === 'ar'
-                      ? 'يمكن لأي شخص معاه الرابط الاطلاع على التقرير بدون تسجيل دخول. الرابط غير مفهرس في محركات البحث.'
-                      : 'Anyone with this link can view the report without logging in. The link is not indexed by search engines.'}
-                  </div>
-                </div>
-
-                {/* Optional share-link password (owner only, hash stored) */}
-                {isReportOwner && (
-                  <div className="rounded-xl border border-border/80 bg-muted/30 p-3 space-y-2">
-                    <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
-                      <Lock className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
-                      <span>{lang === 'ar' ? 'كلمة سر اختيارية للرابط' : 'Optional link password'}</span>
-                      {report.sharePasswordHash && (
-                        <Badge variant="outline" className="text-[10px] bg-emerald-100 dark:bg-emerald-900 border-emerald-300">
-                          {lang === 'ar' ? 'مفعّلة' : 'On'}
-                        </Badge>
-                      )}
-                    </div>
-                    {report.sharePasswordHash ? (
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-muted-foreground">
-                          {lang === 'ar' ? 'الزوار يحتاجون كلمة السر لفتح الصفحة والتصدير.' : 'Visitors need the password to open and export.'}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={sharingAction}
-                          onClick={handleRemoveSharePassword}
-                          className="h-7 text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950 shrink-0"
-                        >
-                          {lang === 'ar' ? 'إزالة' : 'Remove'}
-                        </Button>
-                      </div>
-                    ) : (
-                      <SharePasswordForm
-                        lang={lang}
-                        draft={sharePwdDraft}
-                        onDraft={setSharePwdDraft}
-                        onSubmit={() => void handleSetSharePassword()}
-                        busy={sharingAction}
-                      />
-                    )}
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between pt-2 border-t border-border">
-                  {isReportOwner ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      disabled={sharingAction}
-                      onClick={handleRevokeShareLink}
-                      className="h-8 text-xs text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 me-1" />
-                      <span>{lang === 'ar' ? 'إلغاء المشاركة (Revoke)' : 'Revoke Link'}</span>
-                    </Button>
-                  ) : (
-                    <span className="text-[11px] text-muted-foreground">
-                      {lang === 'ar' ? 'تمت مشاركة هذا التقرير معك من مالكه.' : 'This report was shared with you by its owner.'}
-                    </span>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      asChild
-                      className="h-8 text-xs"
-                    >
-                      <a
-                        href={`/share/${report.shareToken}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5 me-1" />
-                        <span>{lang === 'ar' ? 'فتح الصفحة' : 'Open Page'}</span>
-                      </a>
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => setShowShareModal(false)}
-                      className="h-8 text-xs bg-[#2E4034] text-white hover:bg-[#24382F]"
-                    >
-                      {lang === 'ar' ? 'إغلاق' : 'Close'}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ) : isReportOwner ? (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-dashed border-border p-4 text-center">
-                  <p className="text-xs text-muted-foreground leading-relaxed mb-3">
-                    {lang === 'ar'
-                      ? 'هذا التقرير خاص حالياً ولا يمكن الوصول إليه إلا من خلال حسابك. اضغط أدناه لإنشاء رابط مشاركة عام مستقل.'
-                      : 'This report is currently private. Click below to generate an unguessable public share link.'}
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={sharingAction}
-                    onClick={handleCreateShareLink}
-                    className="h-9 gap-1.5 rounded-xl bg-[#2E4034] text-white hover:bg-[#24382F]"
-                  >
-                    <Share2 className="h-3.5 w-3.5" />
-                    <span>{sharingAction ? (lang === 'ar' ? 'جاري التوليد...' : 'Generating...') : (lang === 'ar' ? 'إنشاء رابط المشاركة' : 'Generate Share Link')}</span>
-                  </Button>
-                </div>
-
-                <div className="flex justify-end pt-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowShareModal(false)}
-                  >
-                    {lang === 'ar' ? 'إلغاء' : 'Cancel'}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-dashed border-border p-4 text-center">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    {lang === 'ar'
-                      ? 'هذا التقرير خاص. فقط مالكه يمكنه إنشاء رابط مشاركة عام.'
-                      : 'This report is private. Only its owner can create a public link.'}
-                  </p>
-                </div>
-                <div className="flex justify-end pt-2">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setShowShareModal(false)}
-                  >
-                    {lang === 'ar' ? 'إغلاق' : 'Close'}
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Move to Folder Modal */}
-      {showFolderModal && (
+      {showFolderModal ? (
         <MoveToFolderModal
           isOpen={showFolderModal}
           onClose={() => setShowFolderModal(false)}
           reportToMove={report}
           folders={folders}
-          onConfirmMove={handleMoveReportToFolder}
+          onConfirmMove={async (fid: string | null) => {
+            await updateReport(reportId, { folderId: fid });
+            setReport((p) => (p ? { ...p, folderId: fid } : null));
+            setShowFolderModal(false);
+          }}
         />
-      )}
+      ) : null}
 
-      {/* Collaboration invites (owner only) */}
-      {showInviteDialog && report && (
-        <InviteDialog
-          isOpen={showInviteDialog}
-          onClose={() => {
-            setShowInviteDialog(false);
-            setInviteError(null);
-          }}
-          subjectName={report.title}
-          kind="report"
-          emails={report.sharedWithEmails || []}
-          busy={inviteBusy}
-          error={inviteError}
-          onInvite={handleInviteCollaborator}
-          onRevoke={handleRevokeCollaborator}
-        />
-      )}
+      {showShareModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowShareModal(false)}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-1 text-sm font-bold">{lang === 'ar' ? 'مشاركة التقرير' : 'Share report'}</h3>
+            <p className="mb-3 text-xs text-muted-foreground">{lang === 'ar' ? 'رابط ويب للقراءة فقط.' : 'Read-only web link.'}</p>
+            {report.shareToken ? (
+              <div className="mb-3 flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-2 font-mono text-[11px]" dir="ltr">
+                <span className="min-w-0 flex-1 truncate">{typeof window !== 'undefined' ? `${window.location.origin}/share/${report.shareToken}` : ''}</span>
+                <Button size="sm" className="h-7 text-[11px]" onClick={async () => { try { await navigator.clipboard.writeText(`${window.location.origin}/share/${report.shareToken}`); setCopiedShareLink(true); setTimeout(() => setCopiedShareLink(false), 1500); } catch {} }}>{copiedShareLink ? (lang === 'ar' ? 'تم' : 'Copied') : (lang === 'ar' ? 'نسخ' : 'Copy')}</Button>
+              </div>
+            ) : null}
+            <div className="flex items-center justify-end gap-2">
+              {report.shareToken ? (
+                <Button variant="outline" size="sm" disabled={sharingAction} onClick={async () => { setSharingAction(true); try { await revokeShareToken(reportId); setReport((p) => (p ? { ...p, shareToken: null, isShared: false } : null)); } finally { setSharingAction(false); } }}>{lang === 'ar' ? 'إلغاء الرابط' : 'Revoke'}</Button>
+              ) : (
+                <Button size="sm" disabled={sharingAction} onClick={async () => { setSharingAction(true); try { const token = await createOrUpdateShareToken(reportId); setReport((p) => (p ? { ...p, shareToken: token, isShared: true } : null)); } finally { setSharingAction(false); } }}>{lang === 'ar' ? 'إنشاء رابط' : 'Create link'}</Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={() => setShowShareModal(false)}>{lang === 'ar' ? 'إغلاق' : 'Close'}</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-      {/* Candidate Review Modal (Single Source of Truth) */}
-      {showCandidateModal && candidateScanResult && (
-        <CandidateReviewModal
-          isOpen={showCandidateModal}
-          onClose={() => setShowCandidateModal(false)}
-          scanResult={candidateScanResult}
-          userUid={user?.uid}
-          onApprovalComplete={async () => {
-            await loadReportData();
-          }}
-        />
-      )}
-
-      {/* Discrepancy Inspector Modal (Counter Consistency) */}
-      {showInspectorModal && (
-        <DiscrepancyInspectorModal
-          isOpen={showInspectorModal}
-          onClose={() => setShowInspectorModal(false)}
-          reportId={reportId}
-          userUid={user?.uid}
-          onSyncComplete={async () => {
-            await loadReportData();
-          }}
-        />
-      )}
-
-      {/* Create Widget From Element Modal (Selection to Widget Pipeline) */}
-      {showCreateWidgetModal && widgetCreationSource && (
-        <CreateWidgetFromElementModal
-          isOpen={showCreateWidgetModal}
-          onClose={() => {
-            setShowCreateWidgetModal(false);
-            setWidgetCreationSource(null);
-          }}
-          sourceTarget={widgetCreationSource}
-          report={report}
-          userUid={user?.uid}
-          onWidgetCreated={async () => {
-            setShowCreateWidgetModal(false);
-            setWidgetCreationSource(null);
-            await loadReportData();
-          }}
-        />
-      )}
+      {showSaveTemplateModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowSaveTemplateModal(false)}>
+          <div className="w-full max-w-sm rounded-xl border border-border bg-card p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-2 text-sm font-bold">{lang === 'ar' ? 'حفظ كقالب مخصص' : 'Save as custom template'}</h3>
+            <Input value={customTemplateName} onChange={(e) => setCustomTemplateName(e.target.value)} className="mb-3 h-9 text-xs" placeholder={lang === 'ar' ? 'اسم القالب…' : 'Template name…'} />
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setShowSaveTemplateModal(false)}>{lang === 'ar' ? 'إلغاء' : 'Cancel'}</Button>
+              <Button size="sm" disabled={!customTemplateName.trim() || savingTemplate} onClick={() => { setSavingTemplate(true); try { saveCustomTemplate({ name: customTemplateName.trim(), description: '', contentJson: latestContentRef.current || report.contentJson, themeColor, backgroundColor, language: reportLanguage }, user?.uid); toast.success(lang === 'ar' ? 'تم حفظ القالب' : 'Template saved'); setShowSaveTemplateModal(false); } finally { setSavingTemplate(false); } }}>{lang === 'ar' ? 'حفظ' : 'Save'}</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {confirmNode}
     </div>
   );
 }
-

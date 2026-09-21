@@ -1,8 +1,12 @@
 'use client';
 
 import React, { useState } from 'react';
+import { UserCheck } from 'lucide-react';
 import { IssueItem, ReportItem } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { useAuth } from '@/lib/auth-context';
+import { useProject } from '@/lib/project-context';
+import { createNotification } from '@/lib/notifications-db';
 import {
   getStatusLabel,
   getSeverityLabel,
@@ -31,12 +35,16 @@ interface NewIssueModalProps {
 
 export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueModalProps) {
   const { lang, t } = useLanguage();
+  const { user } = useAuth();
+  const { team, activeProject } = useProject();
+  const teamMembers = team?.members || [];
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<IssueStatus>('open');
   const [severity, setSeverity] = useState<IssueSeverity>('medium');
   const [linkedReportId, setLinkedReportId] = useState<string>('');
+  const [assigneeEmail, setAssigneeEmail] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -45,18 +53,51 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
 
     try {
       setSubmitting(true);
+      const member = teamMembers.find((m) => m.email === assigneeEmail);
+      const name = member?.name || (user?.email === assigneeEmail ? user.displayName : undefined) || (assigneeEmail ? assigneeEmail.split('@')[0] : null);
+      const uid = member?.userId || (user?.email === assigneeEmail ? user.uid : undefined) || (assigneeEmail || null);
+
       await onCreate({
         title: title.trim(),
         description: description.trim(),
         status,
         severity,
         linkedReportId: linkedReportId || null,
+        assigneeUid: uid,
+        assigneeEmail: assigneeEmail || null,
+        assigneeName: name,
+        projectId: activeProject?.id,
       });
+
+      if ((uid || assigneeEmail) && uid !== user?.uid && assigneeEmail !== user?.email) {
+        try {
+          await createNotification({
+            recipientUid: uid || assigneeEmail,
+            recipientEmail: assigneeEmail || undefined,
+            senderUid: user?.uid || null,
+            senderName: user?.displayName || user?.email || 'Someone',
+            type: 'task_assigned',
+            title: lang === 'ar' ? 'تم تعيين مهمة جديدة لك' : 'New task assigned to you',
+            titleAr: 'تم تعيين مهمة جديدة لك',
+            titleEn: 'New task assigned to you',
+            body: lang === 'ar'
+              ? `قام ${user?.displayName || user?.email || 'مستخدم'} بتعيين المهمة "${title.trim()}" لك`
+              : `${user?.displayName || user?.email || 'Someone'} assigned the task "${title.trim()}" to you`,
+            bodyAr: `قام ${user?.displayName || user?.email || 'مستخدم'} بتعيين المهمة "${title.trim()}" لك`,
+            bodyEn: `${user?.displayName || user?.email || 'Someone'} assigned the task "${title.trim()}" to you`,
+            link: '/dashboard',
+          });
+        } catch (notifErr) {
+          console.error('Failed to notify assignee:', notifErr);
+        }
+      }
+
       setTitle('');
       setDescription('');
       setStatus('open');
       setSeverity('medium');
       setLinkedReportId('');
+      setAssigneeEmail('');
       onClose();
     } catch (err) {
       console.error('Failed to create issue', err);
@@ -130,6 +171,32 @@ export function NewIssueModal({ reports, isOpen, onClose, onCreate }: NewIssueMo
                 </select>
               </Field>
             </div>
+
+            <Field>
+              <FieldLabel className="flex items-center gap-1">
+                <UserCheck className="size-3.5 text-primary" />
+                <span>{lang === 'ar' ? 'تعيين مسؤول عن المهمة' : 'Assign to'}</span>
+              </FieldLabel>
+              <select
+                value={assigneeEmail}
+                onChange={(e) => setAssigneeEmail(e.target.value)}
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="">{lang === 'ar' ? 'غير معيّنة (بدون مسؤول)' : 'Unassigned'}</option>
+                {user?.email && (
+                  <option value={user.email}>
+                    {user.displayName ? `${user.displayName} (أنا / Me)` : `${user.email} (أنا / Me)`}
+                  </option>
+                )}
+                {teamMembers
+                  .filter((m) => m.email !== user?.email)
+                  .map((m) => (
+                    <option key={m.id} value={m.email}>
+                      {m.name ? `${m.name} (${m.email})` : m.email}
+                    </option>
+                  ))}
+              </select>
+            </Field>
 
             <Field>
               <FieldLabel>{t('linkedReportLabel')}</FieldLabel>

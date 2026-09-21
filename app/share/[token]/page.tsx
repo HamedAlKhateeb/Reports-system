@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import { useParams } from 'next/navigation';
-import Head from 'next/head';
 import {
   FileText,
   FileDown,
@@ -15,7 +15,13 @@ import {
   ShieldCheck,
   CheckCircle2,
   Lock,
+  LayoutGrid,
+  Network,
+  Pencil,
 } from 'lucide-react';
+import type { Board } from '@/lib/boards-types';
+import { getBoardByShareToken } from '@/lib/boards-db';
+import { BoardCanvas } from '@/components/boards/BoardCanvas';
 import { getReportByShareToken, getTableById } from '@/lib/db';
 import { renderLatexToHtml, renderTextWithLatexToHtml } from '@/lib/latex';
 import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
@@ -38,9 +44,11 @@ export default function SharedReportPage() {
   const token = params.token as string;
 
   const [report, setReport] = useState<ReportItem | null>(null);
+  const [board, setBoard] = useState<Board | null>(null);
   const [images, setImages] = useState<ReportImageItem[]>([]);
   const [smartTables, setSmartTables] = useState<Record<string, TableEntity>>({});
   const [mindmapSnaps, setMindmapSnaps] = useState<Record<string, { dataUrl: string; width?: number; height?: number }>>({});
+  const [drawingSnaps, setDrawingSnaps] = useState<Record<string, { dataUrl: string; width?: number; height?: number }>>({});
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -88,11 +96,25 @@ export default function SharedReportPage() {
           } catch {
             setMindmapSnaps({});
           }
-        } else {
-          setNotFound(true);
+          try {
+            const { snapshotDrawings } = await import('@/lib/drawing-export');
+            setDrawingSnaps(await snapshotDrawings(data.report.contentJson));
+          } catch {
+            setDrawingSnaps({});
+          }
+          return;
         }
+
+        // If not a report, check if this is a shared visual board
+        const boardData = await getBoardByShareToken(token);
+        if (boardData && boardData.isShared) {
+          setBoard(boardData);
+          return;
+        }
+
+        setNotFound(true);
       } catch (err) {
-        console.error('Failed to load shared report', err);
+        console.error('Failed to load shared report or board', err);
         setNotFound(true);
       } finally {
         setLoading(false);
@@ -130,7 +152,7 @@ export default function SharedReportPage() {
       setExporting(format);
 
       if (format === 'pdf') {
-        printReportAsPdf(report, images, [], mindmapSnaps);
+        printReportAsPdf(report, images, Object.values(smartTables), mindmapSnaps, drawingSnaps as any);
         setExporting(null);
         return;
       }
@@ -142,6 +164,7 @@ export default function SharedReportPage() {
           report,
           images,
           mindmaps: mindmapSnaps,
+          drawings: drawingSnaps,
           // Phase 1.5 (B2): public-link export path — the server allows
           // this only when report.isShared and the token matches.
           shareToken: token,
@@ -182,6 +205,65 @@ export default function SharedReportPage() {
     );
   }
 
+  if (board) {
+    const formattedDate = board.sharedAt
+      ? new Date(board.sharedAt).toLocaleDateString('ar-EG', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+        })
+      : null;
+
+    return (
+      <div className="h-screen flex flex-col bg-background overflow-hidden" dir="rtl">
+        {/* Header */}
+        <header className="h-14 border-b border-border/80 bg-card/90 backdrop-blur-md px-4 flex items-center justify-between shrink-0 z-20">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              <LayoutGrid className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="text-sm font-bold text-foreground truncate">
+                {board.title || 'لوحة مرئية'}
+              </h1>
+              <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <span className="inline-flex items-center gap-1 text-primary font-medium">
+                  <Globe className="w-3 h-3" />
+                  لوحة مرئية مشتركة
+                </span>
+                {formattedDate && (
+                  <>
+                    <span>•</span>
+                    <span className="inline-flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {formattedDate}
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 text-xs gap-1">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>متاح للعرض</span>
+            </Badge>
+          </div>
+        </header>
+
+        {/* Board Workspace Canvas */}
+        <main className="flex-1 w-full relative overflow-hidden">
+          <BoardCanvas
+            board={board}
+            onUpdateBoard={() => {}}
+            lang="ar"
+            readOnly
+          />
+        </main>
+      </div>
+    );
+  }
+
   if (notFound || !report) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -190,13 +272,13 @@ export default function SharedReportPage() {
             <AlertCircle className="h-7 w-7" />
           </div>
           <h1 className="text-xl font-bold text-foreground mb-2">
-            التقرير غير متاح أو تم إلغاء مشاركته
+            المحتوى غير متاح أو تم إلغاء مشاركته
           </h1>
           <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
-            الرابط الذي تحاول الوصول إليه غير موجود أو انتهت صلاحية مشاركته بواسطة مُعدّ التقرير.
+            الرابط الذي تحاول الوصول إليه غير موجود أو انتهت صلاحية مشاركته بواسطة صاحبه.
           </p>
           <div className="text-[11px] text-muted-foreground/80 font-mono">
-            Report not found or link has been revoked.
+            Item not found or share link has been revoked.
           </div>
         </div>
       </div>
@@ -250,6 +332,10 @@ export default function SharedReportPage() {
     day: 'numeric',
   });
 
+  const sharedHtml = report
+    ? renderTipTapContentToHtml(report.contentJson, isAr, images, theme, smartTables, mindmapSnaps, drawingSnaps, report.contentJson)
+    : '';
+
   return (
     <div
       className="min-h-screen transition-colors duration-200"
@@ -259,9 +345,7 @@ export default function SharedReportPage() {
         direction: isAr ? 'rtl' : 'ltr',
       }}
     >
-      <Head>
-        <meta name="robots" content="noindex, nofollow" />
-      </Head>
+      <meta name="robots" content="noindex, nofollow" />
 
       {/* Top Floating Action Bar */}
       <header className="sticky top-0 z-40 border-b border-border/80 bg-background/90 backdrop-blur-md px-4 py-3 shadow-2xs">
@@ -429,11 +513,10 @@ export default function SharedReportPage() {
           </div>
 
           {/* Report Body / Content */}
-          <div
-            className="prose dark:prose-invert max-w-none report-content-view leading-relaxed"
-            dangerouslySetInnerHTML={{
-              __html: renderTipTapContentToHtml(report.contentJson, isAr, images, theme, smartTables, mindmapSnaps),
-            }}
+          <SharedReportBody
+            html={sharedHtml}
+            contentJson={report.contentJson}
+            smartTables={smartTables}
           />
 
           {/* Signature / Official Endorsement Section */}
@@ -513,9 +596,12 @@ export default function SharedReportPage() {
                     className="overflow-hidden rounded-xl border p-3 bg-card shadow-2xs"
                     style={{ borderColor: theme.border }}
                   >
-                    <img
+                    <Image
                       src={img.downloadUrl}
                       alt={img.caption || img.fileName}
+                      width={800}
+                      height={450}
+                      unoptimized
                       className="w-full h-auto rounded-lg object-contain max-h-72"
                     />
                     <figcaption className="mt-2 text-center text-xs text-muted-foreground flex items-center justify-center gap-2">
@@ -539,6 +625,232 @@ export default function SharedReportPage() {
 }
 
 /**
+ * Client hydrator: mounts real ECharts visuals into `.shared-chart-mount`
+ * placeholders emitted by renderTipTapContentToHtml. Smart sources resolve
+ * from the loaded smartTables; native sources from the report JSON doc.
+ */
+function SharedReportBody({
+  html,
+  contentJson,
+  smartTables,
+}: {
+  html: string;
+  contentJson: any;
+  smartTables: Record<string, TableEntity>;
+}) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let charts: Array<{ dispose: () => void }> = [];
+    async function hydrate() {
+      const root = bodyRef.current;
+      if (!root) return;
+      const mounts = Array.from(root.querySelectorAll<HTMLElement>('.shared-chart-mount'));
+      if (!mounts.length) return;
+      let echartsMod: any = null;
+      try {
+        echartsMod = await import('echarts');
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      const echarts = echartsMod.default || echartsMod;
+      let engine: any = null;
+      try {
+        engine = await import('@/lib/charts/engine');
+      } catch {
+        return;
+      }
+      if (cancelled) return;
+      for (const el of mounts) {
+        try {
+          const raw = el.getAttribute('data-chart') || '';
+          if (!raw) continue;
+          const attrs = JSON.parse(decodeURIComponent(raw));
+          const schema: any = {
+            chartId: String(attrs.chartId || ''),
+            type: attrs.type || 'bar',
+            title: attrs.title || '',
+            source: {
+              tableId: String(attrs.sourceTableId || ''),
+              kind: attrs.sourceKind === 'native' ? 'native' : 'smart',
+              categoryColumn: String(attrs.categoryColumn || ''),
+              valueColumns: Array.isArray(attrs.valueColumns) ? attrs.valueColumns.map(String) : [],
+              tableName: attrs.tableName || '',
+            },
+            xAxisName: attrs.xAxisName || '',
+            yAxisName: attrs.yAxisName || '',
+            showLegend: attrs.showLegend !== false,
+            showLabels: !!attrs.showLabels,
+            stacked: !!attrs.stacked,
+            height: Number(attrs.height) || 320,
+          };
+          let resolved: any = { categories: [], series: [], missing: ['x'], valueCount: 0 };
+          try {
+            if (schema.source.kind === 'smart') {
+              resolved = engine.resolveFromSmart((smartTables as any)?.[schema.source.tableId] || null, schema);
+            } else {
+              const natives = engine.extractNativeTables(contentJson);
+              const { info } = engine.resolveNativeWithFallback(
+                natives,
+                schema.source.tableId,
+                typeof attrs.sourceFingerprint === 'string' ? attrs.sourceFingerprint : null
+              );
+              resolved = engine.resolveFromNative(info, schema);
+            }
+          } catch {}
+          if (!resolved || resolved.missing?.length > 0 || (resolved.valueCount ?? 0) === 0) continue;
+          const option = engine.buildEchartsOption(schema, resolved);
+          const h = Math.max(220, Math.min(480, Number(el.getAttribute('data-height')) || schema.height || 320));
+          el.style.height = `${h}px`;
+          const chart = echarts.init(el);
+          charts.push(chart);
+          chart.setOption(option, { notMerge: true });
+        } catch (err) {
+          console.warn('Shared chart hydrate failed', err);
+        }
+      }
+      const onResize = () => {
+        for (const c of charts) {
+          try {
+            (c as any).resize();
+          } catch {}
+        }
+      };
+      window.addEventListener('resize', onResize);
+      (hydrate as any)._cleanup = () => window.removeEventListener('resize', onResize);
+    }
+    void hydrate();
+    return () => {
+      cancelled = true;
+      try {
+        (hydrate as any)._cleanup?.();
+      } catch {}
+      for (const c of charts) {
+        try {
+          (c as any).dispose();
+        } catch {}
+      }
+      charts = [];
+    };
+  }, [html, contentJson, smartTables]);
+
+  return (
+    <div
+      ref={bodyRef}
+      className="prose dark:prose-invert max-w-none report-content-view leading-relaxed"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+/**
+ * Deterministic SVG fallback for freeform drawings (no canvas needed).
+ * Mirrors lib/drawing-export canvas painting so shapes look identical.
+ */
+function drawingElementsToSvg(elements: any[]): string {
+  const els = Array.isArray(elements) ? elements : [];
+  if (!els.length) return '';
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const el of els) {
+    const pts = Array.isArray((el as any)?.points) && (el as any).points.length ? (el as any).points : null;
+    if (pts) {
+      for (const p of pts) {
+        const x = Number((p as any)?.x) || 0;
+        const y = Number((p as any)?.y) || 0;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+    } else {
+      const x = Number((el as any)?.x) || 0;
+      const y = Number((el as any)?.y) || 0;
+      const w = Number((el as any)?.width) || 0;
+      const h = Number((el as any)?.height) || 0;
+      minX = Math.min(minX, Math.min(x, x + w));
+      minY = Math.min(minY, Math.min(y, y + h));
+      maxX = Math.max(maxX, Math.max(x, x + w));
+      maxY = Math.max(maxY, Math.max(y, y + h));
+    }
+  }
+  if (!isFinite(minX)) return '';
+  const PAD = 24;
+  const W = Math.ceil(maxX - minX + PAD * 2);
+  const H = Math.ceil(maxY - minY + PAD * 2);
+  const ox = -minX + PAD;
+  const oy = -minY + PAD;
+  const esc = (s: string) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const dash = (st?: string) => (st === 'dashed' ? ' stroke-dasharray="7 6"' : st === 'dotted' ? ' stroke-dasharray="2 5"' : '');
+  const parts: string[] = [];
+  for (const el of els) {
+    const stroke = esc((el as any)?.strokeColor || '#1e1e1e');
+    const fillRaw = (el as any)?.backgroundColor;
+    const fill = fillRaw && fillRaw !== 'transparent' ? esc(fillRaw) : 'none';
+    const lw = Number((el as any)?.strokeWidth) || 2;
+    const type = String((el as any)?.type || '');
+    const x = Number((el as any)?.x) || 0;
+    const y = Number((el as any)?.y) || 0;
+    const w = Number((el as any)?.width) || 0;
+    const h = Number((el as any)?.height) || 0;
+    const text = String((el as any)?.text || '');
+    const fs = Number((el as any)?.fontSize) || 15;
+    if (type === 'rectangle' || type === 'note') {
+      const x0 = Math.min(x, x + w) + ox;
+      const y0 = Math.min(y, y + h) + oy;
+      parts.push(`<rect x="${x0}" y="${y0}" width="${Math.abs(w) || 2}" height="${Math.abs(h) || 2}" rx="${type === 'note' ? 8 : 4}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
+      if (text) parts.push(`<text x="${x0 + Math.abs(w) / 2}" y="${y0 + Math.abs(h) / 2}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+    } else if (type === 'ellipse') {
+      const cx = Math.min(x, x + w) + Math.abs(w) / 2 + ox;
+      const cy = Math.min(y, y + h) + Math.abs(h) / 2 + oy;
+      parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${Math.abs(w) / 2 || 2}" ry="${Math.abs(h) / 2 || 2}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
+      if (text) parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+    } else if (type === 'diamond') {
+      const x0 = Math.min(x, x + w) + ox;
+      const y0 = Math.min(y, y + h) + oy;
+      const ww = Math.abs(w) || 2;
+      const hh = Math.abs(h) || 2;
+      parts.push(`<polygon points="${x0 + ww / 2},${y0} ${x0 + ww},${y0 + hh / 2} ${x0 + ww / 2},${y0 + hh} ${x0},${y0 + hh / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
+      if (text) parts.push(`<text x="${x0 + ww / 2}" y="${y0 + hh / 2}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+    } else if (type === 'text') {
+      const tFs = Number((el as any)?.fontSize) || 18;
+      const tLines = String(text).split('\n');
+      const tLineH = Math.ceil(tFs * 1.35);
+      const tCx = x + ox + w / 2;
+      const tBase = y + oy + (h - tLines.length * tLineH) / 2 + tFs * 0.85;
+      parts.push(`<text x="${tCx}" y="${tBase}" font-size="${tFs}" font-weight="700" fill="${stroke}" text-anchor="middle" font-family="Tahoma,sans-serif">${tLines.map((ln: string, i: number) => `<tspan x="${tCx}" dy="${i === 0 ? 0 : tLineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+    } else if (type === 'freedraw') {
+      const pts = Array.isArray((el as any)?.points) ? (el as any).points : [];
+      if (pts.length > 1) {
+        const d = pts.map((p: any, i: number) => `${i === 0 ? 'M' : 'L'}${ox + (Number(p?.x) || 0)},${oy + (Number(p?.y) || 0)}`).join(' ');
+        parts.push(`<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round" />`);
+      }
+    } else if (type === 'arrow' || type === 'line') {
+      const pts = Array.isArray((el as any)?.points) && (el as any).points.length >= 2
+        ? (el as any).points
+        : [{ x, y }, { x: x + w, y: y + h }];
+      const p1 = pts[0];
+      const p2 = pts[pts.length - 1];
+      const x1 = ox + (Number(p1?.x) || 0);
+      const y1 = oy + (Number(p1?.y) || 0);
+      const x2 = ox + (Number(p2?.x) || 0);
+      const y2 = oy + (Number(p2?.y) || 0);
+      parts.push(`<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${stroke}" stroke-width="${lw}" stroke-linecap="round"${dash((el as any)?.strokeStyle)} />`);
+      if (type === 'arrow') {
+        const ang = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+        parts.push(`<polygon points="0,0 -12,-5 -12,5" fill="${stroke}" transform="translate(${x2},${y2}) rotate(${ang})" />`);
+      }
+    }
+  }
+  const vw = Math.max(2, Math.min(W, 1200));
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${vw}" style="max-width:100%;height:auto;background:#fff;border-radius:8px;" role="img">${parts.join('')}</svg>`;
+}
+
+/**
  * Renders TipTap JSON to clean, styled HTML for the web view
  */
 function renderTipTapContentToHtml(
@@ -548,17 +860,20 @@ function renderTipTapContentToHtml(
   theme: { primary: string; accent: string; light: string; border: string },
   smartTables: Record<string, TableEntity> = {},
   mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
+  drawings: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
   docRef?: any
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, node)).join('');
+      return (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, node)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
-      return `<p class="mb-3 leading-relaxed">${content || '&nbsp;'}</p>`;
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
+      const align = (node.attrs?.textAlign as string) || '';
+      const alignStyle = align === 'center' ? 'text-align: center;' : align === 'right' ? 'text-align: right;' : align === 'justify' ? 'text-align: justify;' : align === 'left' ? 'text-align: left;' : '';
+      return `<p class="mb-3 leading-relaxed"${alignStyle ? ` style="${alignStyle}"` : ''}>${content || '&nbsp;'}</p>`;
     }
 
     case 'text': {
@@ -579,6 +894,11 @@ function renderTipTapContentToHtml(
           if (mark.type === 'link') {
             text = `<a href="${mark.attrs?.href || '#'}" target="_blank" rel="noopener noreferrer" class="text-blue-600 underline">${text}</a>`;
           }
+          if ((mark.type === 'fontSize' || mark.type === 'textStyle') && (mark.attrs?.fontSize || mark.attrs?.size)) {
+            text = `<span style="font-size: ${mark.attrs.fontSize || mark.attrs.size};">${text}</span>`;
+          }
+          if (mark.type === 'underline') text = `<u>${text}</u>`;
+          if (mark.type === 'strike') text = `<s>${text}</s>`;
         }
       }
       try {
@@ -599,7 +919,7 @@ function renderTipTapContentToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       if (level === 1) {
         return `<h2 class="text-xl font-bold mt-6 mb-3 pb-2 border-b" style="color: ${theme.primary}; border-color: ${theme.border};">${content}</h2>`;
       }
@@ -610,22 +930,22 @@ function renderTipTapContentToHtml(
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       return `<ul class="list-disc ps-6 mb-4 space-y-1">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+      const items = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       return `<ol class="list-decimal ps-6 mb-4 space-y-1">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       return `<li>${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       return `<blockquote class="border-s-4 ps-4 py-1 my-3 rounded italic text-muted-foreground" style="border-color: ${theme.primary}; background-color: ${theme.light};">${content}</blockquote>`;
     }
 
@@ -661,7 +981,7 @@ function renderTipTapContentToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+          const cellHtml = (c.content || []).map((child: any) => renderTipTapContentToHtml(child, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let severityBg = '';
@@ -742,7 +1062,15 @@ function renderTipTapContentToHtml(
     case 'reportChart': {
       const title = node.attrs?.title || (isAr ? 'رسم بياني' : 'Chart');
       const type = node.attrs?.type || 'bar';
-      // Phase 4.4 (B17): render the data table under the title.
+      const height = Math.max(220, Math.min(480, Number(node.attrs?.height) || 320));
+      // Hydratable chart mount: SharedChartsHydrator renders the real ECharts
+      // visual client-side. Data-table stays as instant, printable fallback.
+      let chartPayload = '';
+      try {
+        chartPayload = encodeURIComponent(JSON.stringify(node.attrs || {}));
+      } catch {
+        chartPayload = '';
+      }
       let chartTableHtml = '';
       try {
         const table = chartDataTable(node, docRef, smartTables, 50, isAr ? 'البند' : 'Item');
@@ -753,9 +1081,11 @@ function renderTipTapContentToHtml(
             ? `<div class="mt-1 text-[11px] text-muted-foreground">... ${isAr ? 'و' : 'and'} ${table.totalRows - table.rows.length} ${isAr ? 'صفوف أخرى' : 'more rows'}</div>`
             : '';
           chartTableHtml = `<div class="overflow-x-auto my-3 rounded-lg border" style="border-color: ${theme.border};"><table class="w-full border-collapse text-xs" dir="${isAr ? 'rtl' : 'ltr'}">${thead}${tbody}</table>${more}</div>`;
+        } else {
+          chartTableHtml = `<div class="mt-2 text-[11px] text-muted-foreground">${isAr ? '(تعذر تحميل بيانات الرسم — المصدر غير متاح)' : '(Chart data unavailable)'}</div>`;
         }
       } catch {}
-      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${title}</div><div class="mt-1 text-[11px] text-muted-foreground">${type}</div><div class="mt-2 text-[11px] text-muted-foreground">${isAr ? 'رسم بياني تفاعلي داخل التقرير الأصلي' : 'Interactive chart in the original report'}</div>${chartTableHtml}</figure>`;
+      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">📊 ${escapeHtml(String(title))}</div><div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(String(type))}</div><div class="shared-chart-mount mx-auto mt-2 w-full max-w-full" data-chart="${chartPayload}" data-height="${height}" dir="ltr" style="height:${height}px;min-height:220px;"></div>${chartTableHtml}</figure>`;
     }
 
     case 'reportMindmap': {
@@ -778,9 +1108,35 @@ function renderTipTapContentToHtml(
       return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">🧠 ${escapeHtml(title)}</div><div class="mt-2 text-start text-xs">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
+    case 'reportDrawing': {
+      const dTitle = String(node.attrs?.title || (isAr ? 'لوحة رسم' : 'Drawing'));
+      const dCaption = String(node.attrs?.caption || '').trim();
+      const dCapHtml = dCaption ? `<div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(dCaption)}</div>` : '';
+      const dSnap = node.attrs?.drawingId ? drawings[String(node.attrs.drawingId)] : undefined;
+      if (dSnap?.dataUrl) {
+        return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">✏️ ${escapeHtml(dTitle)}</div><img src="${dSnap.dataUrl}" alt="${escapeHtml(dTitle)}" class="mx-auto mt-2 h-auto max-w-full rounded-lg bg-white" style="max-height:480px;object-fit:contain;" />${dCapHtml}</figure>`;
+      }
+      // SVG fallback: shapes render deterministically without canvas snapshots,
+      // so geometric forms NEVER disappear on the public link.
+      try {
+        const els = Array.isArray(node.attrs?.elements) ? node.attrs.elements : [];
+        if (els.length > 0) {
+          const svg = drawingElementsToSvg(els);
+          if (svg) {
+            return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">✏️ ${escapeHtml(dTitle)}</div><div class="mx-auto mt-2 max-w-full overflow-x-auto rounded-lg bg-white p-2" dir="ltr">${svg}</div>${dCapHtml}</figure>`;
+          }
+        }
+      } catch {}
+      const dCount = Array.isArray(node.attrs?.elements) ? node.attrs.elements.length : 0;
+      const emptyLabel = dCount > 0
+        ? (isAr ? `رسم يحتوي ${dCount} عناصر` : `Drawing with ${dCount} shapes`)
+        : (isAr ? 'لوحة رسم فارغة' : 'Empty drawing');
+      return `<figure class="my-5 rounded-lg border p-4 text-center" style="border-color: ${theme.border}; background-color: ${theme.light};"><div class="text-sm font-bold" style="color: ${theme.primary};">✏️ ${escapeHtml(dTitle)}</div><div class="mt-1 text-[11px] text-muted-foreground">${escapeHtml(emptyLabel)}</div>${dCapHtml}</figure>`;
+    }
+
     default:
       if (node.content) {
-        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, docRef)).join('');
+        return node.content.map((c: any) => renderTipTapContentToHtml(c, isAr, images, theme, smartTables, mindmaps, drawings, docRef)).join('');
       }
       return '';
   }
@@ -791,6 +1147,8 @@ function findSmartTableIds(content: unknown): string[] {
   const visit = (node: any) => {
     if (!node || typeof node !== 'object') return;
     if (node.type === 'smartTable' && typeof node.attrs?.tableId === 'string') ids.add(node.attrs.tableId);
+    // Charts may reference a smart table without embedding its node.
+    if (node.type === 'reportChart' && node.attrs?.sourceKind !== 'native' && typeof node.attrs?.sourceTableId === 'string' && node.attrs.sourceTableId) ids.add(node.attrs.sourceTableId);
     if (Array.isArray(node.content)) node.content.forEach(visit);
   };
   visit(content);

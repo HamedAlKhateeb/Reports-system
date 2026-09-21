@@ -10,7 +10,7 @@
 import {
   normalizeDigits,
   computeGridDisplay,
-} from '../../components/editor/grid/ArabicSheet';
+} from '../../components/editor/grid/MiniSpreadsheet';
 
 let passed = 0;
 let failed = 0;

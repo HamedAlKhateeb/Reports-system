@@ -119,6 +119,7 @@ export interface ReportItem {
 
 export interface FolderItem {
   id: string;
+  projectId?: string;
   name: string;
   parentId: string | null; // null for root level
   color?: string;          // Optional accent color
@@ -178,6 +179,10 @@ export interface IssueItem {
   status: IssueStatus | 'مفتوحة' | 'قيد المعالجة' | 'مكتملة';     // 'open' | 'in_progress' | 'done' or Arabic aliases
   owner_id?: string;
   ownerUid?: string;
+  assignee_id?: string | null;
+  assigneeUid?: string | null;
+  assigneeEmail?: string | null;
+  assigneeName?: string | null;
   due_date?: string | null;
   dueDate?: string | null;
   root_cause?: string;
@@ -202,6 +207,8 @@ export interface IssueItem {
   createdAt: string;
   updatedAt: string;
   commentsCount?: number;
+  pomodoroSessions?: number;
+  timeSpentMinutes?: number;
 }
 
 export interface ReportIssueItem {
@@ -268,11 +275,7 @@ export interface TableEntity {
   cell_formats?: Record<string, any>;
   merged_cells?: Array<{ start: string; end: string; rowSpan?: number; colSpan?: number }>;
   /**
-   * Univer canonical snapshot (post-migration single source of truth for the
-   * spreadsheet grid). columns_data/rows_data/cell_formats/merged_cells are
-   * a DERIVED cache regenerated from this snapshot on every save, so legacy
-   * readers (exports, charts, share) keep working unchanged.
-   * Tables created before Univer have no snapshot → lazy-migrated on open.
+   * Optional legacy snapshot field retained for backwards-compatibility on read.
    */
   univerSnapshot?: any;
   version: number;
@@ -481,7 +484,7 @@ export interface AuditEventItem {
   actor_email?: string;
   entity_type: 'issue' | 'report' | 'table' | 'dashboard' | 'widget' | 'insight' | 'project';
   entity_id: string;
-  action: 'create' | 'update' | 'archive' | 'restore' | 'merge' | 'approve' | 'recalculate' | 'export';
+  action: 'create' | 'update' | 'archive' | 'restore' | 'merge' | 'approve' | 'recalculate' | 'export' | 'delete';
   before_value?: any;
   after_value?: any;
   reason?: string;

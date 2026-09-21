@@ -22,16 +22,17 @@ function tipTapNodeToHtml(
   images: ReportImageItem[] = [],
   tablesMap: Record<string, any> = {},
   mindmaps: MindmapSnapshotMap = {},
-  docRef?: any
+  docRef?: any,
+  drawings: MindmapSnapshotMap = {}
 ): string {
   if (!node) return '';
 
   switch (node.type) {
     case 'doc':
-      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, node)).join('');
+      return (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, node, drawings)).join('');
 
     case 'paragraph': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<p class="report-p">${content || '&nbsp;'}</p>`;
     }
 
@@ -82,27 +83,27 @@ function tipTapNodeToHtml(
 
     case 'heading': {
       const level = node.attrs?.level || 1;
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<h${level} class="report-h${level}">${content}</h${level}>`;
     }
 
     case 'bulletList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<ul class="report-ul">${items}</ul>`;
     }
 
     case 'orderedList': {
-      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const items = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<ol class="report-ol">${items}</ol>`;
     }
 
     case 'listItem': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<li class="report-li">${content}</li>`;
     }
 
     case 'blockquote': {
-      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+      const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<blockquote class="report-quote">${content}</blockquote>`;
     }
 
@@ -144,7 +145,7 @@ function tipTapNodeToHtml(
       const rows = (node.content || []).map((r: any, rIdx: number) => {
         const isHeader = rIdx === 0;
         const cells = (r.content || []).map((c: any) => {
-          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap, mindmaps, docRef)).join('');
+          const cellHtml = (c.content || []).map((child: any) => tipTapNodeToHtml(child, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
           const cellText = (c.content || []).map((child: any) => child.text || '').join('').toLowerCase();
 
           let extraClass = '';
@@ -286,9 +287,21 @@ function tipTapNodeToHtml(
       return `<figure class="report-mindmap-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">🧠 ${escapeHtmlExport(title)}</div><div style="text-align:start;margin-top:8px;">${bodyHtml}</div>${capHtml}</figure>`;
     }
 
+    case 'reportDrawing': {
+      const dTitle = String(node.attrs?.title || (isAr ? 'X' : 'Drawing'));
+      const dCaption = String(node.attrs?.caption || '').trim();
+      const dSnap = node.attrs?.drawingId ? drawings[String(node.attrs.drawingId)] : undefined;
+      const dCapHtml = dCaption ? `<div style="font-size:11px;color:#64748b;">${escapeHtmlExport(dCaption)}</div>` : '';
+      const dCount = Array.isArray(node.attrs?.elements) ? node.attrs.elements.length : 0;
+      if (dSnap?.dataUrl) {
+        return `<figure class="report-drawing-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">${escapeHtmlExport(dTitle)}</div><img src="${dSnap.dataUrl}" alt="${escapeHtmlExport(dTitle)}" style="max-width:100%;height:auto;margin-top:8px;border-radius:8px;background:#fff;" />${dCapHtml}</figure>`;
+      }
+      return `<figure class="report-drawing-print" style="margin:16px 0;padding:14px;border:1px solid #e2e8f0;border-radius:10px;text-align:center;"><div style="font-weight:700;">${escapeHtmlExport(dTitle)}</div><div style="font-size:11px;color:#64748b;">${dCount}</div>${dCapHtml}</figure>`;
+    }
+
     default:
       if (node.content) {
-        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef)).join('');
+        return node.content.map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       }
       return '';
   }
@@ -301,7 +314,8 @@ export function buildPrintableHtml(
   report: ReportItem,
   images: ReportImageItem[] = [],
   tables: any[] = [],
-  mindmaps: MindmapSnapshotMap = {}
+  mindmaps: MindmapSnapshotMap = {},
+  drawings: MindmapSnapshotMap = {}
 ): string {
   const isAr = report.language === 'ar';
   const lang = report.language;
@@ -345,7 +359,7 @@ export function buildPrintableHtml(
     } catch {}
   }
 
-  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images, tablesMap, mindmaps);
+  const contentHtml = tipTapNodeToHtml(report.contentJson, isAr, images, tablesMap, mindmaps, undefined, drawings);
   const formattedDate = new Date(report.createdAt).toLocaleDateString(isAr ? 'ar-EG' : 'en-US', {
     year: 'numeric',
     month: 'long',
@@ -927,14 +941,15 @@ export function printReportAsPdf(
   report: ReportItem,
   images: ReportImageItem[] = [],
   tables: any[] = [],
-  mindmaps: MindmapSnapshotMap = {}
+  mindmaps: MindmapSnapshotMap = {},
+  drawings: MindmapSnapshotMap = {}
 ): void {
   const isAr = report.language === 'ar';
   const rawTitle = (report.title || (isAr ? 'تقرير أخطاء النظام' : 'Review Report')).trim();
   const sanitizedTitle = rawTitle.replace(/[\/\\:*?"<>|]/g, '_').trim();
   const filename = `${sanitizedTitle} - #${report.reportNumber}`;
 
-  const html = buildPrintableHtml(report, images, tables, mindmaps);
+  const html = buildPrintableHtml(report, images, tables, mindmaps, drawings);
 
   // Try opening in popup window for clean isolated print experience
   const printWindow = window.open('', '_blank');

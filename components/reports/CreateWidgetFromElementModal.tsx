@@ -115,7 +115,7 @@ export function CreateWidgetFromElementModal({
     if (availableDimensions.length > 0 && !availableDimensions.some((d) => d.id === dimension)) {
       setDimension(availableDimensions[0].id);
     }
-  }, [availableDimensions]);
+  }, [availableDimensions, dimension]);
 
   // Compute live preview dataset
   const previewData = useMemo(() => {

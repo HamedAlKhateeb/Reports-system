@@ -41,19 +41,31 @@ const LOCAL_REPORTS_KEY = 'review_app_mock_reports';
 const LOCAL_ISSUES_KEY = 'review_app_mock_issues';
 
 function getLocal<T>(key: string, fallback: T): T {
-  if (typeof window === 'undefined') return fallback;
   try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const raw = window.localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    }
+    return fallback;
   } catch (e) {
     return fallback;
   }
 }
 
 function setLocal<T>(key: string, val: T): void {
-  if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(key, JSON.stringify(val));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(key, JSON.stringify(val));
+      return;
+    }
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(key, JSON.stringify(val));
+      return;
+    }
   } catch (e) {
     console.error('Failed to save to localStorage', e);
   }
@@ -65,18 +77,73 @@ function setLocal<T>(key: string, val: T): void {
 
 export const DEFAULT_PROJECT_ID = 'proj_default';
 
-export async function getProjects(userUid?: string): Promise<ProjectItem[]> {
+export async function getProjects(userUid?: string, userEmail?: string): Promise<ProjectItem[]> {
   const currentUid = userUid || auth?.currentUser?.uid;
   if (!currentUid || typeof currentUid !== 'string' || !currentUid.trim()) {
     return [];
   }
+  const email = (userEmail || auth?.currentUser?.email || '').toLowerCase().trim();
+  const projectMap = new Map<string, ProjectItem>();
 
   if (isFirebaseConfigured && db && currentUid) {
     try {
       const q = query(collection(db, 'projects'), where('owner_id', '==', currentUid));
       const snap = await getDocs(q);
-      if (!snap.empty) {
-        return snap.docs.map((d) => ({ id: d.id, ...d.data() } as ProjectItem));
+      snap.docs.forEach((d) => {
+        projectMap.set(d.id, { id: d.id, ...d.data() } as ProjectItem);
+      });
+
+      // Also query teams where user is a member
+      if (email || currentUid) {
+        try {
+          const teamDocsMap = new Map<string, any>();
+          if (currentUid) {
+            try {
+              const qUid = query(collection(db, 'teams'), where('memberUids', 'array-contains', currentUid));
+              const snap = await getDocs(qUid);
+              snap.docs.forEach((d) => teamDocsMap.set(d.id, d.data()));
+            } catch {}
+          }
+          if (email) {
+            try {
+              const qEmail = query(collection(db, 'teams'), where('memberEmails', 'array-contains', email));
+              const snap = await getDocs(qEmail);
+              snap.docs.forEach((d) => teamDocsMap.set(d.id, d.data()));
+            } catch {}
+          }
+          // Fallback if empty or legacy documents
+          if (teamDocsMap.size === 0) {
+            try {
+              const teamsSnap = await getDocs(collection(db, 'teams'));
+              teamsSnap.docs.forEach((d) => teamDocsMap.set(d.id, d.data()));
+            } catch {}
+          }
+
+          const memberProjectIds = new Set<string>();
+          teamDocsMap.forEach((team) => {
+            const isMem = Array.isArray(team.members) && team.members.some(
+              (m: any) => m.userId === currentUid || m.uid === currentUid || (email && m.email?.toLowerCase() === email)
+            );
+            if (isMem && team.projectId) {
+              memberProjectIds.add(team.projectId);
+            }
+          });
+
+          for (const pid of Array.from(memberProjectIds)) {
+            if (!projectMap.has(pid)) {
+              try {
+                const pDoc = await getDoc(doc(db, 'projects', pid));
+                if (pDoc.exists()) {
+                  projectMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as ProjectItem);
+                }
+              } catch {}
+            }
+          }
+        } catch {}
+      }
+
+      if (projectMap.size > 0) {
+        return Array.from(projectMap.values());
       }
     } catch (e) {
       console.warn('Firestore getProjects error', e);
@@ -85,11 +152,31 @@ export async function getProjects(userUid?: string): Promise<ProjectItem[]> {
 
   const uKey = `${LOCAL_PROJECTS_KEY}_${currentUid}`;
   const list = getLocal<ProjectItem[]>(uKey, []);
-  if (list.length > 0) return list;
+  list.forEach((p) => projectMap.set(p.id, p));
 
-  // Fallback to user-scoped filter or return empty
+  // Also check local teams
+  const localTeams = getLocal<any[]>('review_app_teams', []);
+  localTeams.forEach((team) => {
+    const isMem = Array.isArray(team.members) && team.members.some(
+      (m: any) => m.userId === currentUid || m.uid === currentUid || (email && m.email?.toLowerCase() === email)
+    );
+    if (isMem && team.projectId) {
+      const globalList = getLocal<ProjectItem[]>(LOCAL_PROJECTS_KEY, []);
+      const found = globalList.find((p) => p.id === team.projectId);
+      if (found && !projectMap.has(found.id)) {
+        projectMap.set(found.id, found);
+      }
+    }
+  });
+
   const globalList = getLocal<ProjectItem[]>(LOCAL_PROJECTS_KEY, []);
-  return globalList.filter((p) => p.owner_id === currentUid || p.ownerUid === currentUid);
+  globalList
+    .filter((p) => p.owner_id === currentUid || p.ownerUid === currentUid)
+    .forEach((p) => {
+      if (!projectMap.has(p.id)) projectMap.set(p.id, p);
+    });
+
+  return Array.from(projectMap.values());
 }
 
 export async function getProjectById(projectId: string, userUid?: string): Promise<ProjectItem | null> {
@@ -97,6 +184,12 @@ export async function getProjectById(projectId: string, userUid?: string): Promi
   const projects = await getProjects(currentUid);
   const found = projects.find((p) => p.id === projectId);
   if (found) return found;
+
+  // Search global project registry if not found in user-specific key
+  const globalList = getLocal<ProjectItem[]>(LOCAL_PROJECTS_KEY, []);
+  const gFound = globalList.find((p) => p.id === projectId);
+  if (gFound) return gFound;
+
   if (projectId === DEFAULT_PROJECT_ID) {
     return getOrCreateDefaultProject(currentUid);
   }
@@ -180,6 +273,94 @@ export async function createProject(data: {
 
   return newProj;
 }
+
+export async function saveProject(proj: ProjectItem, userUid?: string): Promise<void> {
+  const currentUid = userUid || proj.owner_id || proj.ownerUid || auth?.currentUser?.uid || 'guest';
+  if (isFirebaseConfigured && db && currentUid && currentUid !== 'guest') {
+    try {
+      await setDoc(doc(db, 'projects', proj.id), proj, { merge: true });
+    } catch (e) {
+      console.warn('Firestore saveProject error', e);
+    }
+  }
+
+  const uKey = `${LOCAL_PROJECTS_KEY}_${currentUid}`;
+  const uList = getLocal<ProjectItem[]>(uKey, []);
+  setLocal(uKey, [proj, ...uList.filter((p) => p.id !== proj.id)]);
+  const gList = getLocal<ProjectItem[]>(LOCAL_PROJECTS_KEY, []);
+  setLocal(LOCAL_PROJECTS_KEY, [proj, ...gList.filter((p) => p.id !== proj.id)]);
+}
+
+export async function updateProject(
+  projectId: string,
+  updates: { name?: string; description?: string },
+  userUid?: string
+): Promise<ProjectItem> {
+  const currentUid = userUid || auth?.currentUser?.uid || 'guest';
+  const existing = await getProjectById(projectId, currentUid);
+  if (!existing) {
+    throw new Error('Project not found');
+  }
+
+  const updated: ProjectItem = {
+    ...existing,
+    ...(updates.name ? { name: updates.name.trim() } : {}),
+    ...(updates.description !== undefined ? { description: updates.description.trim() } : {}),
+    updated_at: new Date().toISOString(),
+  };
+
+  await saveProject(updated, currentUid);
+
+  await recordAuditEvent({
+    actor_id: currentUid,
+    entity_type: 'project',
+    entity_id: projectId,
+    action: 'update',
+    after_value: updated,
+  });
+
+  return updated;
+}
+
+export async function deleteProject(projectId: string, userUid?: string): Promise<boolean> {
+  if (projectId === DEFAULT_PROJECT_ID) {
+    throw new Error('لا يمكن حذف المشروع الرئيسي الافتراضي');
+  }
+  const currentUid = userUid || auth?.currentUser?.uid || 'guest';
+
+  // 1. Delete from Firestore if configured
+  if (isFirebaseConfigured && db && currentUid && currentUid !== 'guest') {
+    try {
+      await deleteDoc(doc(db, 'projects', projectId));
+      // Also delete associated team
+      await deleteDoc(doc(db, 'teams', `team_${projectId}`));
+    } catch (e) {
+      console.warn('Firestore deleteProject warning:', e);
+    }
+  }
+
+  // 2. Delete from LocalStorage
+  const uKey = `${LOCAL_PROJECTS_KEY}_${currentUid}`;
+  const uList = getLocal<ProjectItem[]>(uKey, []);
+  setLocal(uKey, uList.filter((p) => p.id !== projectId));
+
+  const gList = getLocal<ProjectItem[]>(LOCAL_PROJECTS_KEY, []);
+  setLocal(LOCAL_PROJECTS_KEY, gList.filter((p) => p.id !== projectId));
+
+  // Also remove local team
+  const localTeams = getLocal<any[]>('review_app_teams', []);
+  setLocal('review_app_teams', localTeams.filter((t) => t.projectId !== projectId && t.id !== `team_${projectId}`));
+
+  await recordAuditEvent({
+    actor_id: currentUid,
+    entity_type: 'project',
+    entity_id: projectId,
+    action: 'delete',
+  });
+
+  return true;
+}
+
 
 // ==========================================
 // 2. ISSUE KEY GENERATION (PRB-001, PRB-002...)
@@ -376,7 +557,6 @@ export async function getTablesByReportId(reportId: string): Promise<TableEntity
   const merged = new Map<string, TableEntity>();
   const putLocal = (t: TableEntity) => {
     if (!t || !t.id) return;
-    attachSidecar(t);
     if (isTombed(t.id, tableUpdatedAt(t))) return;
     const prev = merged.get(t.id) || null;
     merged.set(t.id, pickFreshestTable(prev, t) as TableEntity);
@@ -389,7 +569,6 @@ export async function getTablesByReportId(reportId: string): Promise<TableEntity
       if (!snap.empty) {
         snap.docs.forEach((d) => {
           const rec = { id: d.id, ...d.data() } as TableEntity;
-          attachSidecar(rec);
           if (!isTombed(rec.id, tableUpdatedAt(rec))) merged.set(rec.id, rec);
         });
       }
@@ -408,21 +587,6 @@ export async function getTablesByReportId(reportId: string): Promise<TableEntity
 // never blow the localStorage quota for the whole tables array (which used
 // to silently drop saves). Firestore keeps the full record; the sidecar is
 // the local-only fallback.
-const tableSnapshotKey = (tableId: string) => `${LOCAL_TABLES_KEY}_snapshot_${tableId}`;
-
-function readSnapshotSidecar(tableId: string): any | undefined {
-  if (typeof window === 'undefined' || !tableId) return undefined;
-  try {
-    const raw = localStorage.getItem(tableSnapshotKey(tableId));
-    if (!raw) return undefined;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.sheets) return parsed;
-    return undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function slimRecord(record: TableEntity): TableEntity {
   const { univerSnapshot: _drop, ...rest } = record as any;
   void _drop;
@@ -431,8 +595,7 @@ function slimRecord(record: TableEntity): TableEntity {
 
 /**
  * Freshest-wins: a failed/slow Firestore write must never resurrect stale
- * server state over a newer local edit (was: remote-first → cleared cells
- * and deletes "came back" on reload). Tombstones make deletes stick when
+ * server state over a newer local edit. Tombstones make deletes stick when
  * the remote delete silently fails.
  */
 function tableUpdatedAt(t: TableEntity | null | undefined): number {
@@ -448,15 +611,12 @@ function tableUpdatedAt(t: TableEntity | null | undefined): number {
 function pickFreshestTable(a: TableEntity | null, b: TableEntity | null): TableEntity | null {
   if (!a) return b;
   if (!b) return a;
-  // Tie (same save stamped both copies) → local (has sidecar attached).
   return tableUpdatedAt(b) > tableUpdatedAt(a) ? b : a;
 }
 
 const LOCAL_TABLE_TOMBS_KEY = 'review_app_mock_tables_deleted';
 
-/** Session-level delete guard: blocks the Univer unmount-flush from
- *  re-saving a table that was just deleted (its new timestamp would
- *  otherwise defeat the tombstone and "resurrect" the values). */
+/** Session-level delete guard: prevents late flushes from resurrecting deleted tables. */
 const sessionDeletedTables = new Set<string>();
 
 /** True when this session deleted the table — any further save must be skipped. */
@@ -468,7 +628,7 @@ export function isTableDeletedInSession(tableId: string): boolean {
 export function clearTableTombForRecreate(tableId: string): void {
   try {
     sessionDeletedTables.delete(tableId);
-    if (typeof window !== 'undefined') {
+    if (typeof localStorage !== 'undefined') {
       const tombs = readTombs();
       if (tombs[tableId] !== undefined) {
         delete tombs[tableId];
@@ -480,7 +640,7 @@ export function clearTableTombForRecreate(tableId: string): void {
 
 function readTombs(): Record<string, number> {
   try {
-    if (typeof window === 'undefined') return {};
+    if (typeof localStorage === 'undefined') return {};
     const raw = localStorage.getItem(LOCAL_TABLE_TOMBS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -491,7 +651,7 @@ function readTombs(): Record<string, number> {
 
 function writeTomb(tableId: string): void {
   try {
-    if (typeof window === 'undefined' || !tableId) return;
+    if (typeof localStorage === 'undefined' || !tableId) return;
     const tombs = readTombs();
     tombs[tableId] = Date.now();
     const keys = Object.keys(tombs);
@@ -509,39 +669,17 @@ function writeTomb(tableId: string): void {
 function isTombed(tableId: string, remoteUpdatedAt: number): boolean {
   try {
     const t = readTombs()[tableId];
-    // Tombstone wins unless the remote copy is NEWER than the delete
-    // (re-created after deletion on another device).
     return typeof t === 'number' && t >= remoteUpdatedAt;
   } catch {
     return false;
   }
 }
 
-function attachSidecar(record: TableEntity | null): TableEntity | null {
-  if (record && (!(record as any).univerSnapshot || !(record as any).univerSnapshot.sheets)) {
-    const sidecar = readSnapshotSidecar(record.id);
-    if (sidecar) (record as any).univerSnapshot = sidecar;
-  }
-  return record;
-}
-
-/**
- * Drops a table's Univer snapshot sidecar (localStorage) so a stale canvas
- * snapshot can never resurrect over fresh native-grid data. Used by the
- * Arabic native grid on save (it persists derived-only records). A future
- * Univer boot then re-migrates from the fresh derived cache automatically.
- */
-export function clearTableSnapshot(tableId: string): void {
-  try {
-    if (typeof window !== 'undefined' && tableId) {
-      localStorage.removeItem(tableSnapshotKey(tableId));
-    }
-  } catch {}
+export function clearTableSnapshot(_tableId: string): void {
+  // Legacy stub — snapshots removed
 }
 
 export async function saveTable(table: TableEntity): Promise<TableEntity> {
-  // Session delete guard: a table deleted in this session must never be
-  // re-saved by a stale Univer unmount-flush (was: values "came back").
   if (table && (table as any).id && sessionDeletedTables.has((table as any).id)) {
     return table as TableEntity;
   }
@@ -550,32 +688,13 @@ export async function saveTable(table: TableEntity): Promise<TableEntity> {
     ...table,
     updated_at: now,
   };
-  const snapshot = (record as any).univerSnapshot;
 
   if (isFirebaseConfigured && db) {
     try {
-      // Firestore hard limit is 1MB/doc: oversized sheets persist the
-      // derived cache (always readable) instead of failing the whole write.
-      let payload: TableEntity = record;
-      try {
-        const size = snapshot ? JSON.stringify(snapshot).length : 0;
-        if (size > 800_000) {
-          console.warn('saveTable: snapshot exceeds Firestore budget, persisting derived-only', record.id);
-          payload = slimRecord(record);
-        }
-      } catch {}
-      await withTimeout(setDoc(doc(db, 'tables', record.id), payload, { merge: true }), 10000);
+      await withTimeout(setDoc(doc(db, 'tables', record.id), slimRecord(record), { merge: true }), 10000);
     } catch {}
   }
 
-  // Sidecar first (source of sheet truth locally), slim array second.
-  if (typeof window !== 'undefined' && snapshot && typeof snapshot === 'object') {
-    try {
-      localStorage.setItem(tableSnapshotKey(record.id), JSON.stringify(snapshot));
-    } catch (e) {
-      console.warn('saveTable: snapshot sidecar quota exceeded (derived cache kept)', record.id);
-    }
-  }
   const slim = slimRecord(record);
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
   const idx = all.findIndex((t) => t.id === slim.id);
@@ -598,16 +717,12 @@ export async function getTableById(tableId: string): Promise<TableEntity | null>
       const snap = await withTimeout(getDoc(doc(db, 'tables', tableId)), 8000);
       if (snap.exists()) {
         remote = { id: snap.id, ...snap.data() } as TableEntity;
-        // Firestore record may be derived-only (oversized guard in
-        // saveTable): reattach a fresher local snapshot when available.
-        attachSidecar(remote);
       }
     } catch {}
   }
 
   const all = getLocal<TableEntity[]>(LOCAL_TABLES_KEY, []);
-  const rawLocal = all.find((t) => t.id === tableId) || null;
-  const local = attachSidecar(rawLocal ? { ...rawLocal } : null);
+  const local = all.find((t) => t.id === tableId) || null;
 
   const best = pickFreshestTable(remote, local);
   if (best && isTombed(best.id, tableUpdatedAt(best))) return null;
@@ -635,9 +750,6 @@ export async function deleteTableEntity(tableId: string): Promise<boolean> {
     }
   }
 
-  try {
-    if (typeof window !== 'undefined') localStorage.removeItem(tableSnapshotKey(tableId));
-  } catch {}
   // Tombstone first: even if the remote delete above failed silently, the
   // table stays deleted locally and never resurrects from stale reads.
   writeTomb(tableId);
@@ -690,53 +802,26 @@ export async function clearTableValues(tableId: string): Promise<boolean> {
     const existing = await getTableById(tableId);
     const now = new Date().toISOString();
     const base: any = existing || { id: tableId };
-    // Preserve direction on clear (Excel: clearing values never flips the
-    // sheet). RTL sheets keep Arabic locale + right default style.
-    const isRtl = base.direction === 'ltr' ? false : true;
-    const emptySnapshot: any = {
-      id: `wb-${tableId}`,
-      name: typeof base.name === 'string' && base.name ? base.name : 'Sheet',
-      appVersion: '0.25.1',
-      locale: isRtl ? 'arSA' : 'enUS',
-      styles: {},
-      sheetOrder: ['sheet-1'],
-      sheets: {
-        'sheet-1': {
-          id: 'sheet-1',
-          name: typeof base.name === 'string' && base.name ? String(base.name).slice(0, 60) : 'Sheet',
-          rowCount: 200,
-          columnCount: 26,
-          defaultColumnWidth: 140,
-          defaultRowHeight: 32,
-          mergeData: [],
-          cellData: {},
-          columnData: { 0: { w: 140 }, 1: { w: 140 }, 2: { w: 140 } },
-          rowData: {},
-          showGridlines: 1,
-          rightToLeft: isRtl ? 1 : 0,
-          rowHeader: { width: 44 },
-          columnHeader: { height: 24 },
-          ...(isRtl
-            ? { defaultStyle: { ff: 'Tahoma, "Segoe UI", Arial, sans-serif', fs: 11, ht: 3, vt: 2 } }
-            : {}),
-        },
-      },
-    };
+    const cols = Array.isArray(base.columns_data) && base.columns_data.length > 0
+      ? base.columns_data
+      : [
+          { id: 'A', name: 'A', type: 'text', width: 140 },
+          { id: 'B', name: 'B', type: 'text', width: 140 },
+          { id: 'C', name: 'C', type: 'text', width: 140 },
+        ];
+    const emptyRow: Record<string, any> = {};
+    cols.forEach((c: any) => { emptyRow[c.id] = ''; });
+
     const cleared: TableEntity = {
       ...(base as TableEntity),
       id: tableId,
-      name: typeof base.name === 'string' ? base.name : 'Sheet',
-      univerSnapshot: emptySnapshot,
-      columns_data: [
-        { id: 'A', name: 'A', type: 'text', width: 140 },
-        { id: 'B', name: 'B', type: 'text', width: 140 },
-        { id: 'C', name: 'C', type: 'text', width: 140 },
-      ] as any,
-      rows_data: [{ A: '', B: '', C: '' }],
-      cell_formats: {} as any,
-      merged_cells: [] as any,
+      name: typeof base.name === 'string' ? base.name : 'Table',
+      columns_data: cols,
+      rows_data: [emptyRow],
+      cell_formats: {},
+      merged_cells: [],
       updated_at: now,
-    } as TableEntity;
+    };
     await saveTable(cleared);
     try {
       if (typeof window !== 'undefined') {
@@ -758,71 +843,14 @@ export function getTableDirection(t: TableEntity | null | undefined): 'rtl' | 'l
 }
 
 /**
- * EXPLICIT repair: mirrors a table's columns (values, formulas, widths,
- * merges, header names) inside its used extent. NEVER called implicitly —
- * only from the "repair column order" button with user confirmation, for
- * tables whose columns were swapped by the reverted auto-mirror experiment.
- * Involution: running it twice restores the exact original, so a mistaken
- * press is undone by pressing again. Direction flag/locale are untouched.
- * Returns true on success.
+ * Mirror table columns stub for backwards-compatibility.
  */
-export async function mirrorTableColumns(tableId: string): Promise<boolean> {
-  if (!tableId) return false;
-  try {
-    if (sessionDeletedTables.has(tableId) || isTableTombed(tableId)) return false;
-    const existing = await getTableById(tableId);
-    if (!existing) return false;
-    const snap: any = (existing as any).univerSnapshot;
-    if (!snap || typeof snap !== 'object' || !snap.sheets) return false;
-    const {
-      mirrorSnapshotHorizontally,
-      snapshotUsedColCount,
-      applyColumnNames,
-      univerSnapshotToDerived,
-      mirrorColumnNames,
-    } = await import('@/lib/grid/univer-adapter');
-    const W = snapshotUsedColCount(snap);
-    if (W <= 1) return true; // Nothing to swap.
-    const mirrored = mirrorSnapshotHorizontally(snap);
-    try {
-      const derived = univerSnapshotToDerived(mirrored);
-      const prevNames: Array<string | undefined> = Array.isArray((existing as any).columns_data)
-        ? (existing as any).columns_data.map((c: any) => c?.name)
-        : [];
-      applyColumnNames(derived, mirrorColumnNames(prevNames, W));
-      (existing as any).columns_data = derived.columns;
-      (existing as any).rows_data = derived.rows;
-      (existing as any).cell_formats = derived.cellFormats;
-      (existing as any).merged_cells = derived.mergedCells;
-    } catch {}
-    await saveTable({ ...(existing as TableEntity), univerSnapshot: mirrored } as TableEntity);
-    try {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId } }));
-        window.dispatchEvent(new CustomEvent('smart-table-rebuild', { detail: { tableId } }));
-      }
-    } catch {}
-    return true;
-  } catch (e) {
-    console.warn('mirrorTableColumns failed', tableId, e);
-    return false;
-  }
+export async function mirrorTableColumns(_tableId: string): Promise<boolean> {
+  return true;
 }
 
 /**
  * Flips a smart table's direction (RTL ⇄ LTR).
- *
- * Engine limitation (verified in @univerjs sources, stable 0.25.1 AND
- * 1.0.0-rc.0): the canvas grid frame NEVER mirrors — `rightToLeft` is
- * model-only, no renderer consumes it. So this toggle deliberately does
- * NOT move any data (a data-mirror without a frame flip only scrambles
- * values). What it does flip, Excel-chrome-style:
- *   - sheet UI locale (arSA ⇄ enUS) → toolbar language + menus flip,
- *   - default cell style (Arabic right-aligned ⇄ default left),
- *   - the toolbar/formula-bar DOM order (patched in UniverTable),
- *   - the direction metadata readers/exports use.
- * A_toggle_never_reorders_columns_or_rewrites_formulas.
- * Returns the new direction.
  */
 export async function toggleTableDirection(tableId: string): Promise<'rtl' | 'ltr' | null> {
   if (!tableId) return null;
@@ -832,39 +860,11 @@ export async function toggleTableDirection(tableId: string): Promise<'rtl' | 'lt
     if (!existing) return null;
     const next: 'rtl' | 'ltr' = getTableDirection(existing) === 'rtl' ? 'ltr' : 'rtl';
     const now = new Date().toISOString();
-    const snap: any = (existing as any).univerSnapshot;
-    if (snap && typeof snap === 'object' && snap.sheets) {
-      // Workbook locale follows direction so menus/formula-bar flip too.
-      try {
-        (snap as any).locale = next === 'rtl' ? 'arSA' : 'enUS';
-      } catch {}
-      const sheetId = (snap.sheetOrder || [])[0] || Object.keys(snap.sheets)[0];
-      const sheet = sheetId ? snap.sheets[sheetId] : null;
-      if (sheet && typeof sheet === 'object') {
-        // Metadata only (see header): the engine does not mirror the grid.
-        sheet.rightToLeft = next === 'rtl' ? 1 : 0;
-        // Default style flips with it: RTL sheets right-align Arabic text
-        // with an Arabic-capable font; LTR sheets restore Univer defaults.
-        try {
-          if (next === 'rtl') {
-            sheet.defaultStyle = {
-              ...(typeof sheet.defaultStyle === 'object' ? sheet.defaultStyle : {}),
-              ff: 'Tahoma, "Segoe UI", Arial, sans-serif',
-              fs: 11,
-              ht: 3,
-              vt: 2,
-            };
-          } else if (sheet.defaultStyle && typeof sheet.defaultStyle === 'object') {
-            const { ht: _ht, ff: _ff, ...rest } = sheet.defaultStyle as any;
-            void _ht;
-            void _ff;
-            if (Object.keys(rest).length > 0) sheet.defaultStyle = rest;
-            else delete sheet.defaultStyle;
-          }
-        } catch {}
-      }
-    }
-    await saveTable({ ...(existing as TableEntity), direction: next, univerSnapshot: snap, updated_at: now } as TableEntity);
+    await saveTable({
+      ...(existing as TableEntity),
+      direction: next,
+      updated_at: now,
+    });
     try {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('smart-table-updated', { detail: { tableId } }));
@@ -879,28 +879,10 @@ export async function toggleTableDirection(tableId: string): Promise<'rtl' | 'lt
 }
 
 /**
- * Heals old snapshots whose sheet rightToLeft disagrees with the entity
- * direction (migrated before RTL support). Flag-only: it deliberately does
- * NOT rewrite locale/defaultStyle on open — mass-rewriting snapshots at
- * boot time is churn and risk; locale + style are set for new tables and
- * on explicit direction toggle instead. Returns true when a repair save
- * happened — callers should use the returned record afterwards.
+ * Direction repair stub for backwards-compatibility.
  */
 export async function repairTableDirection(entity: TableEntity): Promise<{ fixed: boolean; record: TableEntity }> {
-  try {
-    const wantRtl = getTableDirection(entity) === 'rtl' ? 1 : 0;
-    const snap: any = (entity as any).univerSnapshot;
-    if (!snap || typeof snap !== 'object' || !snap.sheets) return { fixed: false, record: entity };
-    const sheetId = (snap.sheetOrder || [])[0] || Object.keys(snap.sheets)[0];
-    const sheet = sheetId ? snap.sheets[sheetId] : null;
-    if (!sheet || typeof sheet !== 'object') return { fixed: false, record: entity };
-    if (sheet.rightToLeft === wantRtl) return { fixed: false, record: entity };
-    sheet.rightToLeft = wantRtl;
-    const saved = await saveTable({ ...(entity as TableEntity), univerSnapshot: snap } as TableEntity);
-    return { fixed: true, record: saved as TableEntity };
-  } catch {
-    return { fixed: false, record: entity };
-  }
+  return { fixed: false, record: entity };
 }
 
 // ==========================================

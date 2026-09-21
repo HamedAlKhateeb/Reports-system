@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateRawApiKey, hashApiKey } from '@/lib/api-auth';
 import { getVerifiedSessionUid } from '@/lib/server-auth';
+import { checkRateLimit } from '@/lib/rate-limit';
 import {
   getApiKeys,
   saveApiKeyRecord,
@@ -17,6 +18,10 @@ import { ApiKeyItem } from '@/lib/types';
 async function requireSessionUid(req: NextRequest): Promise<
   { uid: string } | { error: NextResponse }
 > {
+  const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'anon';
+  const rl = checkRateLimit(`keys_${ip}`, 30, 60 * 1000);
+  if (!rl.allowed) return { error: rl.response! };
+
   const uid = await getVerifiedSessionUid(req);
   if (!uid) {
     return {

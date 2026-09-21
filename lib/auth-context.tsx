@@ -152,8 +152,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     if (isServerVerifiableUid(userObj.uid) && isFirebaseConfigured) {
-      document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
-      document.cookie = `${LOCAL_SESSION_COOKIE}=; path=/; max-age=0; SameSite=Lax`;
+      // Server handles the HttpOnly __session cookie via /api/auth/session.
+      // Client-side document.cookie cannot clear HttpOnly cookies and attempting
+      // to set a same-name non-HttpOnly cookie creates duplicate cookie headers.
       return;
     }
     document.cookie = `${LOCAL_SESSION_COOKIE}=guest; path=/; max-age=604800; SameSite=Lax`;
@@ -181,7 +182,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
     const topUpIfStale = () => {
-      if (Date.now() - lastMintRef.current > 25 * 60 * 1000) refresh();
+      if (Date.now() - lastMintRef.current > 60 * 1000) refresh();
     };
     const onVisibility = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') topUpIfStale();

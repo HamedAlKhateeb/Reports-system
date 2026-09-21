@@ -179,7 +179,9 @@ service cloud.firestore {
       // Collaboration: list also returns invited + folder-visible reports
       // (per-document checks — no cross-user enumeration).
       allow get: if canReadReport(resource.data);
-      allow list: if canReadReport(resource.data);
+      allow list: if owns(resource.data)
+        || (isAuthenticated() && request.auth.token.email is string && callerEmail() in resource.data.sharedWithEmails)
+        || resource.data.isShared == true;
       allow create: if isAuthenticated() && request.resource.data.ownerUid == request.auth.uid;
       allow update: if owns(resource.data) || canWriteReport(resource.data);
       allow delete: if owns(resource.data);
@@ -198,7 +200,9 @@ service cloud.firestore {
     // Collaboration: invited emails may READ the folder (needed to resolve
     // folder-level report access). All writes stay owner-only.
     match /folders/{folderId} {
-      allow get, list: if ownsFlexible(resource.data) || hasCallerEmail(resource.data);
+      allow get: if ownsFlexible(resource.data) || hasCallerEmail(resource.data);
+      allow list: if ownsFlexible(resource.data)
+        || (isAuthenticated() && request.auth.token.email is string && callerEmail() in resource.data.sharedWithEmails);
       allow create: if ownsFlexible(request.resource.data);
       allow update, delete: if ownsFlexible(resource.data);
     }
@@ -213,12 +217,13 @@ service cloud.firestore {
     }
 
     // Counters collection for atomic report numbering
-    // Phase 2.1 (B7): each user owns exactly one counter document,
-    // `counters/reports_{uid}`, advanced inside a transaction by
-    // allocateReportNumber(). The legacy global `counters/reports` is
-    // no longer written by clients (kept readable for diagnostics).
+    // Scoped strictly to the authenticated user's personal counter
     match /counters/{counterId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        counterId == 'reports_' + request.auth.uid ||
+        counterId == 'reports' ||
+        request.auth.token.admin == true
+      );
       allow write: if isAuthenticated()
         && counterId == 'reports_' + request.auth.uid
         && request.resource.data.ownerUid == request.auth.uid;
@@ -252,7 +257,10 @@ service cloud.firestore {
 
     // Whitelist collection for authorized users
     match /authorized_users/{userEmail} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        request.auth.token.admin == true ||
+        (request.auth.token.email is string && request.auth.token.email.lower() == userEmail.lower())
+      );
       allow write: if isAuthenticated() && (request.auth.token.admin == true || request.auth.token.email.matches('.*@example[.]com'));
     }
 
@@ -262,11 +270,40 @@ service cloud.firestore {
     }
 
     // Projects collection
-    // Phase 1.2 (B4): scoped via owner_id/ownerUid (was any-authenticated).
     match /projects/{projectId} {
-      allow get, list: if ownsFlexible(resource.data);
+      allow get: if ownsFlexible(resource.data)
+        || hasCallerEmail(resource.data)
+        || (resource.data.isShared == true)
+        || (exists(/databases/$(database)/documents/teams/$('team_' + projectId))
+            && (
+              (get(/databases/$(database)/documents/teams/$('team_' + projectId)).data.memberUids is list
+               && request.auth.uid in get(/databases/$(database)/documents/teams/$('team_' + projectId)).data.memberUids)
+              || (request.auth.token.email is string
+                  && get(/databases/$(database)/documents/teams/$('team_' + projectId)).data.memberEmails is list
+                  && callerEmail() in get(/databases/$(database)/documents/teams/$('team_' + projectId)).data.memberEmails)
+            ));
+      allow list: if ownsFlexible(resource.data) || hasCallerEmail(resource.data);
       allow create: if ownsFlexible(request.resource.data);
       allow update, delete: if ownsFlexible(resource.data);
+    }
+
+    function canAccessTeam(data) {
+      return isAuthenticated() && (
+        (data.memberUids is list && request.auth.uid in data.memberUids)
+        || (request.auth.token.email is string && data.memberEmails is list && callerEmail() in data.memberEmails)
+        || (data.projectId is string && ownsFlexible(get(/databases/$(database)/documents/projects/$(data.projectId)).data))
+      );
+    }
+
+    // Teams collection (scoped strictly to project owner and team members)
+    match /teams/{teamId} {
+      allow get: if canAccessTeam(resource.data);
+      allow list: if isAuthenticated() && (
+        (resource.data.memberUids is list && request.auth.uid in resource.data.memberUids)
+        || (request.auth.token.email is string && resource.data.memberEmails is list && callerEmail() in resource.data.memberEmails)
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if canAccessTeam(resource.data);
     }
 
     // Report-Issue join collection
@@ -327,6 +364,63 @@ service cloud.firestore {
       allow read: if isAuthenticated() && resource.data.actor_id == request.auth.uid;
       allow create: if isAuthenticated() && request.resource.data.actor_id == request.auth.uid;
       allow update, delete: if false; // Immutable audit log!
+    }
+
+    // Visual Boards collection (completely independent from reports)
+    match /boards/{boardId} {
+      allow get, list: if owns(resource.data) || resource.data.isShared == true;
+      allow create: if owns(request.resource.data);
+      allow update, delete: if owns(resource.data);
+    }
+
+    // Notifications collection (scoped strictly to recipient, created only by sender or system)
+    match /notifications/{notificationId} {
+      allow get, list: if isAuthenticated() && (
+        resource.data.recipientUid == request.auth.uid ||
+        (resource.data.recipientEmail is string && resource.data.recipientEmail == request.auth.token.email.lower())
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.senderUid == request.auth.uid ||
+        request.resource.data.senderUid == 'system'
+      );
+      allow update: if isAuthenticated() && (
+        resource.data.recipientUid == request.auth.uid ||
+        (resource.data.recipientEmail is string && resource.data.recipientEmail == request.auth.token.email.lower())
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.recipientUid == request.auth.uid ||
+        (resource.data.recipientEmail is string && resource.data.recipientEmail == request.auth.token.email.lower())
+      );
+    }
+
+    // Conversations & Messages (scoped to participants)
+    match /conversations/{convId} {
+      allow get, list: if isAuthenticated() && (
+        (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
+        || (request.auth.token.email is string && resource.data.participantEmails is list && callerEmail() in resource.data.participantEmails)
+      );
+      allow create: if isAuthenticated() && (
+        (request.resource.data.participantUids is list && request.auth.uid in request.resource.data.participantUids)
+        || (request.auth.token.email is string && request.resource.data.participantEmails is list && callerEmail() in request.resource.data.participantEmails)
+      );
+      allow update, delete: if isAuthenticated() && (
+        (resource.data.participantUids is list && request.auth.uid in resource.data.participantUids)
+        || (request.auth.token.email is string && resource.data.participantEmails is list && callerEmail() in resource.data.participantEmails)
+      );
+    }
+
+    match /messages/{msgId} {
+      allow get, list: if isAuthenticated() && (
+        resource.data.senderUid == request.auth.uid
+        || resource.data.recipientUid == request.auth.uid
+        || (request.auth.token.email is string && resource.data.recipientEmail is string && resource.data.recipientEmail.lower() == callerEmail())
+        || (request.auth.token.email is string && resource.data.senderEmail is string && resource.data.senderEmail.lower() == callerEmail())
+      );
+      allow create: if isAuthenticated() && request.resource.data.senderUid == request.auth.uid;
+      allow update, delete: if isAuthenticated() && (
+        resource.data.senderUid == request.auth.uid
+        || resource.data.recipientUid == request.auth.uid
+      );
     }
   }
 }

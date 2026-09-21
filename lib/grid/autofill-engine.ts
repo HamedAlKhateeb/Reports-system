@@ -17,6 +17,7 @@ import {
   colIndexToName,
   colNameToIndex,
   adjustFormula,
+  evaluateFormula,
 } from './formula-parser';
 
 export type AutofillMode = 'fill_series' | 'copy_cells';
@@ -211,6 +212,40 @@ export function generateSeriesValues(
 }
 
 /**
+ * Resolves a cell's calculated value (either from calculatedGridData or by evaluating formula).
+ */
+export function resolveCellValue(
+  coord: string,
+  gridData: Record<string, any>,
+  calculatedData?: Record<string, any>,
+  visiting = new Set<string>()
+): any {
+  if (calculatedData && calculatedData[coord] !== undefined && calculatedData[coord] !== null && calculatedData[coord] !== '') {
+    const cv = calculatedData[coord];
+    const n = Number(cv);
+    return typeof cv === 'number' ? cv : (!isNaN(n) && String(cv).trim() !== '' ? n : cv);
+  }
+  const raw = gridData[coord];
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (typeof raw === 'string' && raw.trim().startsWith('=')) {
+    const up = coord.toUpperCase();
+    if (visiting.has(up)) return 0;
+    visiting.add(up);
+    try {
+      const res = evaluateFormula(raw, (ref) => resolveCellValue(ref, gridData, calculatedData, visiting));
+      visiting.delete(up);
+      const n = Number(res);
+      return typeof res === 'number' ? res : (!isNaN(n) && String(res).trim() !== '' ? n : res);
+    } catch {
+      visiting.delete(up);
+      return 0;
+    }
+  }
+  const n = Number(raw);
+  return typeof raw === 'number' ? raw : (!isNaN(n) && String(raw).trim() !== '' ? n : raw);
+}
+
+/**
  * Performs a 2D Grid Autofill operation from source range to target range.
  * 
  * Returns an atomic list of cell changes suitable for a single Ctrl+Z undo transaction.
@@ -219,11 +254,13 @@ export function executeAutofill({
   sourceRange,
   targetRange,
   currentGridData,
+  calculatedGridData,
   mode = 'fill_series',
 }: {
   sourceRange: { startCol: string; startRow: number; endCol: string; endRow: number };
   targetRange: { startCol: string; startRow: number; endCol: string; endRow: number };
   currentGridData: Record<string, any>; // key: 'A1', value: any
+  calculatedGridData?: Record<string, any>; // key: 'A1', calculated display value
   mode?: AutofillMode;
 }): AutofillResult {
   const changes: CellChange[] = [];
@@ -260,12 +297,16 @@ export function executeAutofill({
 
         // Collect source column values
         const colSourceValues: any[] = [];
-        const colSourceCoords: Array<{ row: number; val: any }> = [];
+        const colSourceCoords: Array<{ row: number; rawVal: any; calcVal: any; isFormula: boolean }> = [];
         for (let r = srcMinRow; r <= srcMaxRow; r++) {
           const coord = `${colLetter}${r}`;
-          const val = currentGridData[coord] !== undefined ? currentGridData[coord] : '';
-          colSourceValues.push(val);
-          colSourceCoords.push({ row: r, val });
+          const rawVal = currentGridData[coord] !== undefined ? currentGridData[coord] : '';
+          const isFormula = typeof rawVal === 'string' && rawVal.trim().startsWith('=');
+          const calcVal = isFormula
+            ? resolveCellValue(coord, currentGridData, calculatedGridData)
+            : rawVal;
+          colSourceValues.push(calcVal);
+          colSourceCoords.push({ row: r, rawVal, calcVal, isFormula });
         }
 
         const generated = generateSeriesValues(
@@ -278,16 +319,15 @@ export function executeAutofill({
         for (let idx = 0; idx < rowCount; idx++) {
           const targetRowNum = isDown ? fillStartRow + idx : fillEndRow - idx;
           const targetCoord = `${colLetter}${targetRowNum}`;
-          let valToSet = generated[idx];
-
-          // If formula, adjust relative references
           const srcIdx = idx % colSourceCoords.length;
-          const srcRow = colSourceCoords[srcIdx].row;
-          const dRow = targetRowNum - srcRow;
-          const dCol = 0;
+          const srcItem = colSourceCoords[srcIdx];
 
-          if (typeof valToSet === 'string' && valToSet.startsWith('=')) {
-            valToSet = adjustFormula(colSourceCoords[srcIdx].val, dRow, dCol);
+          let valToSet: any;
+          if (srcItem.isFormula) {
+            const dRow = targetRowNum - srcItem.row;
+            valToSet = adjustFormula(srcItem.rawVal, dRow, 0);
+          } else {
+            valToSet = generated[idx];
           }
 
           const oldValue = currentGridData[targetCoord];
@@ -312,13 +352,17 @@ export function executeAutofill({
       for (let r = srcMinRow; r <= srcMaxRow; r++) {
         // Collect source row values
         const rowSourceValues: any[] = [];
-        const rowSourceCoords: Array<{ colIdx: number; val: any }> = [];
+        const rowSourceCoords: Array<{ colIdx: number; rawVal: any; calcVal: any; isFormula: boolean }> = [];
         for (let c = srcMinCol; c <= srcMaxCol; c++) {
           const colLetter = colIndexToName(c);
           const coord = `${colLetter}${r}`;
-          const val = currentGridData[coord] !== undefined ? currentGridData[coord] : '';
-          rowSourceValues.push(val);
-          rowSourceCoords.push({ colIdx: c, val });
+          const rawVal = currentGridData[coord] !== undefined ? currentGridData[coord] : '';
+          const isFormula = typeof rawVal === 'string' && rawVal.trim().startsWith('=');
+          const calcVal = isFormula
+            ? resolveCellValue(coord, currentGridData, calculatedGridData)
+            : rawVal;
+          rowSourceValues.push(calcVal);
+          rowSourceCoords.push({ colIdx: c, rawVal, calcVal, isFormula });
         }
 
         const generated = generateSeriesValues(
@@ -332,15 +376,15 @@ export function executeAutofill({
           const targetColIdx = isRight ? fillStartCol + idx : fillEndCol - idx;
           const targetColLetter = colIndexToName(targetColIdx);
           const targetCoord = `${targetColLetter}${r}`;
-          let valToSet = generated[idx];
-
           const srcIdx = idx % rowSourceCoords.length;
-          const srcColIdx = rowSourceCoords[srcIdx].colIdx;
-          const dRow = 0;
-          const dCol = targetColIdx - srcColIdx;
+          const srcItem = rowSourceCoords[srcIdx];
 
-          if (typeof valToSet === 'string' && valToSet.startsWith('=')) {
-            valToSet = adjustFormula(rowSourceCoords[srcIdx].val, dRow, dCol);
+          let valToSet: any;
+          if (srcItem.isFormula) {
+            const dCol = targetColIdx - srcItem.colIdx;
+            valToSet = adjustFormula(srcItem.rawVal, 0, dCol);
+          } else {
+            valToSet = generated[idx];
           }
 
           const oldValue = currentGridData[targetCoord];

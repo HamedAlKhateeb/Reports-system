@@ -186,19 +186,19 @@ await check('sheetToSmartTableEntity matches existing TableEntity shape', () => 
   assert.ok(entity.version === 1 && Array.isArray(entity.merged_cells));
 });
 
-// ------------------------------------------------- Similarity/Matching UI nav
-console.log('\nSimilarity/Matching navigation:');
-await check('inspections live in the Issues tab Action Center (not the top bar)', () => {
+// ------------------------------------------------- Unified-editor refactor:
+// reports open directly in the editor; the old Issues-tab Action Center,
+// candidate/inspector modals and AI wiring were removed by design.
+console.log('\nUnified editor navigation:');
+await check('report opens directly in unified editor (no legacy tabs/modals)', () => {
   const pageSrc = readFileSync(join(process.cwd(), 'app', 'reports', '[id]', 'page.tsx'), 'utf8');
-  const tabSrc = readFileSync(join(process.cwd(), 'components', 'reports', 'tabs', 'IssuesTab.tsx'), 'utf8');
-  assert.ok(!pageSrc.includes('Candidate Inspection'), 'top-bar Candidate button still present');
-  assert.ok(!pageSrc.includes('Problem Inspection'), 'top-bar Problem button still present');
-  assert.ok(!pageSrc.includes('showScanMenu'), 'dropdown state still present');
-  assert.ok(!pageSrc.includes('??? ??????? (???????? / ????????)'), 'old dropdown title still present');
-  assert.ok(tabSrc.includes('فحص التشابه'), 'missing Similarity Check button in Action Center');
-  assert.ok(tabSrc.includes('فحص المطابقة'), 'missing Matching Check button in Action Center');
-  assert.ok(pageSrc.includes('handleScanCandidates'), 'candidate handler wiring missing');
-  assert.ok(pageSrc.includes('handleOpenInspector'), 'inspector handler wiring missing');
+  assert.ok(pageSrc.includes('TipTapEditor'), 'unified TipTapEditor missing');
+  assert.ok(!pageSrc.includes('handleScanCandidates'), 'legacy candidate scan wiring still present');
+  assert.ok(!pageSrc.includes('handleOpenInspector'), 'legacy inspector wiring still present');
+  assert.ok(!pageSrc.includes('CandidateReviewModal'), 'legacy candidate modal still present');
+  assert.ok(!pageSrc.includes('IssuesTab'), 'legacy Issues tab still present');
+  assert.ok(pageSrc.includes('setReportDrawing') || readFileSync(join(process.cwd(), 'components', 'editor', 'EditorToolbar.tsx'), 'utf8').includes('setReportDrawing'), 'drawing board integration missing');
+  assert.ok(readFileSync(join(process.cwd(), 'components', 'editor', 'EditorToolbar.tsx'), 'utf8').includes('setReportMindmap'), 'mindmap integration missing');
 });
 
 console.log(`\n=============================================\nImport Test Results: ${passed} passed, ${failed} failed\n=============================================`);

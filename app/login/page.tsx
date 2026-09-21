@@ -24,7 +24,13 @@ function LoginFormContent() {
   const redirectPath = searchParams.get('redirect') || '/reports';
   const bounceReason = searchParams.get('reason');
 
-  const { signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, sendPasswordReset, error: authContextError, clearError } = useAuth();
+  const { user, loading, signInWithEmail, signUpWithEmail, signInWithGoogle, signInAsGuest, sendPasswordReset, error: authContextError, clearError } = useAuth();
+  
+  React.useEffect(() => {
+    if (!loading && user) {
+      router.replace(redirectPath);
+    }
+  }, [loading, user, router, redirectPath]);
   const { lang, setLang, t } = useLanguage();
 
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
@@ -63,6 +69,22 @@ function LoginFormContent() {
       if (password !== confirmPassword) {
         setLocalError(t('passwordsDoNotMatch'));
         return;
+      }
+
+      // Backend password validation
+      try {
+        const valRes = await fetch('/api/auth/validate-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password, lang: lang === 'ar' ? 'ar' : 'en' }),
+        });
+        const valData = await valRes.json();
+        if (!valRes.ok || !valData.valid) {
+          setLocalError(valData.error || (lang === 'ar' ? 'كلمة المرور لا تلبي معايير الأمان.' : 'Password does not meet security requirements.'));
+          return;
+        }
+      } catch (err) {
+        console.warn('Backend password check network notice:', err);
       }
     }
 
@@ -176,20 +198,12 @@ function LoginFormContent() {
     try {
       setSubmitting(true);
       const res = await sendPasswordReset(email);
-      if (res.ok) {
+      if (res.ok || res.code === 'auth/user-not-found') {
         setResetSent(true);
         setSuccessMessage(
           lang === 'ar'
-            ? 'أرسلنا رابط استعادة كلمة السر إلى بريدك. تحقق من الوارد وSpam/Junk، الرابط صالح لساعة واحدة.'
-            : 'Password reset link sent. Check your inbox and Spam/Junk — the link is valid for one hour.'
-        );
-      } else if (res.code === 'auth/user-not-found') {
-        // Same generic message either way (no account enumeration).
-        setResetSent(true);
-        setSuccessMessage(
-          lang === 'ar'
-            ? 'إذا كان هذا البريد مسجلًا ستصلك رسالة الاستعادة خلال دقائق. تحقق أيضًا من Spam/Junk.'
-            : 'If this email is registered, a reset message will arrive within minutes. Also check Spam/Junk.'
+            ? 'إذا كان هذا البريد مسجلاً في النظام، ستصلك رسالة تحتوي على رابط استعادة كلمة المرور خلال دقائق. يرجى مراجعة صندوق الوارد ومجلد الرسائل غير المرغوب فيها (Spam/Junk).'
+            : 'If this email is registered in the system, a password reset link will arrive within minutes. Please check your inbox and Spam/Junk folder.'
         );
       } else if (res.code === 'auth/too-many-requests') {
         setLocalError(lang === 'ar' ? 'محاولات كثيرة — انتظر قليلًا ثم حاول مجددًا.' : 'Too many attempts — wait a bit and retry.');

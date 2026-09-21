@@ -1,7 +1,8 @@
 'use client';
-
-import DashboardPage from '@/app/dashboard/page';
-
-export default function IssuesPage() {
-  return <DashboardPage />;
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+export default function IssuesRedirect() {
+  const r = useRouter();
+  useEffect(() => { r.replace('/tracking'); }, [r]);
+  return null;
 }

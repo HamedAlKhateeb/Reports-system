@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyFirebaseIdToken } from '@/lib/server-auth';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 /**
  * Phase 1.1 (B3) — Session mint/clear endpoint.
@@ -13,42 +14,16 @@ import { verifyFirebaseIdToken } from '@/lib/server-auth';
  */
 
 const COOKIE_NAME = '__session';
-const MAX_AGE_SECONDS = 3600; // Upper bound; Firebase ID tokens live ~1 hour.
-
-function tokenRemainingSeconds(idToken: string): number | null {
-  // Client already verified server-side — this only sizes Max-Age so the
-  // cookie never outlives the JWT it carries. Never throws.
-  try {
-    const part = idToken.split('.')[1];
-    if (!part) return null;
-    const norm = part.replace(/-/g, '+').replace(/_/g, '/');
-    const json = JSON.parse(
-      typeof Buffer !== 'undefined'
-        ? Buffer.from(norm, 'base64').toString('utf8')
-        : atob(norm)
-    ) as { exp?: number };
-    if (typeof json.exp !== 'number') return null;
-    return json.exp - Math.floor(Date.now() / 1000);
-  } catch {
-    return null;
-  }
-}
+const MAX_AGE_SECONDS = 604800; // 7 days — matches guest cookie lifetime; client re-mints every 30 min
 
 function buildSessionCookie(idToken: string): string {
-  const remaining = tokenRemainingSeconds(idToken);
-  const maxAge =
-    remaining === null ? MAX_AGE_SECONDS : Math.min(Math.max(remaining, 60), MAX_AGE_SECONDS);
   const parts = [
     `${COOKIE_NAME}=${encodeURIComponent(idToken)}`,
     'Path=/',
-    `Max-Age=${maxAge}`,
+    `Max-Age=${MAX_AGE_SECONDS}`,
     'HttpOnly',
-    // Lax (not Strict): page-gating cookie must survive top-level navigation
-    // from external links (email/WhatsApp) or users look "logged out".
     'SameSite=Lax',
   ];
-  // `Secure` would block the cookie on http://localhost dev, so only set it
-  // outside development or when explicitly behind https.
   if (process.env.NODE_ENV === 'production') {
     parts.push('Secure');
   }
@@ -57,6 +32,11 @@ function buildSessionCookie(idToken: string): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const ip = req.headers.get('cf-connecting-ip') || req.headers.get('x-forwarded-for')?.split(',')[0].trim() || 'anon';
+    const rateLimit = checkRateLimit(`auth_session_${ip}`, 30, 60 * 1000);
+    if (!rateLimit.allowed) {
+      return rateLimit.response!;
+    }
     const body = (await req.json().catch(() => ({}))) as { idToken?: unknown };
     if (typeof body.idToken !== 'string' || !body.idToken) {
       return NextResponse.json(

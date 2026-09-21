@@ -102,7 +102,7 @@ async function run() {
   eq(filled.cellFormats['A2'], { bold: true, align: 'right' }, 'autofill inherits FULL format (align included)');
   eq(filled.cellFormats['A3'], { bold: true, align: 'right' }, 'autofill inherits format A3');
 
-  // 5. autofill relative formula adjustment (same primitive as copy/paste)
+  // 5. autofill shifts relative formula references like Excel
   let s3 = baseState();
   s3 = { ...s3, ...setCellValue(s3, 'A1', 10) };
   s3 = { ...s3, ...setCellValue(s3, 'A2', 20) };
@@ -112,7 +112,7 @@ async function run() {
     targetRange: { startCol: 'B', startRow: 1, endCol: 'B', endRow: 2 },
     mode: 'fill_series',
   });
-  eq(ff.rows[1].B, '=A2*2', 'autofill shifts relative refs');
+  eq(ff.rows[1].B, '=A2*2', 'autofill shifts relative formula references');
 
   // 6. copy/paste with relative adjustment (relocation delta, like Excel)
   const cp = copyRange(s3, { startColIdx: 1, startRowIdx: 0, endColIdx: 1, endRowIdx: 0 });

@@ -74,7 +74,8 @@ const THEME_HEX_MAP: Record<string, { primary: string; light: string }> = {
 export async function buildDocxDocument(
   report: ReportItem,
   images: ReportImageItem[] = [],
-  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
+  mindmaps: Record<string, { dataUrl: string; width?: number; height?: number }> = {},
+  drawings: Record<string, { dataUrl: string; width?: number; height?: number }> = {}
 ): Promise<Buffer> {
   const isAr = (report.language || 'ar').toLowerCase().startsWith('ar');
   const lang = isAr ? 'ar' : 'en';
@@ -773,6 +774,41 @@ export async function buildDocxDocument(
           children.push(
             new Paragraph({
               children: [makeRun(caption, { size: 20, color: '64748b' })],
+              alignment: AlignmentType.CENTER,
+              bidirectional: isAr,
+              spacing: { before: 40, after: 160 },
+            })
+          );
+        }
+      } else if ((node as any).type === 'reportDrawing') {
+        const dTitle = String((node as any).attrs?.title || (isAr ? '\u0644\u0648\u062d\u0629 \u0631\u0633\u0645' : 'Drawing'));
+        const dCaption = String((node as any).attrs?.caption || '').trim();
+        children.push(
+          new Paragraph({
+            children: [makeRun(dTitle, { bold: true, size: 24, color: theme.primary })],
+            alignment: AlignmentType.CENTER,
+            bidirectional: isAr,
+            spacing: { before: 160, after: 120 },
+          })
+        );
+        try {
+          const dSnap = (node as any).attrs?.drawingId ? drawings[String((node as any).attrs.drawingId)] : undefined;
+          const buf = dSnap?.dataUrl ? await resolveImageBuffer(dSnap.dataUrl) : null;
+          if (buf) {
+            const dims = imageDimensions(buf);
+            const box = fitImageBox(dims.width, dims.height);
+            children.push(
+              new Paragraph({
+                children: [new ImageRun({ data: buf, transformation: { width: box.width, height: box.height } })],
+                alignment: AlignmentType.CENTER,
+              })
+            );
+          }
+        } catch {}
+        if (dCaption) {
+          children.push(
+            new Paragraph({
+              children: [makeRun(dCaption, { size: 20, color: '64748b' })],
               alignment: AlignmentType.CENTER,
               bidirectional: isAr,
               spacing: { before: 40, after: 160 },

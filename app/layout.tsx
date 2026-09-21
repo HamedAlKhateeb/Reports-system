@@ -1,18 +1,39 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import 'katex/dist/katex.min.css';
-// Required for the report mind-map (React Flow): without it the canvas has
-// no pane/viewport styles and pan/zoom/selection appear broken.
 import '@xyflow/react/dist/style.css';
 import { LanguageProvider } from '@/lib/i18n/LanguageContext';
 import { ThemeProvider } from '@/lib/theme-context';
 import { AuthProvider } from '@/lib/auth-context';
-import { AIContextProvider } from '@/lib/ai-context';
+import { ProjectProvider } from '@/lib/project-context';
+import { PomodoroProvider } from '@/lib/pomodoro-context';
 import { Navbar } from '@/components/layout/Navbar';
 import { AuthGuard } from '@/components/layout/AuthGuard';
 import { PwaInstallPrompt } from '@/components/pwa/PwaInstallPrompt';
-import { AiFloatingTrigger } from '@/components/ai/AiFloatingTrigger';
 import { Toaster } from '@/components/ui/toast';
+
+import { Tajawal, Amiri, Inter } from 'next/font/google';
+
+const tajawal = Tajawal({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '500', '700', '800'],
+  variable: '--font-tajawal',
+  display: 'swap',
+});
+
+const amiri = Amiri({
+  subsets: ['arabic', 'latin'],
+  weight: ['400', '700'],
+  variable: '--font-amiri',
+  display: 'swap',
+});
+
+const inter = Inter({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  variable: '--font-inter',
+  display: 'swap',
+});
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -22,8 +43,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: 'نظام إدارة تقارير المراجعة وتتبع المشاكل',
-  description: 'منصة متكاملة لكتابة وإدارة تقارير المراجعة، مراجعة جودة الترجمة، وتتبع المشاكل والأخطاء البرمجية.',
+  title: 'نظام إدارة تقارير المراجعة ولوحات التتبع',
+  description: 'منصة متكاملة لكتابة تقارير المراجعة بالمحرر الموحد ولوحات التتبع.',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
@@ -34,30 +55,16 @@ export const metadata: Metadata = {
     icon: [
       { url: '/icon.svg', type: 'image/svg+xml' },
       { url: '/favicon.ico', sizes: 'any' },
-      { url: '/icon-32.png', sizes: '32x32', type: 'image/png' },
-      { url: '/icon-16.png', sizes: '16x16', type: 'image/png' },
     ],
     shortcut: '/favicon.ico',
-    apple: [
-      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
-    ],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ar" dir="rtl" suppressHydrationWarning>
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800&display=swap"
-          rel="stylesheet"
-        />
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
         <link rel="icon" href="/favicon.ico" sizes="any" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -65,11 +72,12 @@ export default function RootLayout({
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
         <meta name="apple-mobile-web-app-title" content="تقارير" />
       </head>
-      <body className="font-sans antialiased bg-background text-foreground transition-colors duration-200 overflow-x-clip">
+      <body className={`${tajawal.variable} ${amiri.variable} ${inter.variable} font-sans antialiased bg-background text-foreground transition-colors duration-200 overflow-x-clip`}>
         <ThemeProvider>
           <LanguageProvider>
             <AuthProvider>
-              <AIContextProvider>
+              <ProjectProvider>
+                <PomodoroProvider>
                 <Navbar />
                 <AuthGuard>
                   <a
@@ -78,12 +86,14 @@ export default function RootLayout({
                   >
                     تخطَّ إلى المحتوى / Skip to content
                   </a>
-                  <main id="main-content" className="min-h-[calc(100vh-4rem)]" tabIndex={-1}>{children}</main>
+                  <main id="main-content" className="min-h-[calc(100vh-4rem)]" tabIndex={-1}>
+                    {children}
+                  </main>
                 </AuthGuard>
                 <PwaInstallPrompt />
-                <AiFloatingTrigger />
                 <Toaster />
-              </AIContextProvider>
+                </PomodoroProvider>
+              </ProjectProvider>
             </AuthProvider>
           </LanguageProvider>
         </ThemeProvider>

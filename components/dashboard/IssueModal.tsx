@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import {
   Trash2,
@@ -12,12 +12,17 @@ import {
   ExternalLink,
   Archive,
   ArchiveRestore,
+  UserCheck,
+  Timer,
 } from 'lucide-react';
 import { IssueItem, CommentItem, ReportItem } from '@/lib/types';
 import { getComments, addComment, updateIssue, deleteIssue, unarchiveIssue, isArchivedIssue } from '@/lib/db';
 import { archiveIssue } from '@/lib/db-intelligence';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
+import { useProject } from '@/lib/project-context';
+import { usePomodoro } from '@/lib/pomodoro-context';
+import { createNotification } from '@/lib/notifications-db';
 import {
   getStatusLabel,
   getSeverityLabel,
@@ -57,6 +62,9 @@ export function IssueModal({
 }: IssueModalProps) {
   const { lang, t } = useLanguage();
   const { user } = useAuth();
+  const { team } = useProject();
+  const { activeTask, isRunning, startTaskPomodoro } = usePomodoro();
+  const teamMembers = team?.members || [];
 
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [newCommentBody, setNewCommentBody] = useState('');
@@ -71,17 +79,9 @@ export function IssueModal({
   const [status, setStatus] = useState<IssueStatus>(normalizeStatus(issue.status));
   const [severity, setSeverity] = useState<IssueSeverity>(normalizeSeverity(issue.severity));
   const [linkedReportId, setLinkedReportId] = useState<string>(issue.linkedReportId || (issue as any).reportId || '');
+  const [assigneeEmail, setAssigneeEmail] = useState<string>(issue.assigneeEmail || '');
 
-  useEffect(() => {
-    setTitle(issue.title);
-    setDescription(issue.description);
-    setStatus(normalizeStatus(issue.status));
-    setSeverity(normalizeSeverity(issue.severity));
-    setLinkedReportId(issue.linkedReportId || (issue as any).reportId || '');
-    loadComments();
-  }, [issue]);
-
-  const loadComments = async () => {
+  const loadComments = useCallback(async () => {
     try {
       setLoadingComments(true);
       const data = await getComments(issue.id);
@@ -91,22 +91,70 @@ export function IssueModal({
     } finally {
       setLoadingComments(false);
     }
-  };
+  }, [issue.id]);
+
+  useEffect(() => {
+    setTitle(issue.title);
+    setDescription(issue.description);
+    setStatus(normalizeStatus(issue.status));
+    setSeverity(normalizeSeverity(issue.severity));
+    setLinkedReportId(issue.linkedReportId || (issue as any).reportId || '');
+    setAssigneeEmail(issue.assigneeEmail || '');
+    loadComments();
+  }, [issue, loadComments]);
 
   const handleFieldChange = async (updates: Partial<IssueItem>) => {
     const updated = { ...issue, ...updates };
     onUpdated(updated);
     await updateIssue(issue.id, updates);
+
+    // 1. Task Assignment Notification: when assigned to someone other than current user
+    if (
+      updates.assigneeEmail &&
+      updates.assigneeEmail !== user?.email
+    ) {
+      void createNotification({
+        recipientUid: updates.assigneeUid || updates.assigneeEmail,
+        recipientEmail: updates.assigneeEmail || undefined,
+        senderUid: user?.uid || 'user',
+        senderName: user?.displayName || user?.email?.split('@')[0] || (lang === 'ar' ? 'أحد الأعضاء' : 'A Member'),
+        type: 'task_assigned',
+        title: lang === 'ar' ? 'تم تعيين مهمة جديدة لك' : 'New task assigned to you',
+        body: lang === 'ar'
+          ? `قام ${user?.displayName || user?.email?.split('@')[0] || 'أحد الأعضاء'} بتعيين المهمة "${issue.title}" لك.`
+          : `${user?.displayName || user?.email?.split('@')[0] || 'A member'} assigned task "${issue.title}" to you.`,
+        link: '/dashboard',
+        entityId: issue.id,
+      });
+    }
+
+    // 2. Task Update Notification: when status or severity changes
+    if ((updates.status || updates.severity) && issue.assigneeUid && issue.assigneeUid !== user?.uid) {
+      void createNotification({
+        recipientUid: issue.assigneeUid,
+        recipientEmail: issue.assigneeEmail || undefined,
+        senderUid: user?.uid || 'user',
+        senderName: user?.displayName || user?.email?.split('@')[0] || (lang === 'ar' ? 'أحد الأعضاء' : 'A Member'),
+        type: 'task_updated',
+        title: lang === 'ar' ? 'تحديث على المهمة' : 'Task updated',
+        body: lang === 'ar'
+          ? `تم تحديث تفاصيل المهمة "${issue.title}".`
+          : `Task "${issue.title}" details were updated.`,
+        link: '/dashboard',
+        entityId: issue.id,
+      });
+    }
   };
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCommentBody.trim() || !user) return;
+    const commentBody = newCommentBody.trim();
+    if (!commentBody || !user) return;
 
     try {
       setSubmittingComment(true);
       const comment = await addComment(issue.id, {
-        body: newCommentBody.trim(),
+        body: commentBody,
         authorUid: user.uid,
         authorEmail: user.email,
         authorName: user.displayName || user.email.split('@')[0],
@@ -117,6 +165,58 @@ export function IssueModal({
         ...issue,
         commentsCount: (issue.commentsCount || 0) + 1,
         updatedAt: new Date().toISOString(),
+      });
+
+      // 3. Comments & Mentions Notifications
+      const recipientsToNotify = new Set<string>();
+      if (issue.assigneeUid && issue.assigneeUid !== user.uid) {
+        recipientsToNotify.add(issue.assigneeUid);
+      }
+      if (issue.ownerUid && issue.ownerUid !== user.uid) {
+        recipientsToNotify.add(issue.ownerUid);
+      }
+
+      // Check for mentions: e.g. @email or @name
+      teamMembers.forEach((m) => {
+        const mUid = m.userId || m.email;
+        if (mUid && mUid !== user.uid && m.email !== user.email) {
+          if (
+            commentBody.includes(`@${m.email}`) ||
+            (m.name && commentBody.includes(`@${m.name}`))
+          ) {
+            recipientsToNotify.delete(mUid); // Don't send both mention & comment to same person
+            void createNotification({
+              recipientUid: mUid,
+              recipientEmail: m.email,
+              senderUid: user.uid,
+              senderName: user.displayName || user.email.split('@')[0],
+              type: 'mention',
+              title: lang === 'ar' ? 'تمت الإشارة إليك في تعليق' : 'You were mentioned in a comment',
+              body: lang === 'ar'
+                ? `أشار إليك ${user.displayName || user.email.split('@')[0]} في تعليق على "${issue.title}": "${commentBody.slice(0, 60)}..."`
+                : `${user.displayName || user.email.split('@')[0]} mentioned you in "${issue.title}": "${commentBody.slice(0, 60)}..."`,
+              link: '/dashboard',
+              entityId: issue.id,
+            });
+          }
+        }
+      });
+
+      recipientsToNotify.forEach((recipUid) => {
+        const member = teamMembers.find((m) => (m.userId || m.email) === recipUid);
+        void createNotification({
+          recipientUid: recipUid,
+          recipientEmail: member?.email || (issue.assigneeUid === recipUid ? (issue.assigneeEmail || undefined) : undefined),
+          senderUid: user.uid,
+          senderName: user.displayName || user.email.split('@')[0],
+          type: 'comment_added',
+          title: lang === 'ar' ? 'تعليق جديد على المهمة' : 'New comment on task',
+          body: lang === 'ar'
+            ? `علّق ${user.displayName || user.email.split('@')[0]} على "${issue.title}": "${commentBody.slice(0, 60)}..."`
+            : `${user.displayName || user.email.split('@')[0]} commented on "${issue.title}": "${commentBody.slice(0, 60)}..."`,
+          link: '/dashboard',
+          entityId: issue.id,
+        });
       });
     } catch (err) {
       console.error('Failed to add comment', err);
@@ -241,8 +341,8 @@ export function IssueModal({
             />
           </div>
 
-          {/* Status & Severity selectors */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 rounded-xl bg-muted/30 p-4 border border-border">
+          {/* Status, Severity, Assignee & Linked Report selectors */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 rounded-xl bg-muted/30 p-4 border border-border">
             <div>
               <FieldLabel className="text-[11px] font-bold uppercase text-muted-foreground mb-1">
                 {t('issueStatus')}
@@ -282,6 +382,43 @@ export function IssueModal({
                     {getSeverityLabel(sev, lang)}
                   </option>
                 ))}
+              </select>
+            </div>
+
+            <div>
+              <FieldLabel className="text-[11px] font-bold uppercase text-muted-foreground mb-1 flex items-center gap-1">
+                <UserCheck className="size-3 text-primary" />
+                <span>{lang === 'ar' ? 'المسؤول' : 'Assignee'}</span>
+              </FieldLabel>
+              <select
+                value={assigneeEmail}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setAssigneeEmail(val);
+                  if (!val) {
+                    handleFieldChange({ assigneeUid: null, assigneeEmail: null, assigneeName: null });
+                  } else {
+                    const member = teamMembers.find((m) => m.email === val);
+                    const name = member?.name || (user?.email === val ? user.displayName : undefined) || val.split('@')[0];
+                    const uid = member?.userId || (user?.email === val ? user.uid : undefined) || val;
+                    handleFieldChange({ assigneeUid: uid, assigneeEmail: val, assigneeName: name });
+                  }
+                }}
+                className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">{lang === 'ar' ? 'غير معيّنة' : 'Unassigned'}</option>
+                {user?.email && (
+                  <option value={user.email}>
+                    {user.displayName ? `${user.displayName} (أنا / Me)` : `${user.email} (أنا / Me)`}
+                  </option>
+                )}
+                {teamMembers
+                  .filter((m) => m.email !== user?.email)
+                  .map((m) => (
+                    <option key={m.id} value={m.email}>
+                      {m.name ? `${m.name} (${m.email})` : m.email}
+                    </option>
+                  ))}
               </select>
             </div>
 
@@ -328,6 +465,51 @@ export function IssueModal({
               </Link>
             </div>
           )}
+
+          {/* Pomodoro Focus Section */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-rose-500/20 bg-rose-500/5 dark:bg-rose-950/10">
+            <div className="flex items-center gap-3">
+              <div className="size-9 rounded-lg bg-rose-500/10 text-rose-600 flex items-center justify-center text-lg shadow-2xs">
+                🍅
+              </div>
+              <div>
+                <div className="text-xs font-bold text-foreground flex items-center gap-2">
+                  <span>{lang === 'ar' ? 'جلسات بومودورو للتركيز' : 'Pomodoro Focus'}</span>
+                  {activeTask?.id === issue.id && isRunning && (
+                    <Badge variant="destructive" className="text-[10px] py-0 px-1.5 animate-pulse">
+                      {lang === 'ar' ? 'جلسة جارية الآن' : 'Session Running'}
+                    </Badge>
+                  )}
+                </div>
+                <div className="text-[11px] text-muted-foreground mt-0.5">
+                  {issue.pomodoroSessions && issue.pomodoroSessions > 0 ? (
+                    lang === 'ar'
+                      ? `تم إنجاز ${issue.pomodoroSessions} جلسة (${issue.timeSpentMinutes || 0} دقيقة من التركيز)`
+                      : `Completed ${issue.pomodoroSessions} session(s) (${issue.timeSpentMinutes || 0} mins focused)`
+                  ) : (
+                    lang === 'ar' ? 'لم يتم تسجيل أي جلسة تركيز لهذه المهمة بعد' : 'No focus sessions recorded yet'
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              variant={activeTask?.id === issue.id && isRunning ? "outline" : "default"}
+              size="sm"
+              onClick={() => {
+                startTaskPomodoro(issue.id, title || issue.title);
+              }}
+              className="gap-1.5 text-xs font-bold"
+            >
+              <Timer className="size-3.5" />
+              <span>
+                {activeTask?.id === issue.id && isRunning
+                  ? (lang === 'ar' ? 'عرض المؤقت النشط' : 'View Active Timer')
+                  : (lang === 'ar' ? 'بدء بومودورو للمهمة' : 'Start Task Pomodoro')}
+              </span>
+            </Button>
+          </div>
 
           {issue.sourceSection && (
             <div className="flex items-center gap-2 rounded-lg bg-muted/50 border border-border/80 px-3 py-2 text-xs text-muted-foreground">

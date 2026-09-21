@@ -265,7 +265,6 @@ export async function GET() {
   return NextResponse.json(openApiSpec, {
     status: 200,
     headers: {
-      'Access-Control-Allow-Origin': '*',
       'Content-Type': 'application/json',
     },
   });

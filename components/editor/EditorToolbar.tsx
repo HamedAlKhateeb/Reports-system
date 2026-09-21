@@ -45,6 +45,8 @@ import {
   ArrowLeftRight,
   Maximize2,
   Network,
+  PenTool,
+  KanbanSquare,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -54,6 +56,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { TableEntity } from '@/lib/types';
 import { saveTable } from '@/lib/db';
 import { seedMindmap, newMindId } from '@/lib/mindmap';
+import { newDrawingId } from './ReportDrawingNode';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { resolveActiveFontSize } from './FontSizeMark';
@@ -295,6 +298,80 @@ export function EditorToolbar({
     };
   }, [editor]);
 
+  // Send the native (normal) table under the cursor to the tracking board.
+  // Native tables have no entity — a content snapshot is queued instead.
+  const handleSendNativeTableToTracking = () => {
+    if (!editor) return;
+    try {
+      const { state } = editor;
+      const $from: any = (state.selection as any)?.$from;
+      if (!$from) return;
+      let tableNode: any = null;
+      for (let d = $from.depth; d > 0; d--) {
+        try {
+          const n = $from.node(d);
+          if (n?.type?.name === 'table') {
+            tableNode = n;
+            break;
+          }
+        } catch {}
+      }
+      if (!tableNode) {
+        toast.error(lang === 'ar' ? 'ضع المؤشر داخل جدول عادي أولًا' : 'Place the cursor inside a normal table first');
+        return;
+      }
+      const grid: string[][] = [];
+      try {
+        tableNode.forEach((rowNode: any) => {
+          if (!rowNode || rowNode.type?.name !== 'tableRow') return;
+          const cells: string[] = [];
+          try {
+            rowNode.forEach((cellNode: any) => {
+              const t = String(cellNode?.type?.name || '');
+              if (t === 'tableCell' || t === 'tableHeader') {
+                try {
+                  cells.push(String(cellNode.textContent || '').trim());
+                } catch {
+                  cells.push('');
+                }
+              }
+            });
+          } catch {}
+          grid.push(cells.slice(0, 26));
+        });
+      } catch {}
+      const capped = grid.slice(0, 50);
+      if (!capped.length || !capped.some((r) => r.some((c) => c))) {
+        toast.error(lang === 'ar' ? 'الجدول فارغ — أدخل بيانات أولًا' : 'Table is empty — add data first');
+        return;
+      }
+      const tableId = `ntbl_${String(reportId || 'rep').slice(0, 12)}_${Date.now().toString(36)}`;
+      const time = new Date().toLocaleTimeString(lang === 'ar' ? 'ar-EG' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+      const entry = {
+        kind: 'native' as const,
+        tableId,
+        reportId,
+        name: `${lang === 'ar' ? 'جدول عادي' : 'Normal table'} ${time}`,
+        snapshot: { headers: capped[0], rows: capped.slice(1) },
+        at: new Date().toISOString(),
+      };
+      try {
+        const key = 'pending_tracking_tables';
+        const raw = window.localStorage.getItem(key);
+        const list = raw ? JSON.parse(raw) : [];
+        list.push(entry);
+        window.localStorage.setItem(key, JSON.stringify(list));
+      } catch {}
+      try {
+        window.dispatchEvent(new CustomEvent('tracking-table-queued', { detail: { tableId, reportId } }));
+      } catch {}
+      toast.success(lang === 'ar' ? 'تم إرسال الجدول العادي للوحة التتبع' : 'Normal table sent to tracking');
+    } catch (err) {
+      console.error('Send native table failed', err);
+      toast.error(lang === 'ar' ? 'فشل إرسال الجدول' : 'Failed to send table');
+    }
+  };
+
   const sendSmartCommand = (command: string, value?: string) => {
     const targetId = activeSmartTable?.id || selectedSmartId;
     if (!targetId) return;
@@ -499,16 +576,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().toggleBold().run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('toggle-bold');
+                return;
+              }
+              editor.chain().focus().toggleBold().run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('bold')
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(`${t('bold')} (Ctrl+B)`)}
+            title={`${t('bold')} (Ctrl+B)`}
           >
             <Bold className="h-4 w-4" />
           </Button>
@@ -517,16 +598,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().toggleItalic().run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('toggle-italic');
+                return;
+              }
+              editor.chain().focus().toggleItalic().run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive('italic')
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(`${t('italic')} (Ctrl+I)`)}
+            title={`${t('italic')} (Ctrl+I)`}
           >
             <Italic className="h-4 w-4" />
           </Button>
@@ -535,16 +620,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().toggleUnderline().run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('toggle-underline');
+                return;
+              }
+              editor.chain().focus().toggleUnderline().run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg underline underline-offset-2",
               editor.isActive('underline')
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'تسطير (Ctrl+U)' : 'Underline (Ctrl+U)')}
+            title={lang === 'ar' ? 'تسطير (Ctrl+U)' : 'Underline (Ctrl+U)'}
           >
             <span className="text-sm font-bold leading-none">U</span>
           </Button>
@@ -688,6 +777,11 @@ export function EditorToolbar({
                     key={c.hex}
                     type="button"
                     onClick={() => {
+                      if (useSmart) {
+                        sendSmartCommand('set-text-color', c.hex);
+                        setShowColorPicker(false);
+                        return;
+                      }
                       (editor.chain().focus() as any).setTextColor(c.hex).run();
                       setShowColorPicker(false);
                     }}
@@ -700,6 +794,11 @@ export function EditorToolbar({
               <button
                 type="button"
                 onClick={() => {
+                  if (useSmart) {
+                    sendSmartCommand('set-text-color', '');
+                    setShowColorPicker(false);
+                    return;
+                  }
                   (editor.chain().focus() as any).unsetTextColor().run();
                   setShowColorPicker(false);
                 }}
@@ -739,6 +838,11 @@ export function EditorToolbar({
                     key={c.hex}
                     type="button"
                     onClick={() => {
+                      if (useSmart) {
+                        sendSmartCommand('set-bg-color', c.hex);
+                        setShowHighlightPicker(false);
+                        return;
+                      }
                       (editor.chain().focus() as any).setTextHighlight(c.hex).run();
                       setShowHighlightPicker(false);
                     }}
@@ -751,6 +855,11 @@ export function EditorToolbar({
               <button
                 type="button"
                 onClick={() => {
+                  if (useSmart) {
+                    sendSmartCommand('set-bg-color', '');
+                    setShowHighlightPicker(false);
+                    return;
+                  }
                   (editor.chain().focus() as any).unsetTextHighlight().run();
                   setShowHighlightPicker(false);
                 }}
@@ -823,16 +932,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().setTextAlign('right').run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('set-align', 'right');
+                return;
+              }
+              editor.chain().focus().setTextAlign('right').run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'right' })
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة لليمين' : 'Align Right')}
+            title={lang === 'ar' ? 'محاذاة لليمين' : 'Align Right'}
           >
             <AlignRight className="h-4 w-4" />
           </Button>
@@ -841,16 +954,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().setTextAlign('center').run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('set-align', 'center');
+                return;
+              }
+              editor.chain().focus().setTextAlign('center').run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'center' })
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة للوسط' : 'Align Center')}
+            title={lang === 'ar' ? 'محاذاة للوسط' : 'Align Center'}
           >
             <AlignCenter className="h-4 w-4" />
           </Button>
@@ -859,16 +976,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().setTextAlign('left').run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('set-align', 'left');
+                return;
+              }
+              editor.chain().focus().setTextAlign('left').run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               editor.isActive({ textAlign: 'left' })
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'محاذاة لليسار' : 'Align Left')}
+            title={lang === 'ar' ? 'محاذاة لليسار' : 'Align Left'}
           >
             <AlignLeft className="h-4 w-4" />
           </Button>
@@ -900,16 +1021,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().setTextDirection('rtl').run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('set-direction', 'rtl');
+                return;
+              }
+              editor.chain().focus().setTextDirection('rtl').run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               isRtlActive
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'اتجاه النص: من اليمين لليسار (RTL)' : 'Text Direction: Right to Left (RTL)')}
+            title={lang === 'ar' ? 'اتجاه النص: من اليمين لليسار (RTL)' : 'Text Direction: Right to Left (RTL)'}
           >
             <PilcrowLeft className="h-4 w-4" />
           </Button>
@@ -918,16 +1043,20 @@ export function EditorToolbar({
             type="button"
             variant="ghost"
             size="icon"
-            onClick={() => editor.chain().focus().setTextDirection('ltr').run()}
-            disabled={useSmart}
+            onClick={() => {
+              if (useSmart) {
+                sendSmartCommand('set-direction', 'ltr');
+                return;
+              }
+              editor.chain().focus().setTextDirection('ltr').run();
+            }}
             className={cn(
               "h-8 w-8 rounded-lg",
               isLtrActive
                 ? "bg-primary/15 text-primary font-bold"
-                : "text-muted-foreground hover:text-foreground",
-              useSmart && "opacity-40"
+                : "text-muted-foreground hover:text-foreground"
             )}
-            title={smartDisabledTitle(lang === 'ar' ? 'اتجاه النص: من اليسار لليمين (LTR)' : 'Text Direction: Left to Right (LTR)')}
+            title={lang === 'ar' ? 'اتجاه النص: من اليسار لليمين (LTR)' : 'Text Direction: Left to Right (LTR)'}
           >
             <PilcrowRight className="h-4 w-4" />
           </Button>
@@ -1110,6 +1239,43 @@ export function EditorToolbar({
           </Button>
         </div>
 
+        {/* Drawing Button — Excalidraw-like shapes merged from visual boards */}
+        <div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => {
+              if (!editor) return;
+              try {
+                (editor.chain().focus() as any).setReportDrawing({
+                  drawingId: newDrawingId('drw'),
+                  title: lang === 'ar' ? 'لوحة رسم' : 'Drawing board',
+                  caption: '',
+                  elements: [],
+                  width: 100,
+                  alignment: 'center',
+                  background: 'white',
+                }).run();
+                toast.success(lang === 'ar' ? 'تم إدراج لوحة رسم' : 'Drawing board inserted');
+              } catch (err) {
+                console.error('Insert drawing failed:', err);
+                toast.error(lang === 'ar' ? 'فشل إدراج لوحة الرسم' : 'Failed to insert drawing');
+              }
+            }}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive('reportDrawing')
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted"
+            )}
+            title={lang === 'ar' ? 'إدراج لوحة رسم وأشكال (مثل Excalidraw)' : 'Insert drawing board & shapes (Excalidraw-like)'}
+            aria-label={lang === 'ar' ? 'لوحة رسم' : 'Drawing'}
+          >
+            <PenTool className="h-4 w-4" />
+          </Button>
+        </div>
+
         {/* LaTeX Button — ∑ math equation (toolbar + Markdown $...$ both supported) */}
         <div>
           <Popover open={showLatexPopover} onOpenChange={setShowLatexPopover}>
@@ -1237,45 +1403,55 @@ export function EditorToolbar({
             )}
           </div>
 
-          {/* Undo / Redo: Univer smart tables own their history + toolbar;
-              this bridge keeps native-table buttons only. */}
-          {!useSmart && isTableActive && (
-            <>
-              <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => editor.chain().focus().undo().run()}
-                  className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                  title={`${lang === 'ar' ? 'تراجع' : 'Undo'} (Ctrl+Z)`}
-                >
-                  <Undo2 className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => editor.chain().focus().redo().run()}
-                  className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                  title={`${lang === 'ar' ? 'إعادة' : 'Redo'} (Ctrl+Y)`}
-                >
-                  <Redo2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            </>
-          )}
-
-          {/* Row / Column / Merge Controls — native TipTap tables only.
-              Univer smart tables own these in their own toolbar. */}
-          {!useSmart && (
-          <>
+          {/* Undo / Redo */}
           <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().addRowBefore().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('undo');
+                } else {
+                  editor.chain().focus().undo().run();
+                }
+              }}
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
+              title={`${lang === 'ar' ? 'تراجع' : 'Undo'} (Ctrl+Z)`}
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('redo');
+                } else {
+                  editor.chain().focus().redo().run();
+                }
+              }}
+              className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
+              title={`${lang === 'ar' ? 'إعادة' : 'Redo'} (Ctrl+Y)`}
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+
+          {/* Row Controls */}
+          <div className="flex items-center gap-0.5 rounded-lg border border-border/70 bg-card p-0.5 shadow-2xs">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('insert-row');
+                } else {
+                  editor.chain().focus().addRowBefore().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowBefore')}
             >
@@ -1287,7 +1463,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().addRowAfter().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('add-row');
+                } else {
+                  editor.chain().focus().addRowAfter().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addRowAfter')}
             >
@@ -1299,7 +1481,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().deleteRow().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('del-row');
+                } else {
+                  editor.chain().focus().deleteRow().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteRow')}
             >
@@ -1314,7 +1502,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().addColumnBefore().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('insert-col');
+                } else {
+                  editor.chain().focus().addColumnBefore().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnBefore')}
             >
@@ -1326,7 +1520,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().addColumnAfter().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('add-col');
+                } else {
+                  editor.chain().focus().addColumnAfter().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('addColumnAfter')}
             >
@@ -1338,7 +1538,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().deleteColumn().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('del-col');
+                } else {
+                  editor.chain().focus().deleteColumn().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
               title={t('deleteColumn')}
             >
@@ -1353,7 +1559,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().mergeCells().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('merge');
+                } else {
+                  editor.chain().focus().mergeCells().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('mergeCells')}
             >
@@ -1364,7 +1576,13 @@ export function EditorToolbar({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => editor.chain().focus().splitCell().run()}
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('unmerge');
+                } else {
+                  editor.chain().focus().splitCell().run();
+                }
+              }}
               className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
               title={t('splitCell')}
             >
@@ -1372,8 +1590,6 @@ export function EditorToolbar({
               <span className="hidden lg:inline">{t('splitCell')}</span>
             </Button>
           </div>
-          </>
-          )}
 
           {/* Toggle Header Row / Column (normal TipTap tables only) */}
           {!useSmart && (
@@ -1410,31 +1626,42 @@ export function EditorToolbar({
             </span>
           )}
 
-          {/* Delete Whole Table — native tables only.
-              Smart-table management (direction / clear / delete) lives ONLY
-              in the table's own permanent header (SmartTableView) so the
-              actions never appear twice. While a smart table is active we
-              show a static hint instead of duplicate buttons. */}
-          <div className="ms-auto flex items-center gap-1.5">
-            {useSmart ? (
-              <span className="rounded-md border border-dashed border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30 px-2 py-1 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-                {lang === 'ar'
-                  ? 'إدارة الجدول الذكي (الاتجاه / مسح القيم / حذف) من شريط الجدول نفسه بالأعلى'
-                  : 'Manage the smart sheet (direction / clear / delete) from its own header above'}
-              </span>
-            ) : (
+          {/* Send normal table to tracking board */}
+          {isTableActive && !useSmart && (
+            <div className="flex items-center gap-1.5">
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
-                onClick={() => editor.chain().focus().deleteTable().run()}
-                className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
-                title={t('deleteTable')}
+                onClick={handleSendNativeTableToTracking}
+                className="h-7 px-2 text-[11px] gap-1 rounded-md border border-teal-200 dark:border-teal-900/40 bg-teal-50 dark:bg-teal-950/30 text-teal-700 dark:text-teal-300 hover:bg-teal-100 dark:hover:bg-teal-900/50 shadow-2xs"
+                title={lang === 'ar' ? 'إرسال نسخة من هذا الجدول العادي إلى لوحة التتبع' : 'Send a copy of this normal table to the tracking board'}
               >
-                <Trash2 className="h-3 w-3" />
-                <span>{t('deleteTable')}</span>
+                <KanbanSquare className="h-3 w-3" />
+                <span>{lang === 'ar' ? 'إرسال للتتبع' : 'Send to tracking'}</span>
               </Button>
-            )}
+            </div>
+          )}
+
+          {/* Delete Whole Table */}
+          <div className="ms-auto flex items-center gap-1.5">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (useSmart) {
+                  sendSmartCommand('delete-table');
+                } else {
+                  editor.chain().focus().deleteTable().run();
+                }
+              }}
+              className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
+              title={t('deleteTable')}
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>{t('deleteTable')}</span>
+            </Button>
           </div>
         </div>
       )}

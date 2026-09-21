@@ -31,6 +31,46 @@ export const DICTIONARY = {
     ar: 'لوحة المشاكل',
     en: 'Issues Dashboard',
   },
+  boards: {
+    ar: 'اللوحات المرئية',
+    en: 'Visual Boards',
+  },
+  newBoard: {
+    ar: 'لوحة جديدة',
+    en: 'New Board',
+  },
+  archivedBoards: {
+    ar: 'اللوحات المؤرشفة',
+    en: 'Archived Boards',
+  },
+  archiveBoard: {
+    ar: 'أرشفة اللوحة',
+    en: 'Archive Board',
+  },
+  restoreBoard: {
+    ar: 'استعادة اللوحة',
+    en: 'Restore Board',
+  },
+  deleteBoardPermanently: {
+    ar: 'حذف نهائي',
+    en: 'Delete Permanently',
+  },
+  addWidget: {
+    ar: 'إضافة عنصر',
+    en: 'Add Widget',
+  },
+  taskWidget: {
+    ar: 'مهمة',
+    en: 'Task',
+  },
+  noteWidget: {
+    ar: 'ملاحظة',
+    en: 'Note',
+  },
+  commentWidget: {
+    ar: 'تعليق',
+    en: 'Comment',
+  },
   settings: {
     ar: 'الإعدادات',
     en: 'Settings',

@@ -91,10 +91,12 @@ export function useInviteInbox(userUid?: string | null, userEmail?: string | nul
     const onInvite = () => void refresh();
     window.addEventListener('focus', onFocus);
     window.addEventListener('report-updated', onInvite);
+    window.addEventListener('notifications-updated', onInvite);
     const timer = window.setInterval(refresh, 60000);
     return () => {
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('report-updated', onInvite);
+      window.removeEventListener('notifications-updated', onInvite);
       window.clearInterval(timer);
     };
   }, [refresh]);
