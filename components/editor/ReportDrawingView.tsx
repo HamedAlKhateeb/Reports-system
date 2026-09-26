@@ -22,6 +22,8 @@ import {
  * - `commit()` pushes ONE history entry + persists to the TipTap node.
  * - Autosave persists only on commit (never mid-drag), via updateAttributes.
  */
+const BOX_TYPES: DrawingElement['type'][] = ['rectangle', 'ellipse', 'diamond', 'note'];
+
 export function ReportDrawingView(props: NodeViewProps) {
   const { node, updateAttributes } = props;
   const { drawingId, title = '', caption = '', width = 100, height = 380, alignment = 'center', background = 'white', direction = 'rtl' } = node.attrs;
@@ -604,11 +606,11 @@ export function ReportDrawingView(props: NodeViewProps) {
     setSelectedId(copy.id);
   }, [selectedId, commit]);
 
-  const deleteSelected = () => {
+  const deleteSelected = useCallback(() => {
     if (!selectedId) return;
     commit(elementsRef.current.filter((x) => x.id !== selectedId));
     setSelectedId(null);
-  };
+  }, [selectedId, commit]);
 
   // Keyboard Delete/Backspace removes the selected element, Ctrl+D clones it. Capture phase
   // on the canvas box so TipTap's Backspace-guard never sees it while the
@@ -650,18 +652,16 @@ export function ReportDrawingView(props: NodeViewProps) {
     return () => box.removeEventListener('keydown', onKey, true);
   }, [editingTextId, selectedId, commit, cloneSelected]);
 
-  const BOX_TYPES: DrawingElement['type'][] = ['rectangle', 'ellipse', 'diamond', 'note'];
-
   /**
    * Style controls do double duty: they set the defaults for NEW shapes,
    * and when a shape is selected they restyle it live (single history entry).
    */
-  const restyleSelected = (patch: Partial<DrawingElement>, applies: (el: DrawingElement) => boolean) => {
+  const restyleSelected = useCallback((patch: Partial<DrawingElement>, applies: (el: DrawingElement) => boolean) => {
     if (!selectedId) return;
     const el = elementsRef.current.find((x) => x.id === selectedId);
     if (!el || !applies(el)) return;
     commit(elementsRef.current.map((x) => (x.id === el.id ? { ...x, ...patch } : x)));
-  };
+  }, [selectedId, commit]);
 
   /** Reverse an arrow/line direction (swap endpoints). */
   const flipSelected = () => {
@@ -705,6 +705,133 @@ export function ReportDrawingView(props: NodeViewProps) {
     setZoom(1);
   };
 
+  const thisDrawingId = drawingId || node.attrs.drawingId || 'drw_active';
+
+  const broadcastActive = useCallback(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('report-drawing-active', {
+          detail: {
+            drawingId: thisDrawingId,
+            title: title || (isAr ? 'لوحة رسم' : 'Drawing'),
+            tool,
+            stroke,
+            fill,
+            strokeWidth,
+            strokeStyle,
+            fontSize,
+            fontFamily,
+            textColor,
+            selectedId,
+            hasSelected: !!selectedId,
+            selectedType: selectedElement?.type,
+            selectedText: selectedElement?.text,
+            canUndo: hIdxRef.current > 0,
+            canRedo: hIdxRef.current < historyRef.current.length - 1,
+            zoom,
+          },
+        })
+      );
+    } catch {}
+  }, [thisDrawingId, title, isAr, tool, stroke, fill, strokeWidth, strokeStyle, fontSize, fontFamily, textColor, selectedId, selectedElement, zoom]);
+
+  useEffect(() => {
+    broadcastActive();
+  }, [broadcastActive]);
+
+  useEffect(() => {
+    const onCommand = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail) return;
+      if (detail.drawingId && detail.drawingId !== thisDrawingId) return;
+
+      const { command } = detail;
+      if (command === 'set-tool') {
+        if (detail.tool) setTool(detail.tool);
+      } else if (command === 'set-stroke') {
+        if (detail.color) {
+          setStroke(detail.color);
+          restyleSelected({ strokeColor: detail.color }, () => true);
+        }
+      } else if (command === 'set-fill') {
+        if (detail.color) {
+          setFill(detail.color);
+          restyleSelected({ backgroundColor: detail.color }, (el) => BOX_TYPES.includes(el.type));
+        }
+      } else if (command === 'set-stroke-width') {
+        if (typeof detail.width === 'number') {
+          setStrokeWidth(detail.width);
+          restyleSelected({ strokeWidth: detail.width }, (el) => el.type !== 'text');
+        }
+      } else if (command === 'set-stroke-style') {
+        if (detail.style) {
+          setStrokeStyle(detail.style);
+          restyleSelected({ strokeStyle: detail.style }, (el) => el.type !== 'text');
+        }
+      } else if (command === 'set-font-size') {
+        if (typeof detail.fontSize === 'number') {
+          setFontSize(detail.fontSize);
+          restyleSelected({ fontSize: detail.fontSize }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
+        }
+      } else if (command === 'set-text-color') {
+        if (detail.color) {
+          setTextColor(detail.color);
+          restyleSelected({ textColor: detail.color }, () => true);
+        }
+      } else if (command === 'undo') {
+        undo();
+      } else if (command === 'redo') {
+        redo();
+      } else if (command === 'zoom-in') {
+        setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)));
+      } else if (command === 'zoom-out') {
+        setZoom((z) => Math.max(0.3, +(z - 0.1).toFixed(2)));
+      } else if (command === 'fit-view') {
+        fitView();
+      } else if (command === 'clone') {
+        cloneSelected();
+      } else if (command === 'delete-selected') {
+        deleteSelected();
+      } else if (command === 'edit-text') {
+        if (selectedId) {
+          const target = elementsRef.current.find((x) => x.id === selectedId);
+          if (target && ['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(target.type)) {
+            setEditingTextId(selectedId);
+            setTextDraft(target.text || '');
+          }
+        }
+      } else if (command === 'clear-text') {
+        if (selectedId) {
+          const target = elementsRef.current.find((x) => x.id === selectedId);
+          if (target) {
+            commit(
+              elementsRef.current.map((x) =>
+                x.id === selectedId ? { ...x, text: '' } : x
+              )
+            );
+            toast.success(isAr ? 'تم مسح النص' : 'Text cleared');
+          }
+        }
+      } else if (command === 'delete-drawing') {
+        props.deleteNode();
+      }
+    };
+
+    const onRequestState = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail || !detail.drawingId || detail.drawingId === thisDrawingId) {
+        broadcastActive();
+      }
+    };
+
+    window.addEventListener('report-drawing-command', onCommand);
+    window.addEventListener('report-drawing-request-state', onRequestState);
+    return () => {
+      window.removeEventListener('report-drawing-command', onCommand);
+      window.removeEventListener('report-drawing-request-state', onRequestState);
+    };
+  }, [thisDrawingId, broadcastActive, undo, redo, cloneSelected, deleteSelected, restyleSelected, selectedId, isAr, props, commit]);
+
   const frameW = `${Math.max(30, Math.min(100, Number(width) || 100))}%`;
   const alignCls = alignment === 'left' ? 'ms-0 me-auto' : alignment === 'right' ? 'ms-auto me-0' : 'mx-auto';
   const all = draft ? [...elements, draft] : elements;
@@ -724,8 +851,13 @@ export function ReportDrawingView(props: NodeViewProps) {
   ];
 
   return (
-    <NodeViewWrapper dir={isAr ? 'rtl' : 'ltr'} className="my-6 block not-prose w-full max-w-full">
-      <div style={{ width: frameW }} className={cn('group relative overflow-visible rounded-xl border border-border bg-card shadow-sm', alignCls)}>
+    <NodeViewWrapper dir={isAr ? 'rtl' : 'ltr'} className="my-6 block not-prose w-full max-w-full report-drawing-node-view" data-type="report-drawing" data-drawing-id={thisDrawingId}>
+      <div
+        style={{ width: frameW }}
+        className={cn('group relative overflow-visible rounded-xl border border-border bg-card shadow-sm', alignCls)}
+        onMouseDownCapture={broadcastActive}
+        onMouseEnter={broadcastActive}
+      >
         <div className="sticky top-14 sm:top-16 z-20 bg-card/95 backdrop-blur-md shadow-xs border-b border-border rounded-t-xl">
           <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-border bg-muted/40 px-2.5 py-1.5 text-xs">
             <div className="flex min-w-0 items-center gap-1.5">

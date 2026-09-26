@@ -1,4 +1,5 @@
 import { Mark, mergeAttributes } from '@tiptap/core';
+import { Plugin, PluginKey } from '@tiptap/pm/state';
 
 export interface FontSizeOptions {
   HTMLAttributes: Record<string, any>;
@@ -60,6 +61,19 @@ export function resolveActiveFontSize(editor: any): number {
     if (editor.isActive?.('heading', { level: 1 })) return 30;
     if (editor.isActive?.('heading', { level: 2 })) return 24;
     if (editor.isActive?.('heading', { level: 3 })) return 20;
+
+    // 5. Memory: when cursor is collapsed (about to type or in empty paragraph),
+    // read the user's chosen font size from memory so typing continues in that size.
+    try {
+      const { empty } = editor.state.selection;
+      if (empty) {
+        const remembered = (editor.storage as any)?.fontSize?.current;
+        if (remembered) {
+          const p = parseInt(String(remembered), 10);
+          if (!isNaN(p) && p > 0) return p;
+        }
+      }
+    } catch {}
   } catch {}
   return 16;
 }
@@ -137,5 +151,39 @@ export const FontSize = Mark.create<FontSizeOptions>({
           return chain().unsetMark(this.name).run();
         },
     };
+  },
+
+  addProseMirrorPlugins() {
+    const extension = this;
+    return [
+      new Plugin({
+        key: new PluginKey('fontSizeMemoryPlugin'),
+        props: {
+          handleTextInput(view, from, to, text) {
+            try {
+              const current = (extension.editor?.storage as any)?.fontSize?.current;
+              if (current && current !== DEFAULT_FONT_SIZE) {
+                const stored = view.state.storedMarks;
+                const hasStoredFs = Array.isArray(stored) && stored.some((m) => m?.type?.name === 'fontSize');
+                if (hasStoredFs) return false;
+
+                const $from = view.state.selection.$from;
+                const marks = $from ? $from.marks() : [];
+                const hasMarkFs = marks.some((m: any) => m?.type?.name === 'fontSize');
+                if (!hasMarkFs) {
+                  const markType = extension.type;
+                  const mark = markType.create({ size: current });
+                  const tr = view.state.tr.insertText(text, from, to);
+                  tr.addMark(from, from + text.length, mark);
+                  view.dispatch(tr);
+                  return true;
+                }
+              }
+            } catch {}
+            return false;
+          },
+        },
+      }),
+    ];
   },
 });

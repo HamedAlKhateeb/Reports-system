@@ -50,6 +50,18 @@ import {
   PenTool,
   KanbanSquare,
   ExternalLink,
+  MousePointer2,
+  Hand,
+  Square,
+  Diamond,
+  Circle,
+  MoveRight,
+  Pencil,
+  StickyNote,
+  Eraser,
+  ZoomIn,
+  ZoomOut,
+  CopyPlus,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -60,6 +72,8 @@ import { TableEntity } from '@/lib/types';
 import { saveTable } from '@/lib/db';
 import { seedMindmap, newMindId } from '@/lib/mindmap';
 import { newDrawingId } from './ReportDrawingNode';
+import type { DrawingTool } from '@/lib/drawing/types';
+import { DRAWING_STROKE_COLORS, DRAWING_FILL_COLORS } from '@/lib/drawing/types';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { resolveActiveFontSize } from './FontSizeMark';
@@ -307,9 +321,121 @@ export function EditorToolbar({
     };
   }, [editor]);
 
+  interface ActiveDrawingState {
+    drawingId: string;
+    title?: string;
+    tool: DrawingTool;
+    stroke: string;
+    fill: string;
+    strokeWidth: number;
+    strokeStyle: 'solid' | 'dashed' | 'dotted';
+    fontSize: number;
+    fontFamily?: string;
+    textColor?: string;
+    selectedId: string | null;
+    hasSelected: boolean;
+    selectedType?: string;
+    selectedText?: string;
+    canUndo: boolean;
+    canRedo: boolean;
+    zoom: number;
+  }
+
+  const [activeDrawing, setActiveDrawing] = useState<ActiveDrawingState | null>(null);
+
+  React.useEffect(() => {
+    const onDrawingActive = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail && detail.drawingId) {
+        setActiveDrawing((prev) => ({
+          ...(prev?.drawingId === detail.drawingId ? prev : {}),
+          ...detail,
+        }));
+      }
+    };
+
+    const onDocClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target || typeof target.closest !== 'function') return;
+      if (target.closest('.report-drawing-node-view, [data-type="report-drawing"]')) return;
+      if (target.closest('.editor-toolbar-root')) return;
+      if (target.closest('[data-radix-portal]')) return;
+      setActiveDrawing(null);
+    };
+
+    window.addEventListener('report-drawing-active', onDrawingActive);
+    document.addEventListener('click', onDocClick);
+    return () => {
+      window.removeEventListener('report-drawing-active', onDrawingActive);
+      document.removeEventListener('click', onDocClick);
+    };
+  }, []);
+
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   React.useEffect(() => {
     if (!editor) return;
-    const forceUpdate = () => setTick((t) => t + 1);
+    const syncDrawingSelection = () => {
+      try {
+        const sel: any = editor.state.selection;
+        const node = sel?.node;
+        if (node?.type?.name === 'reportDrawing' && node.attrs?.drawingId) {
+          const dId = String(node.attrs.drawingId);
+          setSelectedDrawingId(dId);
+          window.dispatchEvent(new CustomEvent('report-drawing-request-state', { detail: { drawingId: dId } }));
+          return;
+        }
+        setSelectedDrawingId(null);
+      } catch {
+        setSelectedDrawingId(null);
+      }
+    };
+    syncDrawingSelection();
+    editor.on('selectionUpdate', syncDrawingSelection);
+    return () => {
+      editor.off('selectionUpdate', syncDrawingSelection);
+    };
+  }, [editor]);
+
+  const sendDrawingCommand = (command: string, extra?: Record<string, any>) => {
+    const dId = activeDrawing?.drawingId || selectedDrawingId;
+    if (!dId) return;
+    window.dispatchEvent(
+      new CustomEvent('report-drawing-command', {
+        detail: {
+          drawingId: dId,
+          command,
+          ...extra,
+        },
+      })
+    );
+    if (command === 'set-tool' && extra?.tool) {
+      setActiveDrawing((prev) => (prev ? { ...prev, tool: extra.tool } : null));
+    } else if (command === 'set-stroke' && extra?.color) {
+      setActiveDrawing((prev) => (prev ? { ...prev, stroke: extra.color } : null));
+    } else if (command === 'set-fill' && extra?.color) {
+      setActiveDrawing((prev) => (prev ? { ...prev, fill: extra.color } : null));
+    } else if (command === 'set-stroke-width' && extra?.width) {
+      setActiveDrawing((prev) => (prev ? { ...prev, strokeWidth: extra.width } : null));
+    } else if (command === 'set-stroke-style' && extra?.style) {
+      setActiveDrawing((prev) => (prev ? { ...prev, strokeStyle: extra.style } : null));
+    } else if (command === 'set-font-size' && extra?.fontSize) {
+      setActiveDrawing((prev) => (prev ? { ...prev, fontSize: extra.fontSize } : null));
+    } else if (command === 'set-text-color' && extra?.color) {
+      setActiveDrawing((prev) => (prev ? { ...prev, textColor: extra.color } : null));
+    }
+  };
+
+  React.useEffect(() => {
+    if (!editor) return;
+    const forceUpdate = () => {
+      try {
+        const explicitSize = editor.getAttributes?.('fontSize')?.size;
+        if (explicitSize) {
+          ((editor as any).storage as any).fontSize.current = explicitSize;
+        }
+      } catch {}
+      setTick((t) => t + 1);
+    };
     editor.on('transaction', forceUpdate);
     editor.on('selectionUpdate', forceUpdate);
     return () => {
@@ -454,6 +580,22 @@ export function EditorToolbar({
   // selected (but sheet-unfocused) smart table via the selection mirror.
   const useSmart = (!!activeSmartTable || !!selectedSmartId) && !isTableActive;
   const effectiveSmartId = activeSmartTable?.id || selectedSmartId || null;
+  const isDrawingActive = (!!activeDrawing || !!selectedDrawingId || editor.isActive('reportDrawing')) && !isTableActive && !useSmart;
+
+  const drawingTools: Array<{ k: DrawingTool; icon: any; labelAr: string; labelEn: string }> = [
+    { k: 'select', icon: MousePointer2, labelAr: 'تحديد', labelEn: 'Select' },
+    { k: 'hand', icon: Hand, labelAr: 'تحريك', labelEn: 'Pan' },
+    { k: 'rectangle', icon: Square, labelAr: 'مستطيل', labelEn: 'Rect' },
+    { k: 'diamond', icon: Diamond, labelAr: 'معين', labelEn: 'Diamond' },
+    { k: 'ellipse', icon: Circle, labelAr: 'دائرة', labelEn: 'Ellipse' },
+    { k: 'arrow', icon: MoveRight, labelAr: 'سهم', labelEn: 'Arrow' },
+    { k: 'line', icon: Minus, labelAr: 'خط', labelEn: 'Line' },
+    { k: 'freedraw', icon: Pencil, labelAr: 'رسم حر', labelEn: 'Draw' },
+    { k: 'text', icon: TypeIcon, labelAr: 'نص', labelEn: 'Text' },
+    { k: 'note', icon: StickyNote, labelAr: 'ملاحظة', labelEn: 'Note' },
+    { k: 'eraser', icon: Eraser, labelAr: 'ممحاة', labelEn: 'Eraser' },
+  ];
+
   const isRtlActive = editor.isActive({ dir: 'rtl' }) || (!editor.isActive({ dir: 'ltr' }) && isRtl);
   const isLtrActive = editor.isActive({ dir: 'ltr' }) || (!editor.isActive({ dir: 'rtl' }) && !isRtl);
 
@@ -1822,6 +1964,279 @@ export function EditorToolbar({
             >
               <Trash2 className="h-3 w-3" />
               <span>{t('deleteTable')}</span>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Excalidraw / Drawing Canvas Sub-Toolbar: Sticky with the Editor Header */}
+      {isDrawingActive && activeDrawing && (
+        <div
+          className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 bg-emerald-500/10 dark:bg-emerald-950/30 border-t border-emerald-500/20 text-xs w-full max-w-full overflow-x-auto sm:overflow-visible transition-all animate-in fade-in slide-in-from-top-1"
+          dir={isRtl ? 'rtl' : 'ltr'}
+          onMouseDown={keepFocus}
+        >
+          {/* Drawing Title Badge */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 font-bold shrink-0">
+            <PenTool className="h-3.5 w-3.5" />
+            <span className="text-[11px] truncate max-w-[130px] sm:max-w-[200px]">
+              {activeDrawing.title || (isRtl ? 'لوحة الرسم' : 'Drawing Canvas')}
+            </span>
+          </div>
+
+          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+
+          {/* Tool Buttons */}
+          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+            {drawingTools.map((t) => {
+              const Icon = t.icon;
+              const isCurrent = activeDrawing.tool === t.k;
+              return (
+                <Button
+                  key={t.k}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => sendDrawingCommand('set-tool', { tool: t.k })}
+                  className={cn(
+                    'h-7 px-1.5 text-[11px] font-semibold gap-1 rounded-md transition-colors',
+                    isCurrent
+                      ? 'bg-[#2E4034] text-white shadow-2xs'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                  title={isRtl ? t.labelAr : t.labelEn}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span className="hidden xl:inline">{isRtl ? t.labelAr : t.labelEn}</span>
+                </Button>
+              );
+            })}
+          </div>
+
+          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+
+          {/* Undo / Redo & Zoom */}
+          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={!activeDrawing.canUndo}
+              onClick={() => sendDrawingCommand('undo')}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
+              title={isRtl ? 'تراجع' : 'Undo'}
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={!activeDrawing.canRedo}
+              onClick={() => sendDrawingCommand('redo')}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
+              title={isRtl ? 'إعادة' : 'Redo'}
+            >
+              <Redo2 className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => sendDrawingCommand('zoom-in')}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+              title={isRtl ? 'تكبير' : 'Zoom In'}
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => sendDrawingCommand('zoom-out')}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+              title={isRtl ? 'تصغير' : 'Zoom Out'}
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => sendDrawingCommand('fit-view')}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground"
+              title={isRtl ? 'ملاءمة العرض' : 'Fit View'}
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+
+          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+
+          {/* Stroke & Fill Colors & Geometry Properties */}
+          <div className="flex items-center gap-1.5 bg-card/80 rounded-lg px-2 py-1 border border-border/70 shadow-2xs">
+            {/* Stroke colors */}
+            <div className="flex items-center gap-1" title={isRtl ? 'لون الحد (يطبق على المحدد)' : 'Stroke color'}>
+              {DRAWING_STROKE_COLORS.slice(0, 5).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => sendDrawingCommand('set-stroke', { color: c })}
+                  style={{ backgroundColor: c }}
+                  className={cn(
+                    'h-4.5 w-4.5 rounded-full border border-border transition-transform hover:scale-110',
+                    activeDrawing.stroke === c && 'ring-2 ring-foreground ring-offset-1'
+                  )}
+                  aria-label={`stroke ${c}`}
+                />
+              ))}
+            </div>
+
+            <span className="h-3.5 w-px bg-border/60" />
+
+            {/* Fill colors */}
+            <div className="flex items-center gap-1" title={isRtl ? 'لون التعبئة (يطبق على المحدد)' : 'Fill color'}>
+              {DRAWING_FILL_COLORS.slice(0, 4).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => sendDrawingCommand('set-fill', { color: c })}
+                  style={{
+                    backgroundColor: c === 'transparent' ? 'repeating-conic-gradient(#ddd 0 25%, #fff 0 50%) 0 0 / 6px 6px' : c
+                  }}
+                  className={cn(
+                    'h-4.5 w-4.5 rounded-md border border-border transition-transform hover:scale-110',
+                    activeDrawing.fill === c && 'ring-2 ring-foreground ring-offset-1'
+                  )}
+                  aria-label={`fill ${c}`}
+                />
+              ))}
+            </div>
+
+            <span className="h-3.5 w-px bg-border/60" />
+
+            {/* Stroke Width */}
+            <select
+              value={activeDrawing.strokeWidth}
+              onChange={(e) => sendDrawingCommand('set-stroke-width', { width: Number(e.target.value) })}
+              className="h-6 rounded border border-border bg-card px-1 text-[11px] font-bold"
+              dir="ltr"
+              aria-label="stroke width"
+            >
+              <option value={1}>1px</option>
+              <option value={2}>2px</option>
+              <option value={4}>4px</option>
+              <option value={6}>6px</option>
+            </select>
+
+            {/* Stroke Style */}
+            <select
+              value={activeDrawing.strokeStyle}
+              onChange={(e) => sendDrawingCommand('set-stroke-style', { style: e.target.value })}
+              className="h-6 rounded border border-border bg-card px-1 text-[11px]"
+              aria-label="stroke style"
+            >
+              <option value="solid">{isRtl ? 'متصل' : 'Solid'}</option>
+              <option value="dashed">{isRtl ? 'متقطع' : 'Dashed'}</option>
+              <option value="dotted">{isRtl ? 'منقط' : 'Dotted'}</option>
+            </select>
+
+            {/* Font Size Stepper */}
+            <div className="flex items-center gap-0.5">
+              <button
+                type="button"
+                onClick={() => sendDrawingCommand('set-font-size', { fontSize: Math.max(8, activeDrawing.fontSize - 2) })}
+                className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
+                title={isRtl ? 'تصغير الخط' : 'Decrease font size'}
+              >
+                -
+              </button>
+              <span className="h-6 px-1.5 flex items-center justify-center text-[11px] font-mono font-bold bg-muted/40 rounded border border-border select-none">
+                {activeDrawing.fontSize}px
+              </span>
+              <button
+                type="button"
+                onClick={() => sendDrawingCommand('set-font-size', { fontSize: Math.min(96, activeDrawing.fontSize + 2) })}
+                className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
+                title={isRtl ? 'تكبير الخط' : 'Increase font size'}
+              >
+                +
+              </button>
+            </div>
+          </div>
+
+          {/* Selected Element Controls (Clone, Edit Text, Clear Text, Delete) */}
+          {activeDrawing.hasSelected && (
+            <>
+              <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+              <div className="flex items-center gap-1 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+                {/* Clone / Duplicate */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => sendDrawingCommand('clone')}
+                  className="h-7 px-2 text-[11px] font-semibold gap-1 rounded-md text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                  title={`${isRtl ? 'استنساخ العنصر' : 'Clone element'} (Ctrl+D)`}
+                >
+                  <CopyPlus className="h-3.5 w-3.5 text-emerald-600" />
+                  <span>{isRtl ? 'استنساخ' : 'Clone'}</span>
+                </Button>
+
+                {/* Edit Text */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => sendDrawingCommand('edit-text')}
+                  className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
+                  title={isRtl ? 'تعديل النص داخل الشكل' : 'Edit text inside shape'}
+                >
+                  <TypeIcon className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{isRtl ? 'تعديل النص' : 'Edit Text'}</span>
+                </Button>
+
+                {/* Clear Text Alone */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => sendDrawingCommand('clear-text')}
+                  className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                  title={isRtl ? 'مسح النص فقط مع إبقاء الشكل' : 'Clear text alone (keep shape)'}
+                >
+                  <Eraser className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">{isRtl ? 'مسح النص فقط' : 'Clear Text'}</span>
+                </Button>
+
+                {/* Delete Selected Element */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => sendDrawingCommand('delete-selected')}
+                  className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600"
+                  title={`${isRtl ? 'حذف العنصر' : 'Delete element'} (Delete)`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span className="hidden md:inline">{isRtl ? 'حذف العنصر' : 'Delete'}</span>
+                </Button>
+              </div>
+            </>
+          )}
+
+          {/* Delete Whole Drawing */}
+          <div className="ms-auto flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => sendDrawingCommand('delete-drawing')}
+              className="h-7 px-2 text-[11px] gap-1 rounded-md border border-red-200 dark:border-red-900/40 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 shadow-2xs"
+              title={isRtl ? 'حذف لوحة الرسم كاملة' : 'Delete whole drawing'}
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>{isRtl ? 'حذف الرسم' : 'Delete drawing'}</span>
             </Button>
           </div>
         </div>
