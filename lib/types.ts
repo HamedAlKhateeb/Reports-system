@@ -92,6 +92,7 @@ export interface ReportItem {
   signatureData?: string;     // Text representation, canvas data URL, or image URL
   themeColor?: string;        // 'olive' | 'blue' | 'slate' | 'emerald' | 'amber'
   backgroundColor?: string;   // 'white' | 'cream' | 'cool'
+  fontFamily?: string;        // Primary document font stack (e.g. 'Cairo', 'Amiri', 'Readex Pro')
   contactLinks?: ContactLinkItem[]; // Optional contact & social media links
   customFields?: CustomFieldItem[]; // Dynamic custom metadata cards (top section)
   customFooterFields?: CustomFieldItem[]; // Dynamic custom sections (bottom / signature section)

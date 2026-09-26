@@ -55,12 +55,14 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwind-merge": "^2.5.2",
+    "markdown-it": "^14.1.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@opennextjs/cloudflare": "^0.6.6",
     "@types/jsdom": "^30.0.0",
     "@types/jszip": "^3.4.1",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^20.16.5",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",

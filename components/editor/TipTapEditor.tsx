@@ -2,6 +2,8 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
+import { TextSelection } from '@tiptap/pm/state';
+import { DOMParser } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
@@ -19,7 +21,7 @@ import { ReportChart } from './ReportChartNode';
 import { ReportMindmap } from './ReportMindmapNode';
 import { ReportDrawing } from './ReportDrawingNode';
 import { LatexInline } from './LatexInlineNode';
-import { convertLatexDelimitersToNodes } from '@/lib/latex';
+import { convertLatexDelimitersToNodes, cleanLatex, isPureLatex } from '@/lib/latex';
 import { ChartBuilderPanel } from './ChartBuilderPanel';
 import { ImportModal } from './ImportModal';
 import type { ImportKind } from '@/lib/import/validation';
@@ -29,8 +31,11 @@ import { newChartId, normalizeChartType } from '@/lib/charts/types';
 import { schemaFromCreateParams } from '@/lib/charts/ai-tools';
 import { TextColor, TextHighlight } from './CustomColorMarks';
 import { FontSize, DEFAULT_FONT_SIZE, resolveActiveFontSize } from './FontSizeMark';
+import { ReportCodeBlock } from './CodeBlockNode';
+import { FontFamily } from './FontFamilyMark';
 import { EditorToolbar } from './EditorToolbar';
 import { EditorContextMenu } from './EditorContextMenu';
+import { findWordAtPosition } from '@/lib/spellcheck-engine';
 import { TableFillHandle } from './TableFillHandle';
 import { uploadReportImage } from '@/lib/db';
 import { imageStore } from '@/lib/images-store';
@@ -38,6 +43,7 @@ import type { ReportImage as IReportImage } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { AppLanguage } from '@/lib/i18n/dictionary';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
+import { DEFAULT_FONT_STACK } from '@/lib/fonts';
 import {
   getCustomShortcuts,
   normalizeKeyboardEvent,
@@ -47,11 +53,16 @@ import { Check, AlertCircle, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
+import { TableMap } from '@tiptap/pm/tables';
+import { isMarkdown, hasMarkdownTable, markdownToHtml, isRawPreHtml, parseClipboardToTableGrid } from '@/lib/markdown';
 
 function parseTextToTipTapContent(rawContent: string): any {
   if (!rawContent || typeof rawContent !== 'string') return rawContent;
   if (rawContent.trim().startsWith('<') && rawContent.trim().endsWith('>')) {
     return rawContent;
+  }
+  if (isMarkdown(rawContent)) {
+    return markdownToHtml(rawContent);
   }
   const lines = rawContent.split('\n');
   const contentNodes: any[] = [];
@@ -102,6 +113,7 @@ interface TipTapEditorProps {
   reportId: string;
   initialContent: any;
   reportLanguage: AppLanguage;
+  reportFontFamily?: string;
   onSave: (contentJson: any) => Promise<void>;
   onContentChange?: (contentJson: any) => void;
   onSaveImmediately?: () => Promise<void>;
@@ -114,6 +126,7 @@ export function TipTapEditor({
   reportId,
   initialContent,
   reportLanguage,
+  reportFontFamily,
   onSave,
   onContentChange,
   onSaveImmediately,
@@ -128,11 +141,39 @@ export function TipTapEditor({
   const [stats, setStats] = useState({ words: 0, chars: 0 });
   const [isSticky, setIsSticky] = useState(false);
   const sentinelRef = useRef<HTMLDivElement>(null);
-  const [contextMenu, setContextMenu] = useState<{ isOpen: boolean; x: number; y: number }>({
+  const [contextMenu, setContextMenu] = useState<{
+    isOpen: boolean;
+    x: number;
+    y: number;
+    targetWord?: string;
+    targetRange?: { from: number; to: number } | null;
+    contextSentence?: string;
+  }>({
     isOpen: false,
     x: 0,
     y: 0,
   });
+  // Right-click context menu mode: 'custom' (rich formatting tools by default) vs 'browser' (native browser spellcheck)
+  const [contextMenuMode, setContextMenuMode] = useState<'browser' | 'custom'>('custom');
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('editor_context_menu_mode');
+      if (saved === 'browser' || saved === 'custom') {
+        setContextMenuMode(saved);
+      }
+    } catch {}
+  }, []);
+
+  const toggleContextMenuMode = useCallback(() => {
+    setContextMenuMode((prev) => {
+      const next = prev === 'browser' ? 'custom' : 'browser';
+      try {
+        localStorage.setItem('editor_context_menu_mode', next);
+      } catch {}
+      return next;
+    });
+  }, []);
   // --- Mini Chart system state ---
   const [chartSelectMode, setChartSelectMode] = useState(false);
   const [chartSelectedSource, setChartSelectedSource] = useState<{ tableId: string; kind: 'smart' | 'native'; name: string } | null>(null);
@@ -387,6 +428,8 @@ export function TipTapEditor({
         heading: {
           levels: [1, 2, 3],
         },
+        // Custom node with language picker + copy button (see CodeBlockNode).
+        codeBlock: false,
       }),
       Table.configure({
         resizable: true,
@@ -403,6 +446,8 @@ export function TipTapEditor({
         autolink: true,
         defaultProtocol: 'https',
         HTMLAttributes: {
+          target: '_blank',
+          rel: 'noopener noreferrer',
           class: 'text-blue-600 underline hover:text-blue-800 transition-colors cursor-pointer',
         },
       }),
@@ -415,6 +460,8 @@ export function TipTapEditor({
       TextColor,
       TextHighlight,
       FontSize,
+      FontFamily,
+      ReportCodeBlock,
       Underline,
       TextAlign.configure({
         types: ['heading', 'paragraph'],
@@ -431,6 +478,32 @@ export function TipTapEditor({
       }
     })(),
     editorProps: {
+      handleDOMEvents: {
+        auxclick: (view, event) => {
+          if (event.button === 1) {
+            const target = event.target as HTMLElement | null;
+            const anchor = target?.closest('a');
+            if (anchor && anchor.href) {
+              const href = anchor.href;
+              if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
+                window.open(href, '_blank', 'noopener,noreferrer');
+                event.preventDefault();
+                return true;
+              }
+            }
+          }
+          return false;
+        },
+      },
+      clipboardTextSerializer: (slice) => {
+        return slice.content.textBetween(0, slice.content.size, '\n\n', (node) => {
+          if (node.type.name === 'latexInline') {
+            const l = node.attrs?.latex || '';
+            return l ? `$${l}$` : '';
+          }
+          return '';
+        });
+      },
       handlePaste: (view, event) => {
         const items = event.clipboardData?.items;
         if (!items) return false;
@@ -455,6 +528,126 @@ export function TipTapEditor({
           imageFiles.forEach((file, fileIdx) => handleImageFile(file, imageCountBefore + fileIdx));
           return true; // Handled
         }
+
+        // Markdown Paste Interception:
+        // When copying from AI assistants (ChatGPT, Claude, etc.), READMEs, or markdown files,
+        // convert Markdown tables, headings, lists, bold, and code blocks to real rich content.
+        const plainText = event.clipboardData?.getData('text/plain') || '';
+        const htmlText = event.clipboardData?.getData('text/html') || '';
+
+        // Pure LaTeX formula paste:
+        // When copying math formulas (e.g. \alpha \in \left(\frac{1}{2},1\right] or $...$) from ChatGPT / web,
+        // render immediately as an inline KaTeX formula instead of creating a code block.
+        if (plainText && isPureLatex(plainText.trim())) {
+          event.preventDefault();
+          const latex = cleanLatex(plainText.trim());
+          const ed = editorRef.current;
+          if (ed) {
+            ed.commands.setLatexInline({ latex });
+          } else {
+            const mathNode = view.state.schema.nodes.latexInline?.create({ latex });
+            if (mathNode) {
+              view.dispatch(view.state.tr.replaceSelectionWith(mathNode).scrollIntoView());
+            }
+          }
+          return true; // Handled
+        }
+
+        // Table Paste Interception when cursor is inside an existing TipTap table:
+        // Fills across cells/columns/rows and auto-expands the table rather than dumping into a single cell.
+        const isInsideTable = editorRef.current?.isActive('table');
+        const tableGrid = parseClipboardToTableGrid(plainText, htmlText);
+
+        if (isInsideTable && tableGrid && tableGrid.length > 0 && (tableGrid.length > 1 || tableGrid[0].length > 1)) {
+          const { state } = view;
+          let tableNode: any = null;
+          let tablePos = -1;
+          let cellPos = -1;
+          for (let d = state.selection.$from.depth; d > 0; d--) {
+            const node = state.selection.$from.node(d);
+            if (cellPos === -1 && (node.type.name === 'tableCell' || node.type.name === 'tableHeader')) {
+              cellPos = state.selection.$from.before(d);
+            }
+            if (node.type.name === 'table') {
+              tableNode = node;
+              tablePos = state.selection.$from.before(d);
+              break;
+            }
+          }
+
+          if (tableNode && tablePos !== -1 && cellPos !== -1) {
+            event.preventDefault();
+            const map = TableMap.get(tableNode);
+            const rect = map.findCell(cellPos - tablePos - 1);
+            const startRow = rect.top;
+            const startCol = rect.left;
+
+            const targetRowCount = Math.max(tableNode.childCount, startRow + tableGrid.length);
+            const maxIncomingCols = Math.max(...tableGrid.map((r: string[]) => r.length));
+            const existingColCount = tableNode.child(0)?.childCount || 1;
+            const targetColCount = Math.max(existingColCount, startCol + maxIncomingCols);
+
+            const newRows: any[] = [];
+            for (let r = 0; r < targetRowCount; r++) {
+              const isHeader = r === 0;
+              const origRow = r < tableNode.childCount ? tableNode.child(r) : null;
+              const newCells: any[] = [];
+              for (let c = 0; c < targetColCount; c++) {
+                const isPasted =
+                  r >= startRow &&
+                  r < startRow + tableGrid.length &&
+                  c >= startCol &&
+                  c < startCol + tableGrid[r - startRow].length;
+
+                let cellContent: any[] = [];
+                if (isPasted) {
+                  const textVal = tableGrid[r - startRow][c - startCol];
+                  cellContent = textVal
+                    ? [state.schema.nodes.paragraph.create(null, state.schema.text(textVal))]
+                    : [state.schema.nodes.paragraph.create()];
+                } else if (origRow && c < origRow.childCount) {
+                  const origCell = origRow.child(c);
+                  cellContent = origCell.content.toJSON();
+                } else {
+                  cellContent = [state.schema.nodes.paragraph.create()];
+                }
+
+                const cellType = isHeader
+                  ? state.schema.nodes.tableHeader
+                  : state.schema.nodes.tableCell;
+                newCells.push(cellType.create(null, cellContent));
+              }
+              newRows.push(state.schema.nodes.tableRow.create(null, newCells));
+            }
+
+            const updatedTable = state.schema.nodes.table.create(tableNode.attrs, newRows);
+            const tr = state.tr.replaceWith(tablePos, tablePos + tableNode.nodeSize, updatedTable);
+            view.dispatch(tr);
+            return true; // Handled
+          }
+        }
+
+        if (plainText && isMarkdown(plainText)) {
+          const textHasTable = hasMarkdownTable(plainText);
+          const htmlHasTable = /<table[\s>]/i.test(htmlText);
+          const shouldConvert = textHasTable ? !htmlHasTable : (!htmlText || isRawPreHtml(htmlText));
+
+          if (shouldConvert) {
+            event.preventDefault();
+            const renderedHtml = markdownToHtml(plainText);
+            const ed = editorRef.current;
+            if (ed) {
+              ed.commands.insertContent(renderedHtml);
+            } else {
+              const dom = document.createElement('div');
+              dom.innerHTML = renderedHtml;
+              const slice = DOMParser.fromSchema(view.state.schema).parseSlice(dom);
+              view.dispatch(view.state.tr.replaceSelection(slice).scrollIntoView());
+            }
+            return true; // Handled
+          }
+        }
+
         // Text/HTML paste: normalize to the remembered ("current") font size.
         // Pasted runs that carry no explicit size inherit it; runs with their
         // own size (e.g. Word headings) are preserved. Runs AFTER TipTap's
@@ -519,6 +712,27 @@ export function TipTapEditor({
         return false;
       },
       handleKeyDown: (view, event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
+          event.preventDefault();
+          const { state } = view;
+          const { from, to, empty } = state.selection;
+          if (!empty) {
+            const slice = state.selection.content();
+            const tr = state.tr.insert(to, slice.content);
+            view.dispatch(tr);
+          } else {
+            const $pos = state.selection.$from;
+            const depth = $pos.depth;
+            const node = depth > 0 ? $pos.node(1) : $pos.parent;
+            const pos = depth > 0 ? $pos.after(1) : $pos.end();
+            if (node) {
+              const tr = state.tr.insert(pos, node);
+              view.dispatch(tr);
+            }
+          }
+          return true;
+        }
+
         // GUARD: Backspace/Delete must never silently remove an image, mind-map,
         // or smart table. All are atom block nodes: pressing Backspace with one
         // selected would delete it instantly (then autosave persists the loss)
@@ -702,13 +916,70 @@ export function TipTapEditor({
 
         return false;
       },
+      handleClick: (view, _pos, event) => {
+        try {
+          const target = event.target as HTMLElement | null;
+          const anchor = target?.closest('a');
+          if (anchor && anchor.href) {
+            const href = anchor.href;
+            if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
+              window.open(href, '_blank', 'noopener,noreferrer');
+              return true;
+            }
+          }
+          if (target && target.closest('button, select, input, textarea, .codeblock-bar, .smart-table-node-view')) {
+            return false;
+          }
+          const { state } = view;
+          const { doc, schema } = state;
+          const lastChild = doc.lastChild;
+          if (!lastChild) return false;
+
+          const lastDomChild = view.dom.lastElementChild;
+          if (lastDomChild) {
+            const lastRect = lastDomChild.getBoundingClientRect();
+            // If user clicked below the bottom of the last element in the editor:
+            if (event.clientY > lastRect.bottom) {
+              const endPos = doc.content.size;
+              const isLastEmptyParagraph =
+                lastChild.type.name === 'paragraph' && lastChild.textContent.length === 0;
+              if (isLastEmptyParagraph) {
+                const tr = state.tr.setSelection(TextSelection.create(state.doc, endPos - 1));
+                view.dispatch(tr);
+                view.focus();
+                return true;
+              } else {
+                const tr = state.tr;
+                const p = schema.nodes.paragraph.create();
+                tr.insert(endPos, p);
+                tr.setSelection(TextSelection.create(tr.doc, endPos + 1));
+                view.dispatch(tr);
+                view.focus();
+                return true;
+              }
+            }
+          }
+        } catch {}
+        return false;
+      },
       attributes: {
         class: 'prose prose-slate max-w-none focus:outline-none p-3.5 sm:p-6 md:p-8 min-h-[500px] w-full',
+        spellcheck: 'true',
+        autocorrect: 'on',
+        autocapitalize: 'sentences',
+        dir: reportLanguage === 'ar' ? 'rtl' : 'ltr',
       },
     },
     onSelectionUpdate: ({ editor: ed }) => {
       const { from, to, empty } = ed.state.selection;
-      const selection = empty ? '' : ed.state.doc.textBetween(from, to, ' ');
+      const selection = empty
+        ? ''
+        : ed.state.doc.textBetween(
+            from,
+            to,
+            ' ',
+            (node) => (node.type.name === 'latexInline' ? `$${node.attrs?.latex || ''}$` : '')
+          );
       if (typeof window !== 'undefined') {
         window.dispatchEvent(
           new CustomEvent('editor-selection-changed', {
@@ -1466,6 +1737,38 @@ export function TipTapEditor({
       <div
         ref={editorContentWrapRef}
         dir={dir}
+        onClick={(e) => {
+          if (!editor) return;
+          const target = e.target as HTMLElement;
+          if (target.closest('button, select, input, textarea, a, .codeblock-bar, .smart-table-node-view, .report-drawing-wrapper')) {
+            return;
+          }
+          const { state, view } = editor;
+          const { doc, schema } = state;
+          const lastChild = doc.lastChild;
+          if (!lastChild) return;
+
+          const proseMirrorEl = view.dom;
+          const lastDomChild = proseMirrorEl.lastElementChild;
+          if (lastDomChild) {
+            const lastRect = lastDomChild.getBoundingClientRect();
+            if (e.clientY > lastRect.bottom) {
+              const endPos = doc.content.size;
+              const isLastEmptyParagraph =
+                lastChild.type.name === 'paragraph' && lastChild.textContent.length === 0;
+              if (isLastEmptyParagraph) {
+                editor.commands.focus('end');
+              } else {
+                const tr = state.tr;
+                const p = schema.nodes.paragraph.create();
+                tr.insert(endPos, p);
+                tr.setSelection(TextSelection.create(tr.doc, endPos + 1));
+                view.dispatch(tr.scrollIntoView());
+                editor.commands.focus();
+              }
+            }
+          }
+        }}
         onContextMenu={(e) => {
           // The smart sheet (Univer) owns its context menu: never stack
           // ours on top of it (was: two overlapping menus).
@@ -1473,14 +1776,81 @@ export function TipTapEditor({
             const t = e.target as HTMLElement | null;
             if (t && typeof t.closest === 'function' && t.closest('.smart-table-node-view')) return;
           } catch {}
+
+          // Check if custom context menu is requested:
+          // In 'browser' mode (default):
+          // Right-click defaults to browser native menu (spellcheck suggestions, dictionary, Google search).
+          // Holding Alt or Ctrl opens the rich custom context menu.
+          // In 'custom' mode:
+          // Right-click opens the custom menu; Shift or Alt opens native browser menu.
+          const wantsCustomMenu =
+            contextMenuMode === 'custom'
+              ? !e.shiftKey && !e.altKey
+              : Boolean(e.altKey || e.ctrlKey);
+
+          if (!wantsCustomMenu) {
+            // Let the native browser context menu handle right-click!
+            // This is essential so the browser's native spellcheck engine
+            // displays its native spelling correction suggestions, "Add to dictionary", etc.
+            return;
+          }
+
           e.preventDefault();
+
+          let targetWord = '';
+          let targetRange: { from: number; to: number } | null = null;
+          let contextSentence = '';
+
+          if (editor) {
+            const { from, to, empty } = editor.state.selection;
+            if (!empty) {
+              const selected = editor.state.doc
+                .textBetween(
+                  from,
+                  to,
+                  ' ',
+                  (node) => (node.type.name === 'latexInline' ? `$${node.attrs?.latex || ''}$` : '')
+                )
+                .trim();
+              if (selected) {
+                targetWord = selected;
+                targetRange = { from, to };
+              }
+            }
+
+            try {
+              const coords = editor.view.posAtCoords({ left: e.clientX, top: e.clientY });
+              if (coords && typeof coords.pos === 'number') {
+                if (!targetWord || coords.pos < from || coords.pos > to) {
+                  const resolved = findWordAtPosition(editor.state.doc, coords.pos);
+                  if (resolved) {
+                    targetWord = resolved.word;
+                    targetRange = { from: resolved.from, to: resolved.to };
+                    editor.chain().setTextSelection({ from: resolved.from, to: resolved.to }).run();
+                  }
+                }
+
+                const $pos = editor.state.doc.resolve(coords.pos);
+                if ($pos.parent && $pos.parent.textContent) {
+                  contextSentence = $pos.parent.textContent.slice(0, 200);
+                }
+              }
+            } catch (err) {
+              console.warn('Could not compute word at right-click coords', err);
+            }
+          }
+
           setContextMenu({
             isOpen: true,
             x: e.clientX,
             y: e.clientY,
+            targetWord,
+            targetRange,
+            contextSentence,
           });
         }}
         style={{
+          fontFamily: reportFontFamily || DEFAULT_FONT_STACK,
           '--editor-th-bg': themeConfig.thBg,
           '--editor-th-text': themeConfig.thText,
           '--editor-quote-border': themeConfig.quoteBorder,
@@ -1497,24 +1867,55 @@ export function TipTapEditor({
             : 'bg-[#FFFFFF] dark:bg-[#161615] text-[#1E293B] dark:text-[#F1F5F9]'
         )}
       >
-        <div className="w-full min-w-full relative">
-          <EditorContent editor={editor} />
+        <div className="w-full min-w-full relative" spellCheck={true}>
+          <EditorContent editor={editor} spellCheck={true} />
           <TableFillHandle editor={editor} />
         </div>
       </div>
 
-      {/* Live word/character counter — footer bar below the editor, never overlaps writing */}
+      {/* Live word/character counter & context menu mode toggle — footer bar below the editor */}
       <div
-        className="flex items-center justify-end gap-3 rounded-b-xl border-t border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground sm:px-4"
+        className="flex items-center justify-between gap-3 rounded-b-xl border-t border-border/60 bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground sm:px-4"
         aria-live="polite"
       >
-        <span className="font-semibold tabular-nums">
-          {reportLanguage === 'ar' ? `كلمات: ${stats.words}` : `Words: ${stats.words}`}
-        </span>
-        <span aria-hidden="true" className="opacity-40">•</span>
-        <span className="tabular-nums">
-          {reportLanguage === 'ar' ? `أحرف: ${stats.chars}` : `Characters: ${stats.chars}`}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleContextMenuMode}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-medium border border-border/70 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            title={
+              contextMenuMode === 'browser'
+                ? (reportLanguage === 'ar'
+                    ? 'النقر بالزر الأيمن يفتح تدقيق المتصفح والبحث مباشرة. انقر للتبديل، أو اضغط Alt + زر الفأرة لقائمة التنسيق'
+                    : 'Right-click opens native browser spellcheck & search. Click to toggle, or Alt+click for format menu')
+                : (reportLanguage === 'ar'
+                    ? 'النقر بالزر الأيمن يفتح قائمة التنسيق المخصصة. انقر للتبديل، أو اضغط Shift + زر الفأرة لتدقيق المتصفح'
+                    : 'Right-click opens custom format menu. Click to toggle, or Shift+click for native spellcheck')
+            }
+          >
+            {contextMenuMode === 'browser' ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{reportLanguage === 'ar' ? 'تدقيق المتصفح نشط' : 'Browser Spellcheck Active'}</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                <span>{reportLanguage === 'ar' ? 'قائمة التنسيق المخصصة' : 'Custom Format Menu'}</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="font-semibold tabular-nums">
+            {reportLanguage === 'ar' ? `كلمات: ${stats.words}` : `Words: ${stats.words}`}
+          </span>
+          <span aria-hidden="true" className="opacity-40">•</span>
+          <span className="tabular-nums">
+            {reportLanguage === 'ar' ? `أحرف: ${stats.chars}` : `Characters: ${stats.chars}`}
+          </span>
+        </div>
       </div>
 
       {/* Interactive Right-Click Context Menu */}
@@ -1525,6 +1926,9 @@ export function TipTapEditor({
         isOpen={contextMenu.isOpen}
         onClose={() => setContextMenu((prev) => ({ ...prev, isOpen: false }))}
         lang={reportLanguage}
+        targetWord={contextMenu.targetWord}
+        targetRange={contextMenu.targetRange}
+        contextSentence={contextMenu.contextSentence}
       />
 
       {/* Chart Builder side panel */}

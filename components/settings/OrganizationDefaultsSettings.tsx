@@ -1,20 +1,16 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { PageLoading } from '@/components/ui/loading';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import {
   Building2,
   ShieldCheck,
-  ExternalLink,
   Save,
-  Check,
   RotateCcw,
   Sparkles,
-  BookmarkCheck,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { useAuth } from '@/lib/auth-context';
@@ -29,6 +25,7 @@ export function OrganizationDefaultsSettings() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [defaults, setDefaults] = useState<OrganizationDefaultsItem>({
     id: 'default',
     organization: '',
@@ -39,12 +36,6 @@ export function OrganizationDefaultsSettings() {
     reviewerTitle: '',
     email: '',
     phone: '',
-    website: '',
-    projectUrl: '',
-    repoUrl: '',
-    ticketsUrl: '',
-    docsUrl: '',
-    logoUrl: '',
     autoApplyToNewReports: true,
     enabledFields: {},
     updatedAt: new Date().toISOString(),
@@ -56,7 +47,10 @@ export function OrganizationDefaultsSettings() {
         setLoading(true);
         const data = await getOrganizationDefaults(user?.uid);
         if (data) {
-          setDefaults(data);
+          setDefaults({
+            ...data,
+            autoApplyToNewReports: data.autoApplyToNewReports !== false,
+          });
         }
       } catch (err) {
         console.error('Failed to load organization defaults:', err);
@@ -67,8 +61,8 @@ export function OrganizationDefaultsSettings() {
     load();
   }, [user?.uid]);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     try {
       setSaving(true);
       await saveOrganizationDefaults(defaults, user?.uid);
@@ -82,6 +76,48 @@ export function OrganizationDefaultsSettings() {
       toast.error(isAr ? 'فشل حفظ الإعدادات' : 'Failed to save defaults');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleApplyToAllReports = async () => {
+    if (!user?.uid) return;
+    try {
+      setApplying(true);
+      // Save current state first
+      await saveOrganizationDefaults(defaults, user.uid);
+      const { getReports, updateReport } = await import('@/lib/db');
+      const reports = await getReports(user.uid);
+      if (!reports || reports.length === 0) {
+        toast.info(isAr ? 'لا توجد تقارير حالية لتحديثها' : 'No existing reports to update');
+        return;
+      }
+      let count = 0;
+      for (const r of reports) {
+        const patch: any = {};
+        if (defaults.organization) patch.organization = defaults.organization;
+        if (defaults.department) patch.department = defaults.department;
+        if (defaults.author) patch.author = defaults.author;
+        if (defaults.authorTitle) patch.authorTitle = defaults.authorTitle;
+        if (defaults.reviewerName) patch.reviewerName = defaults.reviewerName;
+        if (defaults.reviewerTitle) patch.reviewerTitle = defaults.reviewerTitle;
+        if (defaults.email) patch.email = defaults.email;
+        if (defaults.phone) patch.phone = defaults.phone;
+
+        if (Object.keys(patch).length > 0) {
+          await updateReport(r.id, patch);
+          count++;
+        }
+      }
+      toast.success(
+        isAr
+          ? `تم تحديث بيانات المؤسسة والاعتماد في ${count} تقرير بنجاح`
+          : `Successfully updated ${count} reports with organization defaults`
+      );
+    } catch (err) {
+      console.error('Failed to apply defaults to reports:', err);
+      toast.error(isAr ? 'فشل تطبيق البيانات على التقارير' : 'Failed to apply defaults');
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -104,27 +140,49 @@ export function OrganizationDefaultsSettings() {
           </h2>
           <p className="text-xs text-muted-foreground mt-1">
             {isAr
-              ? 'تحديد البيانات الافتراضية لاسم المؤسسة، الإدارة، المدققين، واعتماد التقارير لتطبيقها تلقائياً على التقارير الجديدة.'
+              ? 'تحديد البيانات الافتراضية للمؤسسة والمراجعين لتطبيقها تلقائياً على التقارير لتطابق الهيكل الحالي المعتمد.'
               : 'Configure default organization details, auditors, and approvers for automatic inheritance in reports.'}
           </p>
         </div>
 
-        <Button
-          type="submit"
-          disabled={saving}
-          className="bg-primary text-primary-foreground gap-1.5 text-xs font-semibold shadow-xs"
-        >
-          <Save className="h-3.5 w-3.5" />
-          <span>
-            {saving
-              ? isAr
-                ? 'جاري الحفظ...'
-                : 'Saving...'
-              : isAr
-              ? 'حفظ الإعدادات الافتراضية'
-              : 'Save Defaults'}
-          </span>
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={applying || saving}
+            onClick={handleApplyToAllReports}
+            className="gap-1.5 text-xs font-semibold shadow-2xs border-primary/40 text-primary hover:bg-primary/5"
+            title={isAr ? 'تطبيق هذه البيانات على جميع التقارير المحفوظة لديك الآن' : 'Apply these defaults to all your current reports'}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            <span>
+              {applying
+                ? isAr
+                  ? 'جاري التحديث...'
+                  : 'Updating...'
+                : isAr
+                ? 'تطبيق على التقارير الحالية الآن'
+                : 'Apply to All Reports'}
+            </span>
+          </Button>
+
+          <Button
+            type="submit"
+            disabled={saving || applying}
+            className="bg-primary text-primary-foreground gap-1.5 text-xs font-semibold shadow-xs"
+          >
+            <Save className="h-3.5 w-3.5" />
+            <span>
+              {saving
+                ? isAr
+                  ? 'جاري الحفظ...'
+                  : 'Saving...'
+                : isAr
+                ? 'حفظ الإعدادات الافتراضية'
+                : 'Save Defaults'}
+            </span>
+          </Button>
+        </div>
       </div>
 
       {/* 2. Automatic Inheritance Setting */}
@@ -146,7 +204,7 @@ export function OrganizationDefaultsSettings() {
             </span>
             <p className="text-[11px] text-muted-foreground leading-relaxed">
               {isAr
-                ? 'عند تفعيل هذا الخيار، سيتم ملء حقول المؤسسة والمدقق والمراجع في أي تقرير جديد دون الحاجة لإعادة كتابتها يدوياً.'
+                ? 'عند تفعيل هذا الخيار، سيتم ملء حقول المؤسسة والقسم والمدقق والمراجع في أي تقرير جديد دون الحاجة لإعادة كتابتها يدوياً.'
                 : 'When enabled, new reports will be pre-filled with these corporate and reviewer metadata fields.'}
             </p>
           </div>
@@ -162,7 +220,7 @@ export function OrganizationDefaultsSettings() {
           </h3>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
           <div className="space-y-1.5">
             <label className="font-semibold text-foreground">
               {isAr ? 'اسم المؤسسة / الشركة' : 'Organization / Company Name'}
@@ -191,19 +249,6 @@ export function OrganizationDefaultsSettings() {
 
           <div className="space-y-1.5">
             <label className="font-semibold text-foreground">
-              {isAr ? 'الموقع الإلكتروني الرسمي' : 'Official Website'}
-            </label>
-            <Input
-              type="url"
-              value={defaults.website || ''}
-              onChange={(e) => setDefaults({ ...defaults, website: e.target.value })}
-              placeholder="https://example.com"
-              className="h-9 text-xs"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="font-semibold text-foreground">
               {isAr ? 'البريد الإلكتروني الرسمي' : 'Official Email'}
             </label>
             <Input
@@ -224,19 +269,6 @@ export function OrganizationDefaultsSettings() {
               value={defaults.phone || ''}
               onChange={(e) => setDefaults({ ...defaults, phone: e.target.value })}
               placeholder="+966 50 000 0000"
-              className="h-9 text-xs"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="font-semibold text-foreground">
-              {isAr ? 'رابط الشعار (Logo URL)' : 'Logo URL'}
-            </label>
-            <Input
-              type="url"
-              value={defaults.logoUrl || ''}
-              onChange={(e) => setDefaults({ ...defaults, logoUrl: e.target.value })}
-              placeholder="https://example.com/logo.png"
               className="h-9 text-xs"
             />
           </div>
@@ -301,57 +333,6 @@ export function OrganizationDefaultsSettings() {
               value={defaults.reviewerTitle || ''}
               onChange={(e) => setDefaults({ ...defaults, reviewerTitle: e.target.value })}
               placeholder={isAr ? 'مثال: مدير قطاع التقنية والتحول الرقمي' : 'e.g. VP of Engineering'}
-              className="h-9 text-xs"
-            />
-          </div>
-        </div>
-      </Card>
-
-      {/* 5. Section 3: Workspace & Context Links */}
-      <Card className="p-5 sm:p-6 border-border bg-card shadow-2xs space-y-4">
-        <div className="flex items-center gap-2 border-b border-border pb-3">
-          <ExternalLink className="h-4 w-4 text-primary" />
-          <h3 className="text-sm font-bold text-foreground">
-            {isAr ? 'روابط وسياق العمل الافتراضية' : 'Default Context & Repository Links'}
-          </h3>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-xs">
-          <div className="space-y-1.5">
-            <label className="font-semibold text-foreground">
-              {isAr ? 'رابط المشروع' : 'Project URL'}
-            </label>
-            <Input
-              type="url"
-              value={defaults.projectUrl || ''}
-              onChange={(e) => setDefaults({ ...defaults, projectUrl: e.target.value })}
-              placeholder="https://..."
-              className="h-9 text-xs"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="font-semibold text-foreground">
-              {isAr ? 'مستودع الكود (Repository)' : 'Repository URL'}
-            </label>
-            <Input
-              type="url"
-              value={defaults.repoUrl || ''}
-              onChange={(e) => setDefaults({ ...defaults, repoUrl: e.target.value })}
-              placeholder="https://github.com/org/repo"
-              className="h-9 text-xs"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="font-semibold text-foreground">
-              {isAr ? 'نظام التذاكر / المشاكل' : 'Issue Tracker URL'}
-            </label>
-            <Input
-              type="url"
-              value={defaults.ticketsUrl || ''}
-              onChange={(e) => setDefaults({ ...defaults, ticketsUrl: e.target.value })}
-              placeholder="https://jira.org.com/..."
               className="h-9 text-xs"
             />
           </div>

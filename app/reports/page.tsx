@@ -364,6 +364,17 @@ export default function ReportsPage() {
       setCreating(true);
       const targetFolderId = selectedFolderId && selectedFolderId !== 'all' ? selectedFolderId : undefined;
 
+      let orgDefaults: any = null;
+      try {
+        const { getOrganizationDefaults } = await import('@/lib/db-intelligence');
+        orgDefaults = await getOrganizationDefaults(user.uid);
+      } catch {}
+
+      const defaultAuthor =
+        (orgDefaults && orgDefaults.autoApplyToNewReports !== false && orgDefsAuthor(orgDefaults)) ||
+        user.displayName ||
+        user.email.split('@')[0];
+
       // If user selected a custom template
       if (templateTab === 'custom' && selectedCustomTemplateId) {
         const customTpl = customTemplates.find((ct) => ct.id === selectedCustomTemplateId);
@@ -371,7 +382,12 @@ export default function ReportsPage() {
           const created = await createReport({
             title: customTpl.name,
             language: newReportLang || customTpl.language,
-            author: user.displayName || user.email.split('@')[0],
+            author: defaultAuthor,
+            organization: orgDefaults?.organization || undefined,
+            department: orgDefaults?.department || undefined,
+            authorTitle: orgDefaults?.authorTitle || undefined,
+            reviewerName: orgDefaults?.reviewerName || undefined,
+            reviewerTitle: orgDefaults?.reviewerTitle || undefined,
             systemUnderReview: isAr ? 'النظام والمشروع العام' : 'Core System & Project',
             contentJson: customTpl.contentJson,
             themeColor: customTpl.themeColor || 'olive',
@@ -429,7 +445,12 @@ export default function ReportsPage() {
       const created = await createReport({
         title: defaultTitle,
         language: newReportLang,
-        author: user.displayName || user.email.split('@')[0],
+        author: defaultAuthor,
+        organization: orgDefaults?.organization || undefined,
+        department: orgDefaults?.department || undefined,
+        authorTitle: orgDefaults?.authorTitle || undefined,
+        reviewerName: orgDefaults?.reviewerName || undefined,
+        reviewerTitle: orgDefaults?.reviewerTitle || undefined,
         systemUnderReview: isAr ? 'النظام والمشروع العام' : 'Core System & Project',
         contentJson: initialContent,
         ownerUid: user.uid,
@@ -453,6 +474,8 @@ export default function ReportsPage() {
     }
   };
 
+  const orgDefsAuthor = (defs: any) => defs?.author?.trim() || '';
+
   const handleCreateReportInFolder = async (folderId: string) => {
     if (!user) return;
     try {
@@ -460,10 +483,26 @@ export default function ReportsPage() {
       const defaultTitle = isAr ? 'تقرير جديد' : 'New Report';
       const initialContent = getTemplateContent('problem_report', defaultReportLang);
 
+      let orgDefaults: any = null;
+      try {
+        const { getOrganizationDefaults } = await import('@/lib/db-intelligence');
+        orgDefaults = await getOrganizationDefaults(user.uid);
+      } catch {}
+
+      const defaultAuthor =
+        (orgDefaults && orgDefaults.autoApplyToNewReports !== false && orgDefsAuthor(orgDefaults)) ||
+        user.displayName ||
+        user.email.split('@')[0];
+
       const created = await createReport({
         title: defaultTitle,
         language: defaultReportLang,
-        author: user.displayName || user.email.split('@')[0],
+        author: defaultAuthor,
+        organization: orgDefaults?.organization || undefined,
+        department: orgDefaults?.department || undefined,
+        authorTitle: orgDefaults?.authorTitle || undefined,
+        reviewerName: orgDefaults?.reviewerName || undefined,
+        reviewerTitle: orgDefaults?.reviewerTitle || undefined,
         systemUnderReview: isAr ? 'النظام والمشروع العام' : 'Core System & Project',
         contentJson: initialContent,
         ownerUid: user.uid,

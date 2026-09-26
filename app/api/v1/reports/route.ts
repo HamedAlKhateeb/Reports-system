@@ -3,6 +3,7 @@ import { authenticateApiRequest } from '@/lib/api-auth';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getReports, createReport, getOrCreateAiReportsFolder } from '@/lib/db';
 import { ReportItem } from '@/lib/types';
+import { markdownToTipTapJson } from '@/lib/markdown';
 
 /**
  * Converts markdown string or plain text to a valid TipTap JSON doc structure
@@ -15,69 +16,7 @@ function parseContentToTipTapJson(input: any): any {
     return { type: 'doc', content: [{ type: 'paragraph', content: [] }] };
   }
 
-  const lines = input.split(/\r?\n/);
-  const contentNodes: any[] = [];
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    if (line.startsWith('### ')) {
-      contentNodes.push({
-        type: 'heading',
-        attrs: { level: 3 },
-        content: [{ type: 'text', text: line.substring(4) }],
-      });
-    } else if (line.startsWith('## ')) {
-      contentNodes.push({
-        type: 'heading',
-        attrs: { level: 2 },
-        content: [{ type: 'text', text: line.substring(3) }],
-      });
-    } else if (line.startsWith('# ')) {
-      contentNodes.push({
-        type: 'heading',
-        attrs: { level: 1 },
-        content: [{ type: 'text', text: line.substring(2) }],
-      });
-    } else if (line.startsWith('- ') || line.startsWith('* ')) {
-      contentNodes.push({
-        type: 'bulletList',
-        content: [
-          {
-            type: 'listItem',
-            content: [
-              {
-                type: 'paragraph',
-                content: [{ type: 'text', text: line.substring(2) }],
-              },
-            ],
-          },
-        ],
-      });
-    } else if (line.startsWith('> ')) {
-      contentNodes.push({
-        type: 'blockquote',
-        content: [
-          {
-            type: 'paragraph',
-            content: [{ type: 'text', text: line.substring(2) }],
-          },
-        ],
-      });
-    } else {
-      contentNodes.push({
-        type: 'paragraph',
-        content: [{ type: 'text', text: line }],
-      });
-    }
-  }
-
-  if (contentNodes.length === 0) {
-    contentNodes.push({ type: 'paragraph', content: [] });
-  }
-
-  return { type: 'doc', content: contentNodes };
+  return markdownToTipTapJson(input);
 }
 
 export async function GET(req: NextRequest) {

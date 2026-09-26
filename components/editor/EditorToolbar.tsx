@@ -35,10 +35,12 @@ import {
   AlignCenter,
   AlignRight,
   AlignJustify,
+  Code,
   PilcrowLeft,
   PilcrowRight,
   Sigma,
   Sheet,
+  Type as TypeIcon,
   Undo2,
   Redo2,
   ArrowRightLeft,
@@ -47,6 +49,7 @@ import {
   Network,
   PenTool,
   KanbanSquare,
+  ExternalLink,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -60,6 +63,8 @@ import { newDrawingId } from './ReportDrawingNode';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { resolveActiveFontSize } from './FontSizeMark';
+import { resolveActiveFontFamily } from './FontFamilyMark';
+import { EDITOR_FONTS, matchEditorFont, sanitizeFontStack } from './editor-fonts';
 
 const TEXT_COLORS = [
   { name: 'Red', hex: '#dc2626', labelAr: 'أحمر داكن', labelEn: 'Dark Red' },
@@ -94,7 +99,9 @@ export function EditorToolbar({
   onImageUpload,
   uploadingImage,
 }: EditorToolbarProps) {
-  const { t, isRtl, lang } = useLanguage();
+  const { t, isRtl: contextIsRtl, lang: contextLang } = useLanguage();
+  const lang = reportLanguage || contextLang;
+  const isRtl = lang === 'ar';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showHighlightPicker, setShowHighlightPicker] = useState(false);
@@ -102,6 +109,8 @@ export function EditorToolbar({
   const [linkUrlInput, setLinkUrlInput] = useState('');
   const [showLatexPopover, setShowLatexPopover] = useState(false);
   const [latexInput, setLatexInput] = useState('');
+  const [showFontPicker, setShowFontPicker] = useState(false);
+  const [, setTick] = useState(0);
 
   const handleInsertLatex = () => {
     const latex = latexInput.trim();
@@ -298,6 +307,17 @@ export function EditorToolbar({
     };
   }, [editor]);
 
+  React.useEffect(() => {
+    if (!editor) return;
+    const forceUpdate = () => setTick((t) => t + 1);
+    editor.on('transaction', forceUpdate);
+    editor.on('selectionUpdate', forceUpdate);
+    return () => {
+      editor.off('transaction', forceUpdate);
+      editor.off('selectionUpdate', forceUpdate);
+    };
+  }, [editor]);
+
   // Send the native (normal) table under the cursor to the tracking board.
   // Native tables have no entity — a content snapshot is queued instead.
   const handleSendNativeTableToTracking = () => {
@@ -442,13 +462,21 @@ export function EditorToolbar({
 
   const currentFontSize = getActiveFontSize();
 
+  // Active font family (shared resolver: mark → stored mark → memory → '').
+  const activeFontFamily = resolveActiveFontFamily(editor);
+  const activeFont = matchEditorFont(activeFontFamily);
+
   const handleDecreaseFontSize = () => {
-    const newSize = Math.max(10, currentFontSize - 2);
+    if (!editor) return;
+    const cur = resolveActiveFontSize(editor);
+    const newSize = Math.max(8, cur - 2);
     editor.chain().focus().setFontSize(`${newSize}px`).run();
   };
 
   const handleIncreaseFontSize = () => {
-    const newSize = Math.min(72, currentFontSize + 2);
+    if (!editor) return;
+    const cur = resolveActiveFontSize(editor);
+    const newSize = Math.min(96, cur + 2);
     editor.chain().focus().setFontSize(`${newSize}px`).run();
   };
 
@@ -464,10 +492,11 @@ export function EditorToolbar({
   };
 
   return (
-    <div className="editor-toolbar-root flex flex-col bg-card/60 backdrop-blur-sm w-full max-w-full">
+    <div className="editor-toolbar-root flex flex-col bg-card/60 backdrop-blur-sm w-full max-w-full" dir={isRtl ? 'rtl' : 'ltr'}>
       {/* Primary Toolbar - Smooth horizontal scroll on mobile, wrap on desktop */}
       <div
         className="toolbar-container flex flex-nowrap sm:flex-wrap items-center gap-1 p-1.5 sm:p-2 text-foreground w-full max-w-full overflow-x-auto sm:overflow-visible scroll-smooth relative z-30"
+        dir={isRtl ? 'rtl' : 'ltr'}
         onMouseDown={keepFocus}
       >
         {/* Hidden file input */}
@@ -549,12 +578,23 @@ export function EditorToolbar({
             <Minus className="h-3.5 w-3.5" />
           </Button>
 
-          <span
-            className="px-2 text-xs font-semibold text-foreground min-w-[42px] text-center select-none font-mono"
-            title={lang === 'ar' ? 'حجم الخط الحالي' : 'Current font size'}
-          >
-            {currentFontSize}px
-          </span>
+          <div className="flex items-center px-1">
+            <input
+              type="number"
+              min={8}
+              max={96}
+              value={currentFontSize}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val >= 8 && val <= 96 && editor) {
+                  editor.chain().focus().setFontSize(`${val}px`).run();
+                }
+              }}
+              className="w-8 h-6 text-xs font-semibold text-foreground text-center bg-transparent border-0 outline-none font-mono focus:ring-1 focus:ring-primary rounded hover:bg-muted/50 p-0 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              title={lang === 'ar' ? 'حجم الخط الحالي (يمكن كتابة الرقم مباشرة)' : 'Current font size (type number directly)'}
+            />
+            <span className="text-[10px] text-muted-foreground select-none font-mono">px</span>
+          </div>
 
           <Button
             type="button"
@@ -567,6 +607,87 @@ export function EditorToolbar({
             <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
+
+        {/* Font Family Picker */}
+        <Popover open={showFontPicker} onOpenChange={setShowFontPicker}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={useSmart}
+              className={cn(
+                "h-8 gap-1 rounded-lg px-2 text-xs font-semibold",
+                activeFont
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+                useSmart && "opacity-40"
+              )}
+              style={activeFont ? { fontFamily: activeFont.stack } : undefined}
+              title={smartDisabledTitle(lang === 'ar' ? 'نوع الخط' : 'Font family')}
+            >
+              <TypeIcon className="h-4 w-4 shrink-0" />
+              <span className="max-w-[76px] truncate">
+                {activeFont
+                  ? (lang === 'ar' ? activeFont.labelAr : activeFont.labelEn)
+                  : (lang === 'ar' ? 'الخط' : 'Font')}
+              </span>
+              <ChevronDown className="h-2.5 w-2.5 opacity-60 shrink-0" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            side="top"
+            align="center"
+            sideOffset={8}
+            dir={isRtl ? 'rtl' : 'ltr'}
+            className="z-50 w-56 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-1.5 shadow-xl"
+          >
+            <div className="px-2 pb-1 pt-1 text-[11px] font-semibold text-muted-foreground">
+              {lang === 'ar' ? 'نوع الخط:' : 'Font family:'}
+            </div>
+            <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  (editor.chain().focus() as any).unsetFontFamily().run();
+                  setShowFontPicker(false);
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start text-sm transition-colors hover:bg-muted",
+                  !activeFont ? "bg-primary/10 font-bold text-primary" : "text-foreground"
+                )}
+              >
+                <span>{lang === 'ar' ? 'افتراضي (خط الموقع)' : 'Default (site font)'}</span>
+                {!activeFont && <span className="text-xs">✓</span>}
+              </button>
+              {EDITOR_FONTS.map((f) => {
+                const isActive = activeFont?.id === f.id;
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => {
+                      const stack = sanitizeFontStack(f.stack) || f.stack;
+                      (editor.chain().focus() as any).setFontFamily(stack).run();
+                      setShowFontPicker(false);
+                    }}
+                    className={cn(
+                      "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-start transition-colors hover:bg-muted",
+                      isActive ? "bg-primary/10 text-primary" : "text-foreground"
+                    )}
+                    style={{ fontFamily: f.stack }}
+                    title={lang === 'ar' ? f.labelEn : f.labelAr}
+                  >
+                    <span className="text-base leading-6">
+                      {lang === 'ar' ? f.labelAr : f.labelEn}
+                    </span>
+                    {isActive && <span className="text-xs font-bold">✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </PopoverContent>
+        </Popover>
 
         <Separator orientation="vertical" className="h-4 mx-1 bg-border/80" />
 
@@ -664,7 +785,8 @@ export function EditorToolbar({
               side="top"
               align="center"
               sideOffset={8}
-              className="z-50 w-64 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl"
+              dir={isRtl ? 'rtl' : 'ltr'}
+              className="z-50 w-72 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl"
             >
               <div className="text-[11px] font-semibold text-foreground mb-1.5">
                 {lang === 'ar' ? 'إدراج أو تعديل الرابط:' : 'Insert or Edit Link:'}
@@ -694,19 +816,38 @@ export function EditorToolbar({
               />
               <div className="flex items-center justify-between gap-1.5">
                 {editor.isActive('link') ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      editor.chain().focus().unsetLink().run();
-                      setShowLinkPopover(false);
-                    }}
-                    className="h-7 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
-                  >
-                    <Unlink className="h-3 w-3 me-1" />
-                    <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        const currentHref = editor.getAttributes('link').href;
+                        if (currentHref) {
+                          window.open(currentHref, '_blank', 'noopener,noreferrer');
+                        }
+                      }}
+                      className="h-7 px-2 text-[11px] text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-md gap-1"
+                      title={lang === 'ar' ? 'فتح الرابط في علامة تبويب جديدة' : 'Open link in new tab'}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      <span>{lang === 'ar' ? 'فتح' : 'Open'}</span>
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        editor.chain().focus().unsetLink().run();
+                        setShowLinkPopover(false);
+                      }}
+                      className="h-7 px-2 text-[11px] text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md"
+                      title={lang === 'ar' ? 'إزالة الرابط' : 'Remove link'}
+                    >
+                      <Unlink className="h-3 w-3 me-1" />
+                      <span>{lang === 'ar' ? 'إزالة' : 'Unlink'}</span>
+                    </Button>
+                  </div>
                 ) : <div />}
 
                 <div className="flex items-center gap-1">
@@ -766,6 +907,7 @@ export function EditorToolbar({
               side="top"
               align="center"
               sideOffset={8}
+              dir={isRtl ? 'rtl' : 'ltr'}
               className="z-50 w-auto p-2.5 bg-card border border-border shadow-xl rounded-xl"
             >
               <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1.5">
@@ -827,6 +969,7 @@ export function EditorToolbar({
               side="top"
               align="center"
               sideOffset={8}
+              dir={isRtl ? 'rtl' : 'ltr'}
               className="z-50 w-auto p-2.5 bg-card border border-border shadow-xl rounded-xl"
             >
               <div className="text-[11px] font-semibold text-muted-foreground px-1 mb-1.5">
@@ -921,6 +1064,22 @@ export function EditorToolbar({
             title={`${t('blockquote')} (Ctrl+Shift+Q)`}
           >
             <Quote className="h-4 w-4" />
+          </Button>
+
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => editor.chain().focus().toggleCodeBlock().run()}
+            className={cn(
+              "h-8 w-8 rounded-lg",
+              editor.isActive('codeBlock')
+                ? "bg-primary/15 text-primary font-bold"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+            title={lang === 'ar' ? 'كتلة كود (اكتب ``` ثم مسافة)' : 'Code block (type ``` then space)'}
+          >
+            <Code className="h-4 w-4" />
           </Button>
         </div>
 
@@ -1141,6 +1300,7 @@ export function EditorToolbar({
               side="top"
               align="center"
               sideOffset={8}
+              dir={isRtl ? 'rtl' : 'ltr'}
               className="z-50 w-60 rounded-xl border border-border bg-card p-1.5 shadow-xl"
             >
               <button
@@ -1301,6 +1461,7 @@ export function EditorToolbar({
               side="top"
               align="center"
               sideOffset={8}
+              dir={isRtl ? 'rtl' : 'ltr'}
               className="z-50 w-72 max-w-[calc(100vw-32px)] rounded-xl border border-border bg-card p-3 shadow-xl"
             >
               <div className="text-[11px] font-semibold text-foreground mb-1.5">

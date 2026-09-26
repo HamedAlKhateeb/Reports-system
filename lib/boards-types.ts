@@ -121,6 +121,8 @@ export interface ExcalidrawElement {
   textAlign?: 'left' | 'center' | 'right';
   points?: DrawingPoint[];
   imageData?: string;
+  /** Rotation angle in degrees (0-360). */
+  rotation?: number;
 }
 
 export interface BoardWhiteboardData {

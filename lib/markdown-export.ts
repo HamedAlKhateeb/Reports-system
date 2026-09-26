@@ -141,6 +141,16 @@ export function tipTapJsonToMarkdown(
         return `> ${text}\n\n`;
       }
 
+      case 'codeBlock': {
+        const lang = String(node.attrs?.language || '')
+          .replace(/[^a-zA-Z0-9+#.-]/g, '')
+          .slice(0, 24);
+        const code = (node.content || [])
+          .map((c: any) => (c?.type === 'text' ? String(c.text || '') : ''))
+          .join('');
+        return `\`\`\`${lang}\n${code}\n\`\`\`\n\n`;
+      }
+
       case 'reportImage': {
         const seq = node.attrs?.sequenceNumber || 1;
         const fileName = node.attrs?.fileName || `${t('imageSequencePrefix', lang)}${seq}.png`;

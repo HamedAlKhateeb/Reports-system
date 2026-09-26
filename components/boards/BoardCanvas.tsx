@@ -64,8 +64,10 @@ import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { cn } from '@/lib/utils';
 import { usePomodoro } from '@/lib/pomodoro-context';
+import { CANVAS_FONT_STACK, SITE_FONT_STACK } from '@/lib/fonts';
+import { isPointNearElement, rotatePoint, getElementCenter } from '@/lib/drawing/geometry';
 
-const TEXT_FONT_FAMILY = '"IBM Plex Sans Arabic","Noto Sans Arabic",Tahoma,sans-serif';
+const TEXT_FONT_FAMILY = CANVAS_FONT_STACK;
 
 let textMeasureCtx: CanvasRenderingContext2D | null = null;
 function getTextMeasureCtx(): CanvasRenderingContext2D | null {
@@ -129,14 +131,37 @@ export function wrapNoteText(text: string, fontSize: number, maxWidth: number): 
   return out.length ? out : [''];
 }
 
-/** Box used for selection frame + resize handles (text: measured, else stored). */
-export function displayBox(el: { type?: string; x: number; y: number; width: number; height: number; text?: string; fontSize?: number }): {
+/** Box used for selection frame + resize handles (text: measured, lines: points bbox, else stored). */
+export function displayBox(el: {
+  type?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  text?: string;
+  fontSize?: number;
+  points?: Array<{ x: number; y: number }>;
+}): {
   x: number;
   y: number;
   w: number;
   h: number;
 } {
   if (el.type === 'text') return textRenderBox(el as { x: number; y: number; text?: string; fontSize?: number });
+  if ((el.type === 'arrow' || el.type === 'line' || el.type === 'freedraw') && el.points && el.points.length >= 2) {
+    const xs = el.points.map((p) => p.x);
+    const ys = el.points.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    return {
+      x: minX,
+      y: minY,
+      w: Math.max(4, maxX - minX),
+      h: Math.max(4, maxY - minY),
+    };
+  }
   return { x: el.x, y: el.y, w: el.width, h: el.height };
 }
 
@@ -147,14 +172,26 @@ export function displayBox(el: { type?: string; x: number; y: number; width: num
  */
 export function hitTestElement(
   pt: { x: number; y: number },
-  el: { type?: string; x: number; y: number; width: number; height: number; text?: string; fontSize?: number; points?: Array<{ x: number; y: number }> },
-  threshold = 12
+  el: { type?: string; x: number; y: number; width: number; height: number; text?: string; fontSize?: number; points?: Array<{ x: number; y: number }>; rotation?: number },
+  threshold = 16
 ): boolean {
   if (el.type === 'text') {
+    let testPt = pt;
     const b = textRenderBox(el);
-    return pt.x >= b.x - threshold && pt.x <= b.x + b.w + threshold && pt.y >= b.y - threshold && pt.y <= b.y + b.h + threshold;
+    if (el.rotation) {
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      testPt = rotatePoint(pt, { x: cx, y: cy }, -el.rotation);
+    }
+    return (
+      testPt.x >= b.x - threshold &&
+      testPt.x <= b.x + b.w + threshold &&
+      testPt.y >= b.y - threshold &&
+      testPt.y <= b.y + b.h + threshold
+    );
   }
-  return isPointNearElement(pt, el as { type: string; x: number; y: number; width: number; height: number; points?: Array<{ x: number; y: number }> }, threshold);
+  const th = (el.type === 'line' || el.type === 'arrow') ? Math.max(threshold, 20) : threshold;
+  return isPointNearElement(pt, el as { type: string; x: number; y: number; width: number; height: number; points?: Array<{ x: number; y: number }>; rotation?: number }, th);
 }
 export function estimateTextBounds(text: string, fontSize: number = 18): { width: number; height: number } {
   const fs = Math.max(8, Math.round(fontSize) || 18);
@@ -232,9 +269,6 @@ const MAX_FONT_SIZE = 96;
 function elementHasText(t?: string): boolean {
   return t === 'text' || t === 'rectangle' || t === 'diamond' || t === 'ellipse' || t === 'note';
 }
-
-// Geometry lives in the shared drawing engine (single source of truth).
-import { isPointNearElement } from '@/lib/drawing/geometry';
 
 export function BoardCanvas({
   board,
@@ -350,6 +384,7 @@ export function BoardCanvas({
   const [selectedShapeId, setSelectedShapeId] = useState<string | null>(null);
   const [editingShapeId, setEditingShapeId] = useState<string | null>(null);
   const [drawingElement, setDrawingElement] = useState<ExcalidrawElement | null>(null);
+  const drawStartRef = useRef<{ x: number; y: number } | null>(null);
   const [isDraggingShape, setIsDraggingShape] = useState(false);
   const [shapeDragOffset, setShapeDragOffset] = useState({ x: 0, y: 0 });
   // Click-vs-drag: a press becomes a MOVE only past this threshold —
@@ -360,6 +395,63 @@ export function BoardCanvas({
   const shapeDragMovedRef = useRef(false);
   const [resizingShapeHandle, setResizingShapeHandle] = useState<string | null>(null);
   const [shapeResizeStart, setShapeResizeStart] = useState({ x: 0, y: 0, w: 0, h: 0, elemX: 0, elemY: 0, fontSize: 18 });
+  const [isRotatingShape, setIsRotatingShape] = useState(false);
+
+  const startRotatingShape = (e: React.MouseEvent | React.PointerEvent, el: ExcalidrawElement) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const pt = getCanvasPoint(e);
+    const b = displayBox(el);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const startAngle = (Math.atan2(pt.y - cy, pt.x - cx) * 180) / Math.PI;
+    const origRotation = el.rotation || 0;
+    setIsRotatingShape(true);
+
+    let lastRot = origRotation;
+    const prevCursor = document.body.style.cursor;
+    document.body.style.cursor = 'grabbing';
+
+    const onPointerMove = (ev: MouseEvent | PointerEvent) => {
+      ev.preventDefault();
+      const currPt = getCanvasPoint(ev);
+      const currAngle = (Math.atan2(currPt.y - cy, currPt.x - cx) * 180) / Math.PI;
+      let delta = currAngle - startAngle;
+      while (delta > 180) delta -= 360;
+      while (delta < -180) delta += 360;
+
+      let newRot = Math.round(origRotation + delta);
+      newRot = ((newRot % 360) + 360) % 360;
+      if (ev.shiftKey) {
+        newRot = (Math.round(newRot / 15) * 15) % 360;
+      }
+      lastRot = newRot;
+
+      setElements((prev) =>
+        prev.map((item) => (item.id === el.id ? { ...item, rotation: newRot } : item))
+      );
+    };
+
+    const onPointerUp = (ev: MouseEvent | PointerEvent) => {
+      ev.preventDefault();
+      document.body.style.cursor = prevCursor;
+      window.removeEventListener('mousemove', onPointerMove);
+      window.removeEventListener('mouseup', onPointerUp);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      setIsRotatingShape(false);
+      setElements((prev) => {
+        const next = prev.map((item) => (item.id === el.id ? { ...item, rotation: lastRot } : item));
+        pushHistory(next);
+        return next;
+      });
+    };
+
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('mouseup', onPointerUp);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
 
   // Laser Pointer Trail
   const [laserPoints, setLaserPoints] = useState<Array<{ x: number; y: number; time: number }>>([]);
@@ -663,6 +755,14 @@ export function BoardCanvas({
         setActiveTool('note');
       } else if (e.key === 'e' || e.key === 'E') {
         setActiveTool('eraser');
+      } else if (e.key === 'Enter' || e.key === 'F2') {
+        if (selectedShapeId && !readOnly) {
+          const targetEl = elements.find((el) => el.id === selectedShapeId);
+          if (targetEl && elementHasText(targetEl.type)) {
+            e.preventDefault();
+            setEditingShapeId(selectedShapeId);
+          }
+        }
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedShapeId) {
           pushHistory(elements.filter((el) => el.id !== selectedShapeId));
@@ -692,7 +792,7 @@ export function BoardCanvas({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [isSpacePressed, selectedShapeId, selectedWidgetId, elements, pushHistory, handleUndo, handleRedo, handleDeleteWidget]);
+  }, [isSpacePressed, selectedShapeId, selectedWidgetId, elements, pushHistory, handleUndo, handleRedo, handleDeleteWidget, readOnly]);
 
   // Clean laser pointer trail
   useEffect(() => {
@@ -910,6 +1010,7 @@ export function BoardCanvas({
       return;
     }
 
+    drawStartRef.current = { x: pt.x, y: pt.y };
     setDrawingElement(newElem);
   };
 
@@ -1018,6 +1119,7 @@ export function BoardCanvas({
       return;
     }
 
+
     // 5. Dragging selected Excalidraw shape (armed past threshold only)
     if (isDraggingShape && selectedShapeId) {
       if (!shapeDragArmedRef.current) {
@@ -1046,28 +1148,32 @@ export function BoardCanvas({
       return;
     }
 
-    // 6. Drawing new Excalidraw shape
+    // 6. Drawing new Excalidraw shape (Bidirectional LTR and RTL drag support)
     if (drawingElement) {
+      const start = drawStartRef.current || { x: drawingElement.x, y: drawingElement.y };
       if (drawingElement.type === 'freedraw') {
         const nextPoints = [...(drawingElement.points || []), { x: pt.x, y: pt.y }];
         setDrawingElement({ ...drawingElement, points: nextPoints });
       } else if (drawingElement.type === 'arrow' || drawingElement.type === 'line') {
-        const start = drawingElement.points ? drawingElement.points[0] : { x: drawingElement.x, y: drawingElement.y };
         setDrawingElement({
           ...drawingElement,
-          width: pt.x - start.x,
-          height: pt.y - start.y,
+          x: Math.min(start.x, pt.x),
+          y: Math.min(start.y, pt.y),
+          width: Math.abs(pt.x - start.x),
+          height: Math.abs(pt.y - start.y),
           points: [start, { x: pt.x, y: pt.y }],
         });
       } else {
-        const w = pt.x - drawingElement.x;
-        const h = pt.y - drawingElement.y;
+        const x = Math.min(start.x, pt.x);
+        const y = Math.min(start.y, pt.y);
+        const width = Math.abs(pt.x - start.x);
+        const height = Math.abs(pt.y - start.y);
         setDrawingElement({
           ...drawingElement,
-          x: w < 0 ? pt.x : drawingElement.x,
-          y: h < 0 ? pt.y : drawingElement.y,
-          width: Math.abs(w),
-          height: Math.abs(h),
+          x,
+          y,
+          width,
+          height,
         });
       }
     }
@@ -1088,6 +1194,7 @@ export function BoardCanvas({
       setIsPanning(false);
       return;
     }
+
 
     if (isDraggingShape) {
       setIsDraggingShape(false);
@@ -1137,6 +1244,7 @@ export function BoardCanvas({
         setSelectedShapeId(finalElem.id);
       }
       setDrawingElement(null);
+      drawStartRef.current = null;
 
       if (!isLocked) {
         setActiveTool('select');
@@ -1248,6 +1356,13 @@ export function BoardCanvas({
         const y = el.y - minY + padding;
 
         ctx.save();
+        if (el.rotation) {
+          const cx = x + el.width / 2;
+          const cy = y + el.height / 2;
+          ctx.translate(cx, cy);
+          ctx.rotate((el.rotation * Math.PI) / 180);
+          ctx.translate(-cx, -cy);
+        }
         ctx.strokeStyle = el.strokeColor || '#1e1e1e';
         ctx.fillStyle = el.backgroundColor || 'transparent';
         ctx.lineWidth = el.strokeWidth || 2;
@@ -1311,7 +1426,7 @@ export function BoardCanvas({
         if (el.text) {
           ctx.fillStyle = el.strokeColor || '#1e1e1e';
           const fontSize = el.fontSize || 16;
-          ctx.font = `600 ${fontSize}px "IBM Plex Sans Arabic", sans-serif`;
+          ctx.font = `600 ${fontSize}px ${CANVAS_FONT_STACK}`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
           const paragraphs = String(el.text).split('\n');
@@ -1425,7 +1540,7 @@ export function BoardCanvas({
           const statusBg = data.status === 'done' ? '#dcfce7' : data.status === 'in-progress' ? '#dbeafe' : '#f1f5f9';
           const statusFg = data.status === 'done' ? '#15803d' : data.status === 'in-progress' ? '#1d4ed8' : '#475569';
 
-          ctx.font = 'bold 10px "IBM Plex Sans Arabic", sans-serif';
+          ctx.font = `bold 10px ${CANVAS_FONT_STACK}`;
           const statusW = ctx.measureText(statusText).width + 12;
 
           const badgeX = isArabic ? contentRight - statusW : contentLeft;
@@ -1461,7 +1576,7 @@ export function BoardCanvas({
 
           // Title
           ctx.fillStyle = '#0f172a';
-          ctx.font = 'bold 13px "IBM Plex Sans Arabic", sans-serif';
+          ctx.font = `bold 13px ${CANVAS_FONT_STACK}`;
           ctx.textAlign = isArabic ? 'right' : 'left';
           ctx.textBaseline = 'top';
           const titleText = w.title || (isArabic ? 'مهمة' : 'Task');
@@ -1477,7 +1592,7 @@ export function BoardCanvas({
           if (data.dueDate) metaParts.push(`📅 ${data.dueDate}`);
           if (metaParts.length > 0) {
             curY += 2;
-            ctx.font = '11px "IBM Plex Sans Arabic", sans-serif';
+            ctx.font = `11px ${CANVAS_FONT_STACK}`;
             ctx.fillStyle = '#64748b';
             ctx.fillText(metaParts.join('  •  '), isArabic ? contentRight : contentLeft, curY);
             curY += 18;
@@ -1494,7 +1609,7 @@ export function BoardCanvas({
             ctx.stroke();
             curY += 6;
 
-            ctx.font = '11px "IBM Plex Sans Arabic", sans-serif';
+            ctx.font = `11px ${CANVAS_FONT_STACK}`;
             ctx.fillStyle = '#334155';
             const descLines = wrapCanvasText(ctx, data.description, maxTextW);
             const maxDescLines = Math.max(1, Math.floor((y + w.height - curY - 8) / 16));
@@ -1526,7 +1641,7 @@ export function BoardCanvas({
 
           if (w.title) {
             ctx.fillStyle = '#1e293b';
-            ctx.font = 'bold 13px "IBM Plex Sans Arabic", sans-serif';
+            ctx.font = `bold 13px ${CANVAS_FONT_STACK}`;
             ctx.textAlign = isArabic ? 'right' : 'left';
             ctx.textBaseline = 'top';
             const titleLines = wrapCanvasText(ctx, w.title, maxTextW);
@@ -1540,7 +1655,7 @@ export function BoardCanvas({
           const content = data.content || '';
           if (content) {
             ctx.fillStyle = '#334155';
-            ctx.font = '12px "IBM Plex Sans Arabic", sans-serif';
+            ctx.font = `12px ${CANVAS_FONT_STACK}`;
             ctx.textAlign = isArabic ? 'right' : 'left';
             ctx.textBaseline = 'top';
             const bodyLines = wrapCanvasText(ctx, content, maxTextW);
@@ -1564,7 +1679,7 @@ export function BoardCanvas({
           const maxTextW = w.width - 24;
 
           ctx.fillStyle = '#0f172a';
-          ctx.font = 'bold 12px "IBM Plex Sans Arabic", sans-serif';
+          ctx.font = `bold 12px ${CANVAS_FONT_STACK}`;
           ctx.textAlign = isArabic ? 'right' : 'left';
           ctx.textBaseline = 'top';
           const author = data.author || (isArabic ? 'مستخدم' : 'User');
@@ -1573,7 +1688,7 @@ export function BoardCanvas({
 
           if (data.text) {
             ctx.fillStyle = '#334155';
-            ctx.font = '12px "IBM Plex Sans Arabic", sans-serif';
+            ctx.font = `12px ${CANVAS_FONT_STACK}`;
             const textLines = wrapCanvasText(ctx, data.text, maxTextW);
             const maxLines = Math.max(1, Math.floor((y + w.height - curY - 8) / 18));
             textLines.slice(0, maxLines).forEach((tl) => {
@@ -1590,7 +1705,7 @@ export function BoardCanvas({
           ctx.stroke();
 
           ctx.fillStyle = '#1e293b';
-          ctx.font = 'bold 13px "IBM Plex Sans Arabic", sans-serif';
+          ctx.font = `bold 13px ${CANVAS_FONT_STACK}`;
           ctx.textAlign = isArabic ? 'right' : 'left';
           ctx.textBaseline = 'top';
           ctx.fillText(w.title || 'Widget', isArabic ? x + w.width - 12 : x + 12, y + 12);
@@ -1800,14 +1915,50 @@ export function BoardCanvas({
   };
   const endFrameDrag = (e: React.PointerEvent) => {
     if (!frameDragRef.current) return;
-    e.stopPropagation();
-    frameDragRef.current = null;
     setFrameDragging(false);
+  };
+
+  const onShapeMouseDown = (e: React.MouseEvent, el: ExcalidrawElement) => {
+    if (readOnly || activeTool === 'hand' || isSpacePressed || e.button !== 0) return;
+    if (activeTool === 'eraser') {
+      e.stopPropagation();
+      pushHistory(elements.filter((item) => item.id !== el.id));
+      if (selectedShapeId === el.id) setSelectedShapeId(null);
+      return;
+    }
+    if (activeTool === 'bucket') {
+      e.stopPropagation();
+      pushHistory(elements.map((item) => (item.id === el.id ? { ...item, backgroundColor } : item)));
+      return;
+    }
+    if (activeTool === 'select') {
+      e.stopPropagation();
+      if (el.type === 'text') {
+        const live = textRenderBox(el);
+        if (
+          Math.abs((el.width || 0) - live.w) > 2 ||
+          Math.abs((el.height || 0) - live.h) > 2
+        ) {
+          setElements((prev) =>
+            prev.map((item) => (item.id === el.id ? { ...item, width: live.w, height: live.h } : item))
+          );
+        }
+      }
+      setSelectedShapeId(el.id);
+      setSelectedWidgetId(null);
+      setIsDraggingShape(true);
+      shapeDragArmedRef.current = false;
+      shapeDragMovedRef.current = false;
+      shapeDragStartRef.current = { x: e.clientX, y: e.clientY };
+      const pt = getCanvasPoint(e);
+      setShapeDragOffset({ x: pt.x - el.x, y: pt.y - el.y });
+    }
   };
 
   return (
     <div
       ref={containerRef}
+      dir="ltr"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
@@ -1839,7 +1990,7 @@ export function BoardCanvas({
       />
 
       {/* TOP FLOATING EXCALIDRAW TOOLBAR (Directly in the task board) */}
-      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center select-none pointer-events-auto">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-40 flex flex-col items-center select-none pointer-events-auto gap-1.5">
         <div
           dir="ltr"
           className="flex items-center gap-1 p-1 rounded-2xl border border-neutral-200/90 dark:border-neutral-800/90 bg-white/95 dark:bg-neutral-900/95 shadow-xl backdrop-blur-md"
@@ -2192,76 +2343,71 @@ export function BoardCanvas({
             </>
           )}
         </div>
-      </div>
 
-      {/* FLOATING CONTEXTUAL PROPERTY PANEL (When an Excalidraw element is selected) */}
-      {selectedElement && !readOnly && (
-        <div
-          dir="ltr"
-          className="absolute top-20 start-4 z-40 p-2.5 rounded-2xl border border-border/80 bg-card/95 backdrop-blur-md shadow-2xl flex flex-col gap-2.5 select-none animate-in fade-in zoom-in-95 duration-150 text-xs w-52"
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div className="text-[10px] uppercase font-bold text-muted-foreground tracking-wider flex items-center justify-between">
-            <span>Properties</span>
-            <button
-              type="button"
-              onClick={() => setSelectedShapeId(null)}
-              className="p-0.5 rounded hover:bg-muted text-muted-foreground"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Stroke Color */}
-          <div>
-            <div className="text-[11px] text-muted-foreground mb-1">Stroke color</div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {STROKE_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    setStrokeColor(c);
-                    pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, strokeColor: c } : el)));
-                  }}
-                  style={{ backgroundColor: c }}
-                  className={cn(
-                    'w-5 h-5 rounded-full border border-black/20 dark:border-white/20 transition-transform hover:scale-115',
-                    selectedElement.strokeColor === c && 'ring-2 ring-primary ring-offset-1'
-                  )}
-                />
-              ))}
+        {/* COMPANION PROPERTIES TOOLBAR (Rendered lengthwise directly under the top toolbar) */}
+        {selectedElement && !readOnly && (
+          <div
+            dir={isArabic ? 'rtl' : 'ltr'}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-2xl border border-neutral-200/90 dark:border-neutral-800/90 bg-white/95 dark:bg-neutral-900/95 shadow-xl backdrop-blur-md text-xs select-none animate-in fade-in slide-in-from-top-1 duration-150 max-w-[96vw] overflow-x-auto"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* Stroke Color */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground font-semibold px-0.5 whitespace-nowrap">
+                {isArabic ? 'الحد' : 'Stroke'}
+              </span>
+              <div className="flex items-center gap-1">
+                {STROKE_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      setStrokeColor(c);
+                      pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, strokeColor: c } : el)));
+                    }}
+                    style={{ backgroundColor: c }}
+                    className={cn(
+                      'w-4 h-4 rounded-full border border-black/25 dark:border-white/25 transition-transform hover:scale-125',
+                      selectedElement.strokeColor === c && 'ring-2 ring-primary ring-offset-1 scale-110'
+                    )}
+                    title={c}
+                  />
+                ))}
+              </div>
             </div>
-          </div>
 
-          {/* Background Fill */}
-          <div>
-            <div className="text-[11px] text-muted-foreground mb-1">Background fill</div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {FILL_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    setBackgroundColor(c);
-                    pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, backgroundColor: c } : el)));
-                  }}
-                  style={{ backgroundColor: c === 'transparent' ? '#ffffff' : c }}
-                  className={cn(
-                    'w-5 h-5 rounded-md border border-neutral-300 dark:border-neutral-700 transition-transform hover:scale-115 flex items-center justify-center text-[9px]',
-                    selectedElement.backgroundColor === c && 'ring-2 ring-primary ring-offset-1'
-                  )}
-                  title={c}
-                >
-                  {c === 'transparent' && '✕'}
-                </button>
-              ))}
+            <span className="h-4 w-px bg-neutral-200 dark:bg-neutral-800" />
+
+            {/* Background Fill */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground font-semibold px-0.5 whitespace-nowrap">
+                {isArabic ? 'الملء' : 'Fill'}
+              </span>
+              <div className="flex items-center gap-1">
+                {FILL_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => {
+                      setBackgroundColor(c);
+                      pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, backgroundColor: c } : el)));
+                    }}
+                    style={{ backgroundColor: c === 'transparent' ? '#ffffff' : c }}
+                    className={cn(
+                      'w-4 h-4 rounded-md border border-neutral-300 dark:border-neutral-700 transition-transform hover:scale-125 flex items-center justify-center text-[8px]',
+                      selectedElement.backgroundColor === c && 'ring-2 ring-primary ring-offset-1 scale-110'
+                    )}
+                    title={c}
+                  >
+                    {c === 'transparent' && '✕'}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          {/* Stroke Width */}
-          <div>
-            <div className="text-[11px] text-muted-foreground mb-1">Stroke width</div>
+            <span className="h-4 w-px bg-neutral-200 dark:bg-neutral-800" />
+
+            {/* Stroke Width */}
             <div className="flex items-center gap-1">
               {[1, 2, 4].map((w) => (
                 <button
@@ -2272,87 +2418,168 @@ export function BoardCanvas({
                     pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, strokeWidth: w } : el)));
                   }}
                   className={cn(
-                    'flex-1 py-1 rounded-md border border-border text-[11px] font-semibold transition-colors',
-                    selectedElement.strokeWidth === w ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                    'px-2 py-0.5 rounded-md border border-border text-[10px] font-semibold transition-colors',
+                    selectedElement.strokeWidth === w ? 'bg-primary text-primary-foreground' : 'hover:bg-muted text-muted-foreground'
                   )}
                 >
-                  {w === 1 ? 'Thin' : w === 2 ? 'Med' : 'Thick'}
+                  {w === 1 ? (isArabic ? 'رفيع' : 'Thin') : w === 2 ? (isArabic ? 'متوسط' : 'Med') : (isArabic ? 'عريض' : 'Thick')}
                 </button>
               ))}
             </div>
-          </div>
 
-          {/* Font Size — drag the slider (mouse) to grow/shrink the letters */}
-          {elementHasText(selectedElement.type) && (
-            <div>
-              <div className="text-[11px] text-muted-foreground mb-1 flex items-center justify-between">
-                <span>{isArabic ? 'حجم الخط — اسحب' : 'Font size — drag'}</span>
-                <span className="font-mono font-bold text-foreground">{selectedElement.fontSize || 18}</span>
-              </div>
-              <input
-                type="range"
-                min={MIN_FONT_SIZE}
-                max={MAX_FONT_SIZE}
-                step={1}
-                value={selectedElement.fontSize || 18}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  setFontSize(next);
-                  setElements((prev) =>
-                    prev.map((el) => {
-                      if (el.id !== selectedShapeId) return el;
-                      if (el.type === 'text') {
-                        const dims = estimateTextBounds(el.text || '', next);
-                        return { ...el, fontSize: next, width: dims.width, height: dims.height };
-                      }
-                      return { ...el, fontSize: next };
-                    })
-                  );
+            {/* Font Size & Text Actions */}
+            {elementHasText(selectedElement.type) && (
+              <>
+                <span className="h-4 w-px bg-neutral-200 dark:bg-neutral-800" />
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-muted-foreground font-semibold whitespace-nowrap">
+                    {isArabic ? 'الخط' : 'Font'}
+                  </span>
+                  <input
+                    type="range"
+                    min={MIN_FONT_SIZE}
+                    max={MAX_FONT_SIZE}
+                    step={1}
+                    value={selectedElement.fontSize || 18}
+                    onChange={(e) => {
+                      const next = Number(e.target.value);
+                      setFontSize(next);
+                      setElements((prev) =>
+                        prev.map((el) => {
+                          if (el.id !== selectedShapeId) return el;
+                          if (el.type === 'text') {
+                            const dims = estimateTextBounds(el.text || '', next);
+                            return { ...el, fontSize: next, width: dims.width, height: dims.height };
+                          }
+                          return { ...el, fontSize: next };
+                        })
+                      );
+                    }}
+                    onMouseUp={() => pushHistory(elements)}
+                    onTouchEnd={() => pushHistory(elements)}
+                    className="w-16 h-1 cursor-ew-resize accent-[#5e54d8]"
+                    dir="ltr"
+                    title={`${isArabic ? 'حجم الخط' : 'Font size'}: ${selectedElement.fontSize || 18}px`}
+                  />
+                  <span className="font-mono text-[10px] font-bold text-foreground w-4">{selectedElement.fontSize || 18}</span>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEditingShapeId(selectedElement.id)}
+                    className="h-6 px-2 text-[10px] gap-1 bg-[#e0dfff] hover:bg-[#d0ceff] text-[#5e54d8] dark:bg-violet-950 dark:hover:bg-violet-900 dark:text-violet-300 font-semibold"
+                  >
+                    <Type className="w-2.5 h-2.5" />
+                    <span>{isArabic ? 'تعديل النص' : 'Edit Text'}</span>
+                  </Button>
+                  {selectedElement.type !== 'text' && selectedElement.text && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        pushHistory(elements.map((el) => (el.id === selectedElement.id ? { ...el, text: '' } : el)));
+                      }}
+                      className="h-6 px-1.5 text-[10px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                      title={isArabic ? 'مسح نص الشكل' : 'Clear shape text'}
+                    >
+                      {isArabic ? 'مسح' : 'Clear'}
+                    </Button>
+                  )}
+                </div>
+              </>
+            )}
+
+            {/* Rotation Controls */}
+            <span className="h-4 w-px bg-neutral-200 dark:bg-neutral-800" />
+            <div className="flex items-center gap-1">
+              <span className="text-[11px] text-muted-foreground font-semibold whitespace-nowrap">
+                {isArabic ? 'تدوير' : 'Rotate'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const r = (((selectedElement.rotation || 0) - 90) % 360 + 360) % 360;
+                  pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, rotation: r } : el)));
                 }}
-                onMouseUp={() => pushHistory(elements)}
-                onTouchEnd={() => pushHistory(elements)}
-                className="w-full h-1.5 cursor-ew-resize accent-[#5e54d8]"
-                dir="ltr"
-                aria-label={isArabic ? 'حجم الخط' : 'Font size'}
-              />
+                className="px-1.5 py-0.5 rounded-md border border-border text-[10px] font-semibold hover:bg-muted transition-colors"
+                title={isArabic ? 'تدوير 90° لليسار' : 'Rotate -90°'}
+              >
+                -90°
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const r = ((selectedElement.rotation || 0) + 90) % 360;
+                  pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, rotation: r } : el)));
+                }}
+                className="px-1.5 py-0.5 rounded-md border border-border text-[10px] font-semibold hover:bg-muted transition-colors"
+                title={isArabic ? 'تدوير 90° لليمين' : 'Rotate +90°'}
+              >
+                +90°
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if ((selectedElement.rotation || 0) !== 0) {
+                    pushHistory(elements.map((el) => (el.id === selectedShapeId ? { ...el, rotation: 0 } : el)));
+                  }
+                }}
+                className={cn(
+                  "px-1.5 py-0.5 rounded-md border border-border font-mono text-[10px] transition-colors",
+                  (selectedElement.rotation || 0) !== 0 ? "font-bold text-primary hover:bg-muted cursor-pointer" : "text-muted-foreground opacity-70"
+                )}
+                title={isArabic ? 'إعادة ضبط الزاوية (0°)' : 'Reset rotation to 0°'}
+              >
+                {selectedElement.rotation || 0}°
+              </button>
             </div>
-          )}
 
-          {/* Action Row */}
-          <div className="flex items-center gap-1 pt-1 border-t border-border">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                const dup: ExcalidrawElement = {
-                  ...selectedElement,
-                  id: `elem_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-                  x: selectedElement.x + 24,
-                  y: selectedElement.y + 24,
-                };
-                pushHistory([...elements, dup]);
-                setSelectedShapeId(dup.id);
-              }}
-              className="flex-1 h-7 text-[11px] gap-1"
-            >
-              <Copy className="w-3 h-3" />
-              <span>Clone</span>
-            </Button>
+            {/* Actions: Clone, Delete, Close */}
+            <span className="h-4 w-px bg-neutral-200 dark:bg-neutral-800" />
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const dup: ExcalidrawElement = {
+                    ...selectedElement,
+                    id: `elem_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                    x: selectedElement.x + 24,
+                    y: selectedElement.y + 24,
+                  };
+                  pushHistory([...elements, dup]);
+                  setSelectedShapeId(dup.id);
+                }}
+                className="h-6 px-1.5 text-[10px] gap-1 hover:bg-muted"
+                title={isArabic ? 'نسخ العنصر' : 'Clone element'}
+              >
+                <Copy className="w-3 h-3" />
+              </Button>
 
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => {
-                pushHistory(elements.filter((el) => el.id !== selectedShapeId));
-                setSelectedShapeId(null);
-              }}
-              className="h-7 text-[11px] px-2.5"
-            >
-              <Trash2 className="w-3 h-3" />
-            </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  pushHistory(elements.filter((el) => el.id !== selectedShapeId));
+                  setSelectedShapeId(null);
+                }}
+                className="h-6 px-1.5 text-[10px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                title={isArabic ? 'حذف العنصر' : 'Delete element'}
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+
+              <button
+                type="button"
+                onClick={() => setSelectedShapeId(null)}
+                className="p-1 rounded-md hover:bg-muted text-muted-foreground"
+                title={isArabic ? 'إلغاء التحديد' : 'Deselect'}
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* FRAME-HEIGHT GRIP: drag up/down to change board length (width stays full).
           Double-click resets to auto-fill. */}
@@ -2387,7 +2614,7 @@ export function BoardCanvas({
       {/* BOTTOM FLOATING CONTROLS: Zoom, Fit, Undo/Redo, Export, Share */}
       <div
         dir="ltr"
-        className="absolute bottom-4 start-4 z-30 flex items-center gap-1 p-1 rounded-xl border border-border/80 bg-card/90 shadow-lg backdrop-blur-md text-xs"
+        className="absolute bottom-4 left-4 z-30 flex items-center gap-1 p-1 rounded-xl border border-border/80 bg-card/90 shadow-lg backdrop-blur-md text-xs"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <button
@@ -2395,7 +2622,7 @@ export function BoardCanvas({
           onClick={handleUndo}
           disabled={historyIdx <= 0 || readOnly}
           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40"
-          title="Undo (Ctrl+Z)"
+          title={isArabic ? 'تراجع (Ctrl+Z)' : 'Undo (Ctrl+Z)'}
         >
           <Undo2 className="w-4 h-4" />
         </button>
@@ -2405,7 +2632,7 @@ export function BoardCanvas({
           onClick={handleRedo}
           disabled={historyIdx >= history.length - 1 || readOnly}
           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40"
-          title="Redo (Ctrl+Y)"
+          title={isArabic ? 'إعادة (Ctrl+Y)' : 'Redo (Ctrl+Y)'}
         >
           <Redo2 className="w-4 h-4" />
         </button>
@@ -2416,7 +2643,7 @@ export function BoardCanvas({
           type="button"
           onClick={() => setZoom((z) => Math.max(0.2, z - 0.15))}
           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-          title="Zoom Out"
+          title={isArabic ? 'تصغير' : 'Zoom Out'}
         >
           <ZoomOut className="w-4 h-4" />
         </button>
@@ -2425,7 +2652,7 @@ export function BoardCanvas({
           type="button"
           onClick={() => setZoom(1)}
           className="px-2 py-1 text-[11px] font-mono text-muted-foreground hover:text-foreground hover:bg-muted rounded"
-          title="Reset Zoom"
+          title={isArabic ? 'إعادة ضبط التكبير (100%)' : 'Reset Zoom (100%)'}
         >
           {Math.round(zoom * 100)}%
         </button>
@@ -2434,7 +2661,7 @@ export function BoardCanvas({
           type="button"
           onClick={() => setZoom((z) => Math.min(3, z + 0.15))}
           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-          title="Zoom In"
+          title={isArabic ? 'تكبير' : 'Zoom In'}
         >
           <ZoomIn className="w-4 h-4" />
         </button>
@@ -2443,7 +2670,7 @@ export function BoardCanvas({
           type="button"
           onClick={handleFitView}
           className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-          title="Fit View"
+          title={isArabic ? 'ملاءمة العرض' : 'Fit View'}
         >
           <Maximize2 className="w-4 h-4" />
         </button>
@@ -2454,7 +2681,7 @@ export function BoardCanvas({
           type="button"
           onClick={handleExportPNG}
           className="p-1.5 rounded hover:bg-muted text-emerald-600 dark:text-emerald-400 font-semibold"
-          title="Export PNG"
+          title={isArabic ? 'تصدير كصورة PNG' : 'Export PNG'}
         >
           <Download className="w-4 h-4" />
         </button>
@@ -2499,6 +2726,16 @@ export function BoardCanvas({
         <svg
           style={{ direction: 'ltr' }}
           className="w-full h-full absolute inset-0 overflow-visible pointer-events-none"
+          onDoubleClick={(e) => {
+            if (readOnly) return;
+            const pt = getCanvasPoint(e);
+            const hit = [...elements].reverse().find((el) => hitTestElement(pt, el, 12));
+            if (hit && elementHasText(hit.type)) {
+              e.stopPropagation();
+              setSelectedShapeId(hit.id);
+              setEditingShapeId(hit.id);
+            }
+          }}
         >
           <defs>
             <marker
@@ -2515,9 +2752,24 @@ export function BoardCanvas({
 
           {/* Render Excalidraw Shapes */}
           {elements.map((el) => {
+            const rot = el.rotation || 0;
+            const b = displayBox(el);
+            const cx = b.x + b.w / 2;
+            const cy = b.y + b.h / 2;
+            const rotTransform = rot ? `rotate(${rot} ${cx} ${cy})` : undefined;
+
             if (el.type === 'rectangle') {
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!readOnly) setEditingShapeId(el.id);
+                  }}
+                >
                   <rect
                     x={el.x}
                     y={el.y}
@@ -2531,22 +2783,35 @@ export function BoardCanvas({
                     strokeDasharray={
                       el.strokeStyle === 'dashed' ? '6 6' : el.strokeStyle === 'dotted' ? '2 4' : undefined
                     }
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
                   />
-                  {el.text && (
-                    <text
-                      x={el.x + el.width / 2}
-                      y={el.y + el.height / 2 + 5}
-                      textAnchor="middle"
-                      fill={el.strokeColor || '#1e1e1e'}
-                      fontSize={el.fontSize || 16}
-                      fontFamily="IBM Plex Sans Arabic, sans-serif"
-                      fontWeight="600"
-                      className="select-none pointer-events-none"
-                    >
-                      {el.text}
-                    </text>
-                  )}
+                  {editingShapeId !== el.id && el.text && el.text.trim().length > 0 && (() => {
+                    const fSize = el.fontSize || 16;
+                    const lines = el.text.split('\n');
+                    const lineH = Math.round(fSize * 1.35);
+                    const blockH = lines.length * lineH;
+                    const firstBaseline = el.y + (el.height - blockH) / 2 + fSize * 0.85;
+                    const cx = el.x + el.width / 2;
+                    return (
+                      <text
+                        x={cx}
+                        y={firstBaseline}
+                        textAnchor="middle"
+                        fill={el.strokeColor || '#1e1e1e'}
+                        fontSize={fSize}
+                        fontFamily={SITE_FONT_STACK}
+                        fontWeight="600"
+                        direction="auto"
+                        style={{ unicodeBidi: 'plaintext' }}
+                        className="select-none cursor-text"
+                      >
+                        {lines.map((line, i) => (
+                          <tspan key={i} x={cx} dy={i === 0 ? 0 : lineH}>
+                            {line || ' '}
+                          </tspan>
+                        ))}
+                      </text>
+                    );
+                  })()}
                 </g>
               );
             }
@@ -2556,7 +2821,16 @@ export function BoardCanvas({
               const cy = el.y + el.height / 2;
               const pts = `${cx},${el.y} ${el.x + el.width},${cy} ${cx},${el.y + el.height} ${el.x},${cy}`;
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!readOnly) setEditingShapeId(el.id);
+                  }}
+                >
                   <polygon
                     points={pts}
                     fill={el.backgroundColor || 'transparent'}
@@ -2565,22 +2839,34 @@ export function BoardCanvas({
                     strokeDasharray={
                       el.strokeStyle === 'dashed' ? '6 6' : el.strokeStyle === 'dotted' ? '2 4' : undefined
                     }
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
                   />
-                  {el.text && (
-                    <text
-                      x={cx}
-                      y={cy + 5}
-                      textAnchor="middle"
-                      fill={el.strokeColor || '#1e1e1e'}
-                      fontSize={el.fontSize || 16}
-                      fontFamily="IBM Plex Sans Arabic, sans-serif"
-                      fontWeight="600"
-                      className="select-none pointer-events-none"
-                    >
-                      {el.text}
-                    </text>
-                  )}
+                  {editingShapeId !== el.id && el.text && el.text.trim().length > 0 && (() => {
+                    const fSize = el.fontSize || 16;
+                    const lines = el.text.split('\n');
+                    const lineH = Math.round(fSize * 1.35);
+                    const blockH = lines.length * lineH;
+                    const firstBaseline = cy - blockH / 2 + fSize * 0.85;
+                    return (
+                      <text
+                        x={cx}
+                        y={firstBaseline}
+                        textAnchor="middle"
+                        fill={el.strokeColor || '#1e1e1e'}
+                        fontSize={fSize}
+                        fontFamily={SITE_FONT_STACK}
+                        fontWeight="600"
+                        direction="auto"
+                        style={{ unicodeBidi: 'plaintext' }}
+                        className="select-none cursor-text"
+                      >
+                        {lines.map((line, i) => (
+                          <tspan key={i} x={cx} dy={i === 0 ? 0 : lineH}>
+                            {line || ' '}
+                          </tspan>
+                        ))}
+                      </text>
+                    );
+                  })()}
                 </g>
               );
             }
@@ -2589,7 +2875,16 @@ export function BoardCanvas({
               const rx = el.width / 2;
               const ry = el.height / 2;
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!readOnly) setEditingShapeId(el.id);
+                  }}
+                >
                   <ellipse
                     cx={el.x + rx}
                     cy={el.y + ry}
@@ -2601,22 +2896,36 @@ export function BoardCanvas({
                     strokeDasharray={
                       el.strokeStyle === 'dashed' ? '6 6' : el.strokeStyle === 'dotted' ? '2 4' : undefined
                     }
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
                   />
-                  {el.text && (
-                    <text
-                      x={el.x + rx}
-                      y={el.y + ry + 5}
-                      textAnchor="middle"
-                      fill={el.strokeColor || '#1e1e1e'}
-                      fontSize={el.fontSize || 16}
-                      fontFamily="IBM Plex Sans Arabic, sans-serif"
-                      fontWeight="600"
-                      className="select-none pointer-events-none"
-                    >
-                      {el.text}
-                    </text>
-                  )}
+                  {editingShapeId !== el.id && el.text && el.text.trim().length > 0 && (() => {
+                    const fSize = el.fontSize || 16;
+                    const lines = el.text.split('\n');
+                    const lineH = Math.round(fSize * 1.35);
+                    const blockH = lines.length * lineH;
+                    const cx = el.x + rx;
+                    const cy = el.y + ry;
+                    const firstBaseline = cy - blockH / 2 + fSize * 0.85;
+                    return (
+                      <text
+                        x={cx}
+                        y={firstBaseline}
+                        textAnchor="middle"
+                        fill={el.strokeColor || '#1e1e1e'}
+                        fontSize={fSize}
+                        fontFamily={SITE_FONT_STACK}
+                        fontWeight="600"
+                        direction="auto"
+                        style={{ unicodeBidi: 'plaintext' }}
+                        className="select-none cursor-text"
+                      >
+                        {lines.map((line, i) => (
+                          <tspan key={i} x={cx} dy={i === 0 ? 0 : lineH}>
+                            {line || ' '}
+                          </tspan>
+                        ))}
+                      </text>
+                    );
+                  })()}
                 </g>
               );
             }
@@ -2625,7 +2934,23 @@ export function BoardCanvas({
               const p1 = el.points[0];
               const p2 = el.points[el.points.length - 1];
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer" color={el.strokeColor || '#1e1e1e'}>
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  color={el.strokeColor || '#1e1e1e'}
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                >
+                  {/* Invisible fat transparent stroke for effortless pointer hitting */}
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="transparent"
+                    strokeWidth={Math.max(26, (el.strokeWidth || 2) + 20)}
+                    strokeLinecap="round"
+                  />
                   <line
                     x1={p1.x}
                     y1={p1.y}
@@ -2646,7 +2971,22 @@ export function BoardCanvas({
               const p1 = el.points[0];
               const p2 = el.points[el.points.length - 1];
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                >
+                  {/* Invisible fat transparent stroke for effortless pointer hitting */}
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="transparent"
+                    strokeWidth={Math.max(26, (el.strokeWidth || 2) + 20)}
+                    strokeLinecap="round"
+                  />
                   <line
                     x1={p1.x}
                     y1={p1.y}
@@ -2667,7 +3007,21 @@ export function BoardCanvas({
                 .map((p, i) => (i === 0 ? `M ${p.x} ${p.y}` : `L ${p.x} ${p.y}`))
                 .join(' ');
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                >
+                  {/* Invisible fat transparent stroke for effortless pointer hitting */}
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={Math.max(26, (el.strokeWidth || 2) + 20)}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
                   <path
                     d={d}
                     fill="none"
@@ -2682,8 +3036,6 @@ export function BoardCanvas({
 
             if (el.type === 'text') {
               const fSize = el.fontSize || 18;
-              // Centered in its live box (horizontally + vertically), so the
-              // letters always sit exactly in the middle of the frame.
               const tBox = textRenderBox(el);
               const tLines = (el.text || '').split('\n');
               const tLineH = Math.ceil(fSize * 1.35);
@@ -2691,31 +3043,48 @@ export function BoardCanvas({
               const tFirstBaseline = tBox.y + (tBox.h - tBlockH) / 2 + fSize * 0.85;
               const tCx = tBox.x + tBox.w / 2;
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
-                  <text
-                    x={tCx}
-                    y={tFirstBaseline}
-                    fill={el.strokeColor || '#1e1e1e'}
-                    fontSize={fSize}
-                    fontFamily="IBM Plex Sans Arabic, sans-serif"
-                    fontWeight="600"
-                    textAnchor="middle"
-                    direction="auto"
-                    className="select-none pointer-events-none"
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
-                  >
-                    {tLines.map((line, i) => (
-                      <tspan key={i} x={tCx} dy={i === 0 ? 0 : tLineH}>
-                        {line || ' '}
-                      </tspan>
-                    ))}
-                  </text>
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!readOnly) setEditingShapeId(el.id);
+                  }}
+                >
+                  {/* Invisible hit rect so clicking anywhere inside the text bounds selects it */}
+                  <rect
+                    x={tBox.x - 6}
+                    y={tBox.y - 4}
+                    width={tBox.w + 12}
+                    height={tBox.h + 8}
+                    fill="transparent"
+                  />
+                  {editingShapeId !== el.id && (
+                    <text
+                      x={tCx}
+                      y={tFirstBaseline}
+                      fill={el.strokeColor || '#1e1e1e'}
+                      fontSize={fSize}
+                      fontFamily={SITE_FONT_STACK}
+                      fontWeight="600"
+                      textAnchor="middle"
+                      direction="auto"
+                      className="select-none cursor-text"
+                    >
+                      {tLines.map((line, i) => (
+                        <tspan key={i} x={tCx} dy={i === 0 ? 0 : tLineH}>
+                          {line || ' '}
+                        </tspan>
+                      ))}
+                    </text>
+                  )}
                 </g>
               );
             }
 
             if (el.type === 'note') {
-              // Sticky-note look: wrapped centered lines + folded corner.
               const nfs = el.fontSize || 15;
               const nPad = 14;
               const nMaxW = Math.max(40, el.width - nPad * 2);
@@ -2729,7 +3098,16 @@ export function BoardCanvas({
               const nFx = el.x + el.width;
               const nFy = el.y + el.height;
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!readOnly) setEditingShapeId(el.id);
+                  }}
+                >
                   <rect
                     x={el.x}
                     y={el.y}
@@ -2741,7 +3119,6 @@ export function BoardCanvas({
                     stroke={el.strokeColor || '#e0c030'}
                     strokeWidth={1}
                     className="filter drop-shadow-md"
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
                   />
                   {/* Folded sticky corner (bottom-end) */}
                   <polygon
@@ -2754,31 +3131,37 @@ export function BoardCanvas({
                     stroke="rgba(0,0,0,0.18)"
                     strokeWidth={1}
                   />
-                  <text
-                    x={nCx}
-                    y={nFirstBaseline}
-                    fill="#2b2b2b"
-                    fontSize={nfs}
-                    fontFamily="IBM Plex Sans Arabic, sans-serif"
-                    fontWeight="500"
-                    textAnchor="middle"
-                    direction="auto"
-                    className="select-none pointer-events-none"
-                    onDoubleClick={() => !readOnly && setEditingShapeId(el.id)}
-                  >
-                    {nShown.map((line, i) => (
-                      <tspan key={i} x={nCx} dy={i === 0 ? 0 : nLineH}>
-                        {line || ' '}
-                      </tspan>
-                    ))}
-                  </text>
+                  {editingShapeId !== el.id && (
+                    <text
+                      x={nCx}
+                      y={nFirstBaseline}
+                      fill="#2b2b2b"
+                      fontSize={nfs}
+                      fontFamily={SITE_FONT_STACK}
+                      fontWeight="500"
+                      textAnchor="middle"
+                      direction="auto"
+                      className="select-none cursor-text"
+                    >
+                      {nShown.map((line, i) => (
+                        <tspan key={i} x={nCx} dy={i === 0 ? 0 : nLineH}>
+                          {line || ' '}
+                        </tspan>
+                      ))}
+                    </text>
+                  )}
                 </g>
               );
             }
 
             if (el.type === 'image' && el.imageData) {
               return (
-                <g key={el.id} className="pointer-events-auto cursor-pointer">
+                <g
+                  key={el.id}
+                  transform={rotTransform}
+                  className="pointer-events-auto cursor-pointer"
+                  onMouseDown={(e) => onShapeMouseDown(e, el)}
+                >
                   <image
                     href={el.imageData}
                     x={el.x}
@@ -2864,12 +3247,17 @@ export function BoardCanvas({
             </g>
           )}
 
-          {/* Selected Shape Bounding Box & 4 Resize Handles */}
+          {/* Selected Shape Bounding Box & 4 Resize Handles & Rotation Handle */}
           {selectedElement && !readOnly && (
             (() => {
               const box = displayBox(selectedElement);
+              const rot = selectedElement.rotation || 0;
+              const cx = box.x + box.w / 2;
+              const cy = box.y + box.h / 2;
+              const rotTransform = rot ? `rotate(${rot} ${cx} ${cy})` : undefined;
+              const stemY = box.y - 24;
               return (
-            <g className="pointer-events-auto">
+            <g className="pointer-events-auto" transform={rotTransform}>
               <rect
                 x={box.x - 4}
                 y={box.y - 4}
@@ -2880,6 +3268,28 @@ export function BoardCanvas({
                 strokeWidth={1.5}
                 strokeDasharray="4 4"
               />
+              {/* Rotation Handle: stem line + grab circle */}
+              <line
+                x1={cx}
+                y1={box.y - 4}
+                x2={cx}
+                y2={stemY}
+                stroke="#5e54d8"
+                strokeWidth={1.5}
+              />
+              <circle
+                cx={cx}
+                cy={stemY}
+                r={6.5}
+                fill="#ffffff"
+                stroke="#5e54d8"
+                strokeWidth={1.5}
+                className="cursor-grab active:cursor-grabbing hover:scale-125 transition-transform"
+                onMouseDown={(e) => startRotatingShape(e, selectedElement)}
+                onPointerDown={(e) => startRotatingShape(e, selectedElement)}
+              >
+                <title>{isArabic ? 'اسحب للتدوير الحر (Shift للمحاذاة بـ 15°)' : 'Drag to rotate freely (Shift to snap 15°)'}</title>
+              </circle>
               {[
                 { id: 'nw', x: box.x - 8, y: box.y - 8 },
                 { id: 'ne', x: box.x + box.w, y: box.y - 8 },
@@ -2964,18 +3374,24 @@ export function BoardCanvas({
           const isTextType = el.type === 'text';
 
           const commitTextEdit = (val: string) => {
-            const dims = isTextType ? estimateTextBounds(val, el.fontSize || 18) : null;
-            pushHistory(
-              elements.map((item) =>
-                item.id === editingShapeId
-                  ? {
-                      ...item,
-                      text: val,
-                      ...(dims ? { width: dims.width, height: dims.height } : {}),
-                    }
-                  : item
-              )
-            );
+            const trimmed = val.trim();
+            if (isTextType && !trimmed) {
+              pushHistory(elements.filter((item) => item.id !== editingShapeId));
+              setSelectedShapeId(null);
+            } else {
+              const dims = isTextType ? estimateTextBounds(val, el.fontSize || 18) : null;
+              pushHistory(
+                elements.map((item) =>
+                  item.id === editingShapeId
+                    ? {
+                        ...item,
+                        text: val,
+                        ...(dims ? { width: dims.width, height: dims.height } : {}),
+                      }
+                    : item
+                )
+              );
+            }
             setEditingShapeId(null);
           };
 

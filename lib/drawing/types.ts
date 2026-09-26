@@ -39,8 +39,16 @@ export interface DrawingElement {
   strokeStyle?: DrawingStrokeStyle;
   text?: string;
   fontSize?: number;
+  /** Independent text color inside the shape (falls back to strokeColor). */
+  textColor?: string;
+  /** Alignment of text inside the shape ('left' | 'center' | 'right'). Defaults to 'center'. */
+  textAlign?: 'left' | 'center' | 'right';
+  /** CSS font stack for text-bearing elements (rectangle/note/ellipse/diamond/text). Optional — falls back to the site font. */
+  fontFamily?: string;
   /** Exact path for arrow/line/freedraw (canvas coordinates). */
   points?: DrawingPoint[];
+  /** Rotation angle in degrees (0-360). */
+  rotation?: number;
 }
 
 export type DrawingTool =

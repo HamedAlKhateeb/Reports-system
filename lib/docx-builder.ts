@@ -39,6 +39,7 @@ import { buildMindTrees, mindTreesToMarkdown } from './mindmap';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { filterUnplacedImages, fitImageBox } from './images-appendix';
 import { evaluateFormula, formatCellDisplay } from './grid/formula-parser';
+import { docxPrimaryFont, sanitizeFontStack } from './fonts';
 
 async function resolveImageBuffer(downloadUrl?: string): Promise<Buffer | null> {
   if (!downloadUrl) return null;
@@ -81,19 +82,66 @@ export async function buildDocxDocument(
   const lang = isAr ? 'ar' : 'en';
   const alignment = isAr ? AlignmentType.RIGHT : AlignmentType.LEFT;
   const theme = THEME_HEX_MAP[report.themeColor || 'olive'] || THEME_HEX_MAP.olive;
+  const defaultReportFont = report.fontFamily ? docxPrimaryFont(report.fontFamily, '') : (isAr ? 'Arial' : 'Calibri');
 
   function makeRun(text: string, options: any = {}) {
+    const { fontName, ...rest } = options || {};
+    const resolvedFont = fontName || defaultReportFont || (isAr ? 'Arial' : 'Calibri');
     return new TextRun({
       text,
       font: {
-        ascii: isAr ? 'Arial' : 'Calibri',
-        hAnsi: isAr ? 'Arial' : 'Calibri',
-        cs: isAr ? 'Arial' : 'Calibri',
+        ascii: resolvedFont,
+        hAnsi: resolvedFont,
+        cs: resolvedFont,
       },
       language: isAr ? { bidirectional: 'ar-SA' } : undefined,
       rightToLeft: isAr,
-      ...options,
+      ...rest,
     });
+  }
+
+  function runsForParagraph(node: any, baseOpts: any = {}): any[] {
+    const result: any[] = [];
+    const visit = (nodes: any[]) => {
+      for (const n of nodes || []) {
+        if (!n || typeof n !== 'object') continue;
+        if (n.type === 'text' && typeof n.text === 'string' && n.text) {
+          const marks = Array.isArray(n.marks) ? n.marks : [];
+          const isBold = marks.some((m: any) => m?.type === 'bold');
+          const isItalic = marks.some((m: any) => m?.type === 'italic');
+          const isUnderline = marks.some((m: any) => m?.type === 'underline');
+          const isStrike = marks.some((m: any) => m?.type === 'strike');
+          const fontMark = marks.find(
+            (m: any) =>
+              (m?.type === 'fontFamily' && (m.attrs?.family || m.attrs?.fontFamily)) ||
+              (m?.type === 'textStyle' && (m.attrs?.fontFamily || m.attrs?.font))
+          );
+          const rawFont = fontMark?.attrs?.family || fontMark?.attrs?.fontFamily || fontMark?.attrs?.font;
+          const stack = sanitizeFontStack(rawFont);
+          const family = stack ? docxPrimaryFont(stack, '') : '';
+          const colorMark = marks.find((m: any) => m?.type === 'textStyle' && m.attrs?.color);
+          const color = colorMark?.attrs?.color ? String(colorMark.attrs.color).replace('#', '') : undefined;
+
+          result.push(
+            makeRun(n.text, {
+              ...baseOpts,
+              bold: isBold || baseOpts.bold,
+              italics: isItalic || baseOpts.italics,
+              underline: isUnderline || baseOpts.underline ? {} : undefined,
+              strike: isStrike || baseOpts.strike,
+              ...(color ? { color } : {}),
+              fontName: family || baseOpts.fontName || defaultReportFont,
+            })
+          );
+        } else if (n.type === 'hardBreak') {
+          result.push(new TextRun({ break: 1 }));
+        } else if (Array.isArray(n.content)) {
+          visit(n.content);
+        }
+      }
+    };
+    visit(node?.content || []);
+    return result;
   }
 
   const children: any[] = [];
@@ -214,20 +262,19 @@ export async function buildDocxDocument(
 
       if (node.type === 'heading') {
         const level = node.attrs?.level || 1;
-        const text = extractNodeText(node);
+        const headingRuns = runsForParagraph(node, {
+          bold: true,
+          size: level === 1 ? 30 : level === 2 ? 24 : 20,
+          color: level === 1 ? '0f766e' : level === 2 ? '1e293b' : '334155',
+          rightToLeft: nodeIsRtl,
+        });
+        if (!headingRuns.length) continue;
         const headingLevel =
           level === 1 ? HeadingLevel.HEADING_1 : level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3;
 
         children.push(
           new Paragraph({
-            children: [
-              makeRun(text, {
-                bold: true,
-                size: level === 1 ? 30 : level === 2 ? 24 : 20,
-                color: level === 1 ? '0f766e' : level === 2 ? '1e293b' : '334155',
-                rightToLeft: nodeIsRtl,
-              }),
-            ],
+            children: headingRuns,
             heading: headingLevel,
             alignment: nodeAlignment,
             bidirectional: nodeIsRtl,
@@ -239,28 +286,54 @@ export async function buildDocxDocument(
         if (text.trim()) {
           children.push(
             new Paragraph({
-              children: [
-                makeRun(text, {
-                  size: 22,
-                  rightToLeft: nodeIsRtl,
-                }),
-              ],
+              children: runsForParagraph(node, {
+                size: 22,
+                rightToLeft: nodeIsRtl,
+              }),
               alignment: nodeAlignment,
               bidirectional: nodeIsRtl,
               spacing: { after: 120 },
             })
           );
         }
+      } else if (node.type === 'codeBlock') {
+        const codeLang = String(node.attrs?.language || '')
+          .replace(/[^a-zA-Z0-9+#.-]/g, '')
+          .slice(0, 24);
+        const codeText = (node.content || [])
+          .map((c: any) => (c?.type === 'text' ? String(c.text || '') : ''))
+          .join('');
+        if (codeLang) {
+          children.push(
+            new Paragraph({
+              children: [makeRun(codeLang, { size: 16, color: '64748b', italics: true })],
+              alignment: AlignmentType.LEFT,
+              spacing: { after: 40 },
+            })
+          );
+        }
+        for (const line of codeText.split('\n')) {
+          children.push(
+            new Paragraph({
+              children: [makeRun(line || ' ', { size: 18, fontName: 'Courier New' })],
+              alignment: AlignmentType.LEFT,
+              bidirectional: false,
+              shading: { fill: 'F1F5F9', type: ShadingType.CLEAR, color: 'auto' },
+              spacing: { after: 0, before: 0 },
+            })
+          );
+        }
+        children.push(new Paragraph({ text: '', spacing: { after: 120 } }));
       } else if (node.type === 'orderedList') {
         const items = node.content || [];
         items.forEach((item: any, idx: number) => {
-          const text = extractNodeText(item);
           children.push(
             new Paragraph({
               children: [
-                makeRun(`${idx + 1}.  ${text}`, {
+                makeRun(`${idx + 1}.  `, {
                   size: 22,
                 }),
+                ...runsForParagraph(item, { size: 22 }),
               ],
               alignment,
               bidirectional: isAr,
@@ -270,13 +343,13 @@ export async function buildDocxDocument(
         });
       } else if (node.type === 'bulletList') {
         for (const item of node.content || []) {
-          const text = extractNodeText(item);
           children.push(
             new Paragraph({
               children: [
-                makeRun(`•  ${text}`, {
+                makeRun('•  ', {
                   size: 22,
                 }),
+                ...runsForParagraph(item, { size: 22 }),
               ],
               alignment,
               bidirectional: isAr,
@@ -293,9 +366,8 @@ export async function buildDocxDocument(
             const isHeader = rIdx === 0;
             const cells = rowNode.content || [];
 
-            const docxCells = cells.map((cellNode: any) => {
-              const cellText = extractNodeText(cellNode);
-              const lower = cellText.toLowerCase();
+              const docxCells = cells.map((cellNode: any) => {
+                const lower = extractNodeText(cellNode).toLowerCase();
 
               // Check if cell is severity to apply color highlighting
               let cellBg = isHeader ? theme.primary : 'ffffff';
@@ -349,13 +421,11 @@ export async function buildDocxDocument(
                 margins: { top: 120, bottom: 120, left: 140, right: 140 },
                 children: [
                   new Paragraph({
-                    children: [
-                      makeRun(cellText, {
-                        color: textColor,
-                        bold: isBold,
-                        size: 20,
-                      }),
-                    ],
+                    children: runsForParagraph(cellNode, {
+                      color: textColor,
+                      bold: isBold,
+                      size: 20,
+                    }),
                     alignment: isHeader ? AlignmentType.CENTER : alignment,
                     bidirectional: isAr,
                   }),
@@ -491,15 +561,18 @@ export async function buildDocxDocument(
                     margins: { top: 100, bottom: 100, left: 120, right: 120 },
                     children: [
                       new Paragraph({
-                        children: [
-                          makeRun(cellVal, {
-                            color: '000000',
-                            size: 20,
-                            bold: !!cellFormat?.bold,
-                            italics: !!cellFormat?.italic,
-                            underline: cellFormat?.underline ? {} : undefined,
-                          }),
-                        ],
+                      children: [
+                        makeRun(cellVal, {
+                          color: '000000',
+                          size: 20,
+                          bold: !!cellFormat?.bold,
+                          italics: !!cellFormat?.italic,
+                          underline: cellFormat?.underline ? {} : undefined,
+                          ...(cellFormat?.fontFamily
+                            ? { fontName: docxPrimaryFont(cellFormat.fontFamily) }
+                            : {}),
+                        }),
+                      ],
                         alignment: docxAlign,
                         bidirectional: isAr,
                       }),

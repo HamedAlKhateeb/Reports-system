@@ -12,6 +12,7 @@
  * Measurements come from the live DOM (exact node boxes), converted to
  * flow coordinates by the caller via screenToFlowPosition.
  */
+import { CANVAS_FONT_STACK, ensureDocumentFontsLoaded } from './fonts';
 
 export interface MeasuredMindNode {
   id: string;
@@ -53,7 +54,7 @@ const TEXT_PAINT: Record<string, string> = {
 };
 
 const FONT_PX: Record<string, number> = { sm: 11, md: 13, lg: 15 };
-const FONT_STACK = '"IBM Plex Sans Arabic","Noto Sans Arabic",Tahoma,"Segoe UI",sans-serif';
+const FONT_STACK = CANVAS_FONT_STACK;
 const AR_RE = /[\u0600-\u06FF]/;
 
 /** Snapshot of one mind-map: embeddable PNG data URL + aspect for DOCX sizing. */
@@ -154,6 +155,9 @@ export async function renderMindmapPng(
   });
   const valid = sized.filter((n) => n && n.w > 0 && n.h > 0 && Number.isFinite(n.x) && Number.isFinite(n.y));
   if (!valid.length) throw new Error('empty map');
+
+  // Paint with the real Google fonts, not a silent system-font fallback.
+  await ensureDocumentFontsLoaded();
 
   const PAD = 48;
   const SCALE = 2;

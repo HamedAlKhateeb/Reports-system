@@ -46,6 +46,7 @@ export function WidgetRenderer({
 
   return (
     <div
+      dir={isArabic ? 'rtl' : 'ltr'}
       style={{
         transform: `translate(${widget.x}px, ${widget.y}px)`,
         width: `${widget.width}px`,

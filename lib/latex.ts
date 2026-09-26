@@ -21,23 +21,28 @@ export interface LatexSegment {
  * Split plain text into text/math segments.
  * - `$...$` requires non-empty content, no newlines, and an even pairing.
  * - `$$...$$` (display math) is treated as inline math (single-line reports).
- * - `\(`...`\)` is supported as well.
+ * - `\(`...`\)` and `\[`...`\]` are supported as well.
+ * - Raw pure LaTeX math expressions (e.g. `\alpha \in \left(\frac{1}{2},1\right]`) are recognized automatically.
  * - Escaped `\$` stays literal.
  */
 export function splitTextWithLatex(input: string): LatexSegment[] {
   if (!input || typeof input !== 'string') return [{ type: 'text', value: input || '' }];
+  const trimmed = input.trim();
+  if (isPureLatex(trimmed)) {
+    return [{ type: 'math', value: cleanLatex(trimmed) }];
+  }
   const out: LatexSegment[] = [];
   // Protect escaped dollars
   const ESC = '\u0000ESC_DOLLAR\u0000';
   let src = input.replace(/\\\$/g, ESC);
-  const re = /(\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\((.+?)\\\))/g;
+  const re = /(\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\\\((.+?)\\\)|\\\[([\s\S]+?)\\\])/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src)) !== null) {
     if (m.index > last) {
       out.push({ type: 'text', value: src.slice(last, m.index).replaceAll(ESC, '$') });
     }
-    const latex = (m[2] ?? m[3] ?? m[4] ?? '').trim();
+    const latex = cleanLatex((m[2] ?? m[3] ?? m[4] ?? m[5] ?? '').trim());
     if (latex) out.push({ type: 'math', value: latex });
     else out.push({ type: 'text', value: m[0].replaceAll(ESC, '$') });
     last = m.index + m[0].length;
@@ -47,9 +52,79 @@ export function splitTextWithLatex(input: string): LatexSegment[] {
   return out;
 }
 
+/**
+ * Strips outer delimiters ($...$, $$...$$, \(...\), \[...\]) from a LaTeX math string,
+ * leaving pure KaTeX-renderable math code.
+ */
+export function cleanLatex(latex: string): string {
+  if (!latex || typeof latex !== 'string') return '';
+  let src = latex.trim();
+  if (src.startsWith('$$') && src.endsWith('$$') && src.length > 4) {
+    src = src.slice(2, -2).trim();
+  } else if (src.startsWith('$') && src.endsWith('$') && src.length > 2) {
+    src = src.slice(1, -1).trim();
+  } else if (src.startsWith('\\(') && src.endsWith('\\)') && src.length > 4) {
+    src = src.slice(2, -2).trim();
+  } else if (src.startsWith('\\[') && src.endsWith('\\]') && src.length > 4) {
+    src = src.slice(2, -2).trim();
+  }
+  return src;
+}
+
+/**
+ * Detects whether a string is a LaTeX mathematical expression.
+ * Handles both delimited ($...$, $$...$$, \(...\), \[...\])
+ * and un-delimited mathematical expressions (e.g. `\alpha \in \left(\frac{1}{2},1\right]`, `\frac{a}{b}`, etc.).
+ */
+export function isPureLatex(str: string): boolean {
+  if (!str || typeof str !== 'string') return false;
+  const trimmed = str.trim();
+  if (!trimmed) return false;
+
+  // 1. Single Delimited math: $...$, $$...$$, \(...\), \[...\]
+  if (trimmed.startsWith('$$') && trimmed.endsWith('$$') && trimmed.length > 4) {
+    if (!trimmed.slice(2, -2).includes('$$')) return true;
+  }
+  if (trimmed.startsWith('$') && trimmed.endsWith('$') && trimmed.length > 2) {
+    if (!trimmed.slice(1, -1).includes('$')) return true;
+  }
+  if (trimmed.startsWith('\\(') && trimmed.endsWith('\\)') && trimmed.length > 4) {
+    if (!trimmed.slice(2, -2).includes('\\(') && !trimmed.slice(2, -2).includes('\\)')) return true;
+  }
+  if (trimmed.startsWith('\\[') && trimmed.endsWith('\\]') && trimmed.length > 4) {
+    if (!trimmed.slice(2, -2).includes('\\[') && !trimmed.slice(2, -2).includes('\\]')) return true;
+  }
+
+  // 2. Reject obvious file paths (e.g. C:\Users\... or /path/to/...)
+  if (/^[a-zA-Z]:\\/.test(trimmed)) return false;
+
+  // 3. Must contain at least one LaTeX command
+  const hasLatexCommand = /\\[a-zA-Z]+/.test(trimmed);
+  if (!hasLatexCommand) return false;
+
+  // 4. Key mathematical LaTeX commands / symbols
+  const mathMacroPattern =
+    /\\(?:alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|frac|dfrac|tfrac|cfrac|sqrt|left|right|sum|prod|int|iint|iiint|oint|coprod|lim|liminf|limsup|in|notin|subset|supset|subseteq|supseteq|cap|cup|setminus|times|div|pm|mp|neq|leq|geq|le|ge|ne|approx|equiv|sim|simeq|cong|propto|forall|exists|nexists|infty|partial|nabla|to|rightarrow|leftarrow|Rightarrow|Leftarrow|iff|implies|mapsto|cdot|cdots|ldots|ddots|vdots|mathbf|mathrm|mathit|mathsf|mathtt|mathbb|mathcal|mathscr|mathfrak|begin|end|over|choose|binom|bmatrix|pmatrix|vmatrix|cases|text|operatorname|sin|cos|tan|cot|sec|csc|log|ln|exp|det|dim|ker|deg)\b/;
+
+  if (!mathMacroPattern.test(trimmed)) return false;
+
+  // 5. Must NOT contain embedded delimited math surrounded by text
+  if (/\\\([^\)]*?\\\)|\$[^$]*?\$|\\\[[\s\S]*?\\\]/.test(trimmed)) {
+    return false;
+  }
+
+  // 6. Verify KaTeX can parse it strictly
+  try {
+    katex.renderToString(trimmed, { throwOnError: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Render a single LaTeX fragment to KaTeX HTML (never throws, never empty). */
 export function renderLatexToHtml(latex: string): string {
-  const src = (latex || '').trim();
+  const src = cleanLatex(latex);
   if (!src) return '';
   try {
     return katex.renderToString(src, {

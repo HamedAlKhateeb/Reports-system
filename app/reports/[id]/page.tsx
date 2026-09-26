@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
-import { ArrowLeft, ArrowRight, FileCode, FileText, FileDown, Share2, Archive, Check, Folder, BookmarkPlus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, FileCode, FileText, FileDown, Share2, Archive, Check, Folder, BookmarkPlus, Building2, ShieldCheck, RotateCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import {
   getReportById,
   updateReport,
@@ -21,6 +21,7 @@ import { MoveToFolderModal } from '@/components/reports/MoveToFolderModal';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import type { AppLanguage } from '@/lib/i18n/dictionary';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
+import { EDITOR_FONTS, DEFAULT_FONT_STACK, matchEditorFont } from '@/lib/fonts';
 import { Button } from '@/components/ui/button';
 import { PageLoading } from '@/components/ui/loading';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -59,9 +60,16 @@ export default function ReportEditorPage() {
   const [title, setTitle] = useState('');
   const [systemUnderReview, setSystemUnderReview] = useState('');
   const [author, setAuthor] = useState('');
+  const [organization, setOrganization] = useState('');
+  const [department, setDepartment] = useState('');
+  const [authorTitle, setAuthorTitle] = useState('');
+  const [reviewerName, setReviewerName] = useState('');
+  const [reviewerTitle, setReviewerTitle] = useState('');
+  const [showOrgDetails, setShowOrgDetails] = useState(false);
   const [themeColor, setThemeColor] = useState('olive');
   const [backgroundColor, setBackgroundColor] = useState('white');
   const [reportLanguage, setReportLanguage] = useState<AppLanguage>('ar');
+  const [fontFamily, setFontFamily] = useState<string>(DEFAULT_FONT_STACK);
 
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
@@ -103,9 +111,34 @@ export default function ReportEditorPage() {
       setTitle(rep.title || '');
       setAuthor(rep.author || '');
       setSystemUnderReview(rep.systemUnderReview || '');
+      setOrganization(rep.organization || '');
+      setDepartment(rep.department || '');
+      setAuthorTitle(rep.authorTitle || '');
+      setReviewerName(rep.reviewerName || '');
+      setReviewerTitle(rep.reviewerTitle || '');
       setThemeColor(rep.themeColor || 'olive');
       setBackgroundColor(rep.backgroundColor || 'white');
       setReportLanguage(rep.language || 'ar');
+      if (rep.fontFamily) setFontFamily(rep.fontFamily);
+
+      const hasOrg = Boolean(rep.organization || rep.department || rep.authorTitle || rep.reviewerName || rep.reviewerTitle);
+      if (hasOrg) {
+        setShowOrgDetails(true);
+      } else {
+        try {
+          const { getOrganizationDefaults } = await import('@/lib/db-intelligence');
+          const defs = await getOrganizationDefaults(user.uid);
+          if (defs && defs.autoApplyToNewReports !== false) {
+            if (defs.organization) setOrganization(defs.organization);
+            if (defs.department) setDepartment(defs.department);
+            if (defs.author && !rep.author) setAuthor(defs.author);
+            if (defs.authorTitle) setAuthorTitle(defs.authorTitle);
+            if (defs.reviewerName) setReviewerName(defs.reviewerName);
+            if (defs.reviewerTitle) setReviewerTitle(defs.reviewerTitle);
+            if (defs.organization || defs.reviewerName) setShowOrgDetails(true);
+          }
+        } catch {}
+      }
     } catch (err) { console.error(err); }
     finally { setLoading(false); }
   }, [reportId, router, user, authLoading]);
@@ -131,9 +164,67 @@ export default function ReportEditorPage() {
     setHasUnsaved(true);
     if (draftTimer.current) clearTimeout(draftTimer.current);
     draftTimer.current = setTimeout(() => {
-      void persist({ title, author, systemUnderReview, themeColor, backgroundColor, language: reportLanguage, contentJson: latestContentRef.current });
+      void persist({
+        title,
+        author,
+        systemUnderReview,
+        organization,
+        department,
+        authorTitle,
+        reviewerName,
+        reviewerTitle,
+        themeColor,
+        backgroundColor,
+        language: reportLanguage,
+        fontFamily,
+        contentJson: latestContentRef.current,
+      });
     }, 1800);
-  }, [persist, title, author, systemUnderReview, themeColor, backgroundColor, reportLanguage]);
+  }, [persist, title, author, systemUnderReview, organization, department, authorTitle, reviewerName, reviewerTitle, themeColor, backgroundColor, reportLanguage, fontFamily]);
+
+  const handleApplyOrgDefaults = async () => {
+    if (!user) return;
+    try {
+      const { getOrganizationDefaults } = await import('@/lib/db-intelligence');
+      const defs = await getOrganizationDefaults(user.uid);
+      if (!defs) {
+        toast.error(lang === 'ar' ? 'لم يتم العثور على إعدادات افتراضية للمؤسسة' : 'No organization defaults found');
+        return;
+      }
+      const newOrg = defs.organization || '';
+      const newDept = defs.department || '';
+      const newAuthor = defs.author || author;
+      const newAuthorTitle = defs.authorTitle || '';
+      const newReviewerName = defs.reviewerName || '';
+      const newReviewerTitle = defs.reviewerTitle || '';
+
+      setOrganization(newOrg);
+      setDepartment(newDept);
+      setAuthor(newAuthor);
+      setAuthorTitle(newAuthorTitle);
+      setReviewerName(newReviewerName);
+      setReviewerTitle(newReviewerTitle);
+      setShowOrgDetails(true);
+      toast.success(lang === 'ar' ? 'تم استيراد وتطبيق بيانات المؤسسة والاعتماد الافتراضية' : 'Organization defaults applied');
+      void persist({
+        organization: newOrg,
+        department: newDept,
+        author: newAuthor,
+        authorTitle: newAuthorTitle,
+        reviewerName: newReviewerName,
+        reviewerTitle: newReviewerTitle,
+        title,
+        systemUnderReview,
+        themeColor,
+        backgroundColor,
+        language: reportLanguage,
+        fontFamily,
+        contentJson: latestContentRef.current,
+      });
+    } catch (err) {
+      console.error('Failed to import defaults:', err);
+    }
+  };
 
   const handleContentChange = useCallback((contentJson: any) => { latestContentRef.current = contentJson; }, []);
   const handleEditorSave = useCallback(async (contentJson: any) => {
@@ -155,8 +246,22 @@ export default function ReportEditorPage() {
 
   const handleSaveNow = useCallback(async () => {
     if (draftTimer.current) { clearTimeout(draftTimer.current); draftTimer.current = null; }
-    await persist({ title, author, systemUnderReview, themeColor, backgroundColor, language: reportLanguage, contentJson: latestContentRef.current });
-  }, [persist, title, author, systemUnderReview, themeColor, backgroundColor, reportLanguage]);
+    await persist({
+      title,
+      author,
+      systemUnderReview,
+      organization,
+      department,
+      authorTitle,
+      reviewerName,
+      reviewerTitle,
+      themeColor,
+      backgroundColor,
+      language: reportLanguage,
+      fontFamily,
+      contentJson: latestContentRef.current,
+    });
+  }, [persist, title, author, systemUnderReview, organization, department, authorTitle, reviewerName, reviewerTitle, themeColor, backgroundColor, reportLanguage, fontFamily]);
 
   useEffect(() => {
     const onUnload = (e: BeforeUnloadEvent) => {
@@ -183,8 +288,20 @@ export default function ReportEditorPage() {
         drawingSnaps = await snapshotDrawings(contentJsonToExport);
       } catch { drawingSnaps = {}; }
       const current: ReportItem = {
-        ...report, title, author, systemUnderReview, themeColor, backgroundColor,
-        language: reportLanguage, contentJson: contentJsonToExport,
+        ...report,
+        title,
+        author,
+        systemUnderReview,
+        organization,
+        department,
+        authorTitle,
+        reviewerName,
+        reviewerTitle,
+        themeColor,
+        backgroundColor,
+        language: reportLanguage,
+        fontFamily,
+        contentJson: contentJsonToExport,
       };
       if (format === 'pdf') {
         printReportAsPdf(current, currentImgs, [], mindmapSnaps, drawingSnaps as any);
@@ -279,7 +396,26 @@ export default function ReportEditorPage() {
       </div>
 
       <div className="mb-4 rounded-xl border border-border/70 bg-card/60 p-3.5 backdrop-blur-xs">
-        <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'عنوان التقرير' : 'Report title'}</label>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'عنوان التقرير' : 'Report title'}</label>
+          <div className="flex items-center gap-2">
+            {organization && (
+              <span className="hidden sm:inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                <Building2 className="h-3 w-3" />
+                <span>{organization}</span>
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowOrgDetails((prev) => !prev)}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-primary hover:bg-primary/10 transition-colors"
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>{lang === 'ar' ? 'بيانات المؤسسة والاعتماد' : 'Org & Approval'}</span>
+              {showOrgDetails ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          </div>
+        </div>
         <Input id="report-title-input" value={title} onChange={(e) => { setTitle(e.target.value); scheduleMetaSave(); }} placeholder={lang === 'ar' ? 'عنوان التقرير…' : 'Report title…'} className="h-10 text-sm font-bold" />
         <div className="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3">
           <div>
@@ -287,31 +423,110 @@ export default function ReportEditorPage() {
             <Input value={systemUnderReview} onChange={(e) => { setSystemUnderReview(e.target.value); scheduleMetaSave(); }} className="h-9 text-xs" />
           </div>
           <div>
-            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'الكاتب' : 'Author'}</label>
+            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'الكاتب / المُعِد' : 'Author / Auditor'}</label>
             <Input value={author} onChange={(e) => { setAuthor(e.target.value); scheduleMetaSave(); }} className="h-9 text-xs" />
           </div>
           <div>
-            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'اللغة / المظهر' : 'Language / Theme'}</label>
-            <div className="flex items-center gap-1.5">
-              <select value={reportLanguage} onChange={(e) => { setReportLanguage(e.target.value as AppLanguage); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
+            <label className="mb-1 block text-[11px] font-bold text-muted-foreground">{lang === 'ar' ? 'اللغة / الخط / المظهر' : 'Language / Font / Theme'}</label>
+            <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
+              <select value={reportLanguage} onChange={(e) => { setReportLanguage(e.target.value as AppLanguage); scheduleMetaSave(); }} className="h-9 flex-1 min-w-[75px] rounded-md border border-input bg-background px-2 text-xs font-semibold">
                 <option value="ar">العربية</option>
                 <option value="en">English</option>
               </select>
-              <select value={themeColor} onChange={(e) => { setThemeColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
-                <option value="olive">Olive</option>
-                <option value="blue">Blue</option>
-                <option value="emerald">Emerald</option>
-                <option value="amber">Amber</option>
-                <option value="slate">Slate</option>
+              <select
+                value={matchEditorFont(fontFamily)?.id || 'cairo'}
+                onChange={(e) => {
+                  const found = EDITOR_FONTS.find((f) => f.id === e.target.value);
+                  if (found) {
+                    setFontFamily(found.stack);
+                    scheduleMetaSave();
+                  }
+                }}
+                className="h-9 flex-1 min-w-[100px] rounded-md border border-input bg-background px-2 text-xs font-semibold"
+                title={lang === 'ar' ? 'الخط الأساسي للتقرير' : 'Primary Report Font'}
+              >
+                {EDITOR_FONTS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {lang === 'ar' ? f.labelAr : f.labelEn}
+                  </option>
+                ))}
               </select>
-              <select value={backgroundColor} onChange={(e) => { setBackgroundColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 rounded-md border border-input bg-background px-2 text-xs font-semibold">
-                <option value="white">White</option>
-                <option value="cream">Cream</option>
-                <option value="cool">Cool</option>
+              <select value={themeColor} onChange={(e) => { setThemeColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 min-w-[85px] rounded-md border border-input bg-background px-2 text-xs font-semibold">
+                <option value="olive">{lang === 'ar' ? 'زيتوني (افتراضي)' : 'Olive (Default)'}</option>
+                <option value="blue">{lang === 'ar' ? 'أزرق هادئ' : 'Calm Blue'}</option>
+                <option value="emerald">{lang === 'ar' ? 'زمردي' : 'Emerald'}</option>
+                <option value="amber">{lang === 'ar' ? 'كهرماني' : 'Amber'}</option>
+                <option value="slate">{lang === 'ar' ? 'رمادي داكن' : 'Slate Gray'}</option>
+              </select>
+              <select value={backgroundColor} onChange={(e) => { setBackgroundColor(e.target.value); scheduleMetaSave(); }} className="h-9 flex-1 min-w-[80px] rounded-md border border-input bg-background px-2 text-xs font-semibold">
+                <option value="white">{lang === 'ar' ? 'أبيض ناصع' : 'Pure White'}</option>
+                <option value="cream">{lang === 'ar' ? 'كريمي دافئ' : 'Warm Cream'}</option>
+                <option value="cool">{lang === 'ar' ? 'رمادي بارد' : 'Cool Gray'}</option>
               </select>
             </div>
           </div>
         </div>
+
+        {/* Collapsible Organization & Approval Section */}
+        {showOrgDetails && (
+          <div className="mt-3 pt-3 border-t border-border/70 space-y-2.5 animate-in fade-in-50 duration-200">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-[11px] font-bold text-foreground flex items-center gap-1.5">
+                <Building2 className="h-3.5 w-3.5 text-primary" />
+                <span>{lang === 'ar' ? 'بيانات المؤسسة والتدقيق والاعتماد' : 'Organization & Approval Details'}</span>
+              </span>
+              <button
+                type="button"
+                onClick={handleApplyOrgDefaults}
+                className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold text-primary hover:bg-primary/10 transition-colors"
+                title={lang === 'ar' ? 'استيراد البيانات الافتراضية من شاشة الإعدادات' : 'Import default values from settings'}
+              >
+                <RotateCcw className="h-3 w-3" />
+                <span>{lang === 'ar' ? 'استيراد من بيانات المؤسسة الافتراضية' : 'Inherit from Defaults'}</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-muted-foreground">{lang === 'ar' ? 'اسم المؤسسة / الشركة' : 'Organization'}</label>
+                <Input
+                  value={organization}
+                  onChange={(e) => { setOrganization(e.target.value); scheduleMetaSave(); }}
+                  placeholder={lang === 'ar' ? 'مثال: شركة التطوير والتقنية' : 'e.g. Acme Corp'}
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-muted-foreground">{lang === 'ar' ? 'القسم / الإدارة' : 'Department'}</label>
+                <Input
+                  value={department}
+                  onChange={(e) => { setDepartment(e.target.value); scheduleMetaSave(); }}
+                  placeholder={lang === 'ar' ? 'مثال: إدارة ضمان الجودة' : 'e.g. QA Team'}
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-muted-foreground">{lang === 'ar' ? 'المسمى الوظيفي للمُعد' : 'Author Title'}</label>
+                <Input
+                  value={authorTitle}
+                  onChange={(e) => { setAuthorTitle(e.target.value); scheduleMetaSave(); }}
+                  placeholder={lang === 'ar' ? 'مثال: مدقق جودة برمجيات' : 'e.g. QA Lead'}
+                  className="h-8 text-xs"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold text-muted-foreground">{lang === 'ar' ? 'المراجع / المعتمد الافتراضي' : 'Reviewer / Approver'}</label>
+                <Input
+                  value={reviewerName}
+                  onChange={(e) => { setReviewerName(e.target.value); scheduleMetaSave(); }}
+                  placeholder={lang === 'ar' ? 'مثال: م. خالد المنصور' : 'e.g. Jane Smith'}
+                  className="h-8 text-xs"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <p className="mt-2 text-[11px] text-muted-foreground">{lang === 'ar' ? 'يفتح التقرير على المحرر مباشرة — النصوص والجداول الذكية والرسوم والخرائط الذهنية في مساحة واحدة. من أي جدول ذكي يمكنك إرسال نسخة للوحة التتبع بزر «للتتبع».' : 'The report opens directly in the unified editor — text, smart tables, drawings and mind maps in one place. From any smart table press “Track” to send a copy to the tracking board.'}</p>
       </div>
 
@@ -321,6 +536,7 @@ export default function ReportEditorPage() {
           reportId={reportId}
           initialContent={report.contentJson}
           reportLanguage={reportLanguage}
+          reportFontFamily={fontFamily}
           onSave={handleEditorSave}
           onContentChange={handleContentChange}
           onSaveImmediately={handleSaveNow}

@@ -23,15 +23,11 @@ export const DEFAULT_FONT_SIZE = '16px';
  */
 export function resolveActiveFontSize(editor: any): number {
   try {
-    const sizeAttr = editor?.getAttributes?.('fontSize')?.size;
-    if (sizeAttr) {
-      const p = parseInt(sizeAttr, 10);
-      if (!isNaN(p) && p > 0) return p;
-    }
-    // Collapsed cursor with a pending (stored) mark: getAttributes misses
-    // it, which made repeated stepper clicks idempotent (16→18→18…).
+    if (!editor || !editor.state) return 16;
+
+    // 1. Pending stored mark on collapsed cursor (user just clicked stepper/shortcut)
     try {
-      const stored = editor?.state?.storedMarks as Array<{ type?: { name?: string }; attrs?: any }> | null | undefined;
+      const stored = editor.state.storedMarks as Array<{ type?: { name?: string }; attrs?: any }> | null | undefined;
       const hit = Array.isArray(stored) ? stored.find((m) => m?.type?.name === 'fontSize') : undefined;
       const s = hit?.attrs?.size;
       if (s) {
@@ -39,14 +35,31 @@ export function resolveActiveFontSize(editor: any): number {
         if (!isNaN(p) && p > 0) return p;
       }
     } catch {}
-    if (editor?.isActive?.('heading', { level: 1 })) return 30;
-    if (editor?.isActive?.('heading', { level: 2 })) return 24;
-    if (editor?.isActive?.('heading', { level: 3 })) return 20;
-    const remembered = (editor?.storage as any)?.fontSize?.current;
-    if (remembered) {
-      const p = parseInt(String(remembered), 10);
+
+    // 2. Active selection mark via getAttributes
+    const sizeAttr = editor.getAttributes?.('fontSize')?.size;
+    if (sizeAttr) {
+      const p = parseInt(sizeAttr, 10);
       if (!isNaN(p) && p > 0) return p;
     }
+
+    // 3. Mark at collapsed cursor position
+    try {
+      const { $from, empty } = editor.state.selection;
+      if (empty && $from) {
+        const marks = $from.marks();
+        const m = marks?.find((x: any) => x?.type?.name === 'fontSize');
+        if (m?.attrs?.size) {
+          const p = parseInt(String(m.attrs.size), 10);
+          if (!isNaN(p) && p > 0) return p;
+        }
+      }
+    } catch {}
+
+    // 4. Headings
+    if (editor.isActive?.('heading', { level: 1 })) return 30;
+    if (editor.isActive?.('heading', { level: 2 })) return 24;
+    if (editor.isActive?.('heading', { level: 3 })) return 20;
   } catch {}
   return 16;
 }

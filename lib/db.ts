@@ -711,6 +711,27 @@ export async function createReport(
   }
   const now = new Date().toISOString();
 
+  // Auto-apply organization and reviewer defaults if configured
+  let inheritedOrgData: Partial<ReportItem> = {};
+  try {
+    const { getOrganizationDefaults } = await import('./db-intelligence');
+    const orgDefs = await getOrganizationDefaults(reportData.ownerUid);
+    if (orgDefs && orgDefs.autoApplyToNewReports !== false) {
+      const isDefaultAuthor = !reportData.author || reportData.author.includes('@') || (reportData.ownerUid && reportData.author === reportData.ownerUid);
+      inheritedOrgData = {
+        organization: reportData.organization || orgDefs.organization || undefined,
+        department: reportData.department || orgDefs.department || undefined,
+        author: (isDefaultAuthor && orgDefs.author) ? orgDefs.author : (reportData.author || orgDefs.author || undefined),
+        authorTitle: reportData.authorTitle || orgDefs.authorTitle || undefined,
+        reviewerName: reportData.reviewerName || orgDefs.reviewerName || undefined,
+        reviewerTitle: reportData.reviewerTitle || orgDefs.reviewerTitle || undefined,
+        email: reportData.email || orgDefs.email || undefined,
+        phone: reportData.phone || orgDefs.phone || undefined,
+        website: reportData.website || orgDefs.website || undefined,
+      };
+    }
+  } catch {}
+
   // Strip undefined values so Firestore addDoc never throws an invalid argument error
   const sanitizedData: any = {
     ...reportData,
@@ -719,6 +740,12 @@ export async function createReport(
     createdAt: now,
     updatedAt: now,
   };
+  Object.keys(inheritedOrgData).forEach((k) => {
+    const val = (inheritedOrgData as any)[k];
+    if (val !== undefined && val !== '') {
+      sanitizedData[k] = val;
+    }
+  });
   Object.keys(sanitizedData).forEach((key) => {
     if (sanitizedData[key] === undefined) {
       delete sanitizedData[key];

@@ -31,7 +31,9 @@ import { executeAutofill } from '@/lib/grid/autofill-engine';
 import { getTableById, saveTable } from '@/lib/db-intelligence';
 import type { TableEntity, TableColumnConfig } from '@/lib/types';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
+import { parseMarkdownTableToGrid, parseClipboardToTableGrid } from '@/lib/markdown';
 import { cn } from '@/lib/utils';
+import { EDITOR_FONTS, matchEditorFont, sanitizeFontStack } from '@/lib/fonts';
 import {
   Undo2,
   Redo2,
@@ -76,6 +78,8 @@ export interface CellFmt {
   align?: 'right' | 'center' | 'left';
   textColor?: string;
   bg?: string;
+  /** CSS font stack for the cell (from the font picker). Absent = sheet default. */
+  fontFamily?: string;
 }
 
 export type GridRow = Record<string, any>;
@@ -201,7 +205,11 @@ export function buildTSV(display: Record<string, string>, b: CellRange): string 
   return lines.join('\n');
 }
 
-export function parseTSV(text: string): string[][] {
+export function parseTSV(text: string, html?: string): string[][] {
+  const tableGrid = parseClipboardToTableGrid(text, html);
+  if (tableGrid && tableGrid.length > 0) {
+    return tableGrid.slice(0, SPREADSHEET_CAP.ROWS).map((row) => row.slice(0, SPREADSHEET_CAP.COLS));
+  }
   const clean = String(text || '').replace(/\r\n?/g, '\n').replace(/\n$/, '');
   if (!clean) return [];
   return clean
@@ -490,6 +498,12 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
   const suppressClickEditRef = useRef(false);
   const [formulaRangePreview, setFormulaRangePreview] = useState<CellRange | null>(null);
 
+  // Row and Column drag selection state
+  const isDraggingRowRef = useRef(false);
+  const dragRowStartRef = useRef<number | null>(null);
+  const isDraggingColRef = useRef(false);
+  const dragColStartRef = useRef<number | null>(null);
+
   // Listen for direction change from parent
   useEffect(() => {
     if (propDir && propDir !== direction) {
@@ -501,6 +515,10 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
   useEffect(() => {
     const handleMouseUp = () => {
       isDraggingRef.current = false;
+      isDraggingRowRef.current = false;
+      dragRowStartRef.current = null;
+      isDraggingColRef.current = false;
+      dragColStartRef.current = null;
       setTimeout(() => {
         dragMovedRef.current = false;
       }, 50);
@@ -845,8 +863,7 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
   );
 
   const setColor = useCallback(
-    (type: 'textColor' | 'bg', value: string) => {
-      if (!bounds) return;
+    (type: 'textColor' | 'bg', value: string) => {      if (!bounds) return;
       pushHistory();
       const nextFormats = { ...formats };
       rangeCoords(bounds).forEach((pt) => {
@@ -865,6 +882,39 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
           nextFormats[coord] = {
             ...nextFormats[coord],
             [type]: value,
+          };
+        }
+      });
+      setFormats(nextFormats);
+      stateRef.current.formats = nextFormats;
+      scheduleSave();
+    },
+    [bounds, formats, pushHistory, scheduleSave]
+  );
+
+  // Cell font family (persisted in cell_formats like colors; '' clears it).
+  const setCellFontFamily = useCallback(
+    (stack: string) => {
+      if (!bounds) return;
+      pushHistory();
+      const clean = sanitizeFontStack(stack);
+      const nextFormats = { ...formats };
+      rangeCoords(bounds).forEach((pt) => {
+        const coord = toA1(pt.c, pt.r);
+        if (!clean) {
+          if (nextFormats[coord]) {
+            const copy = { ...nextFormats[coord] };
+            delete copy.fontFamily;
+            if (Object.keys(copy).length === 0) {
+              delete nextFormats[coord];
+            } else {
+              nextFormats[coord] = copy;
+            }
+          }
+        } else {
+          nextFormats[coord] = {
+            ...nextFormats[coord],
+            fontFamily: clean,
           };
         }
       });
@@ -1089,27 +1139,71 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
   );
 
   const pasteAt = useCallback(
-    async (startR: number, startC: number) => {
+    async (startR: number, startC: number, explicitText?: string, explicitHtml?: string) => {
       try {
-        const text = await navigator.clipboard.readText();
-        const grid = parseTSV(text);
+        let text = explicitText;
+        let html = explicitHtml;
+        if (typeof text !== 'string') {
+          try {
+            text = await navigator.clipboard.readText();
+          } catch {}
+        }
+        if (!html && typeof navigator !== 'undefined' && (navigator.clipboard as any)?.read) {
+          try {
+            const items = await (navigator.clipboard as any).read();
+            for (const item of items) {
+              if (item.types && item.types.includes('text/html')) {
+                const blob = await item.getType('text/html');
+                html = await blob.text();
+                break;
+              }
+            }
+          } catch {}
+        }
+        const grid = parseTSV(text || '', html);
         if (grid.length === 0) return;
         pushHistory();
+
+        // 1. AUTO-EXPAND COLUMNS if incoming table needs more columns
+        let nextCols = [...cols];
+        const maxIncomingCols = Math.max(...grid.map((r) => r.length));
+        const neededCols = Math.min(startC + maxIncomingCols, SPREADSHEET_CAP.COLS);
+        if (neededCols > nextCols.length) {
+          const usedIds = new Set(nextCols.map((c) => c.id));
+          while (nextCols.length < neededCols) {
+            let idx = nextCols.length;
+            while (usedIds.has(colIndexToName(idx))) idx++;
+            const newColId = colIndexToName(idx);
+            usedIds.add(newColId);
+            nextCols.push({
+              id: newColId,
+              name: newColId,
+              width: 140,
+            });
+          }
+          setCols(nextCols);
+          stateRef.current.cols = nextCols;
+        }
+
+        // 2. AUTO-EXPAND ROWS if incoming table needs more rows
         const nextRows = rows.map((r) => ({ ...r }));
-        while (nextRows.length < startR + grid.length && nextRows.length < SPREADSHEET_CAP.ROWS) {
+        const neededRows = Math.min(startR + grid.length, SPREADSHEET_CAP.ROWS);
+        while (nextRows.length < neededRows) {
           const blank: GridRow = {};
-          cols.forEach((col) => {
+          nextCols.forEach((col) => {
             blank[col.id] = '';
           });
           nextRows.push(blank);
         }
+
+        // 3. Fill cells across rows and columns
         grid.forEach((rowVals, dr) => {
           const r = startR + dr;
           if (r >= nextRows.length) return;
           rowVals.forEach((val, dc) => {
             const c = startC + dc;
-            if (c >= cols.length) return;
-            const colId = cols[c]?.id;
+            if (c >= nextCols.length) return;
+            const colId = nextCols[c]?.id;
             if (!colId) return;
             if (val.startsWith('=')) {
               try {
@@ -1122,13 +1216,14 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
             }
           });
         });
+
         setRows(nextRows);
         stateRef.current.rows = nextRows;
         scheduleSave();
         setSel({ r: startR, c: startC });
         setAnchor({
           r: Math.min(startR + grid.length - 1, nextRows.length - 1),
-          c: Math.min(startC + (grid[0]?.length || 1) - 1, cols.length - 1),
+          c: Math.min(startC + maxIncomingCols - 1, nextCols.length - 1),
         });
       } catch (e) {
         console.warn('Paste failed', e);
@@ -1874,6 +1969,26 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
           </button>
         </div>
 
+        {/* Cell font family */}
+        <select
+          value={(sel && matchEditorFont(formats[toA1(sel.c, sel.r)]?.fontFamily)?.id) || ''}
+          onChange={(e) => {
+            const f = EDITOR_FONTS.find((x) => x.id === e.target.value);
+            setCellFontFamily(f ? f.stack : '');
+          }}
+          className="h-6 max-w-[92px] rounded border border-border/70 bg-card px-1 text-[11px] text-muted-foreground hover:text-foreground"
+          style={sel && formats[toA1(sel.c, sel.r)]?.fontFamily ? { fontFamily: formats[toA1(sel.c, sel.r)].fontFamily } : undefined}
+          title={isAr ? 'خط الخلايا المحددة' : 'Selected cells font'}
+          aria-label={isAr ? 'نوع خط الخلايا' : 'Cell font family'}
+        >
+          <option value="">{isAr ? 'خط الخلية' : 'Cell font'}</option>
+          {EDITOR_FONTS.map((f) => (
+            <option key={f.id} value={f.id} style={{ fontFamily: f.stack }}>
+              {isAr ? f.labelAr : f.labelEn}
+            </option>
+          ))}
+        </select>
+
         <span className="mx-1 h-4 w-px bg-border/70" />
 
         {/* Merge / Unmerge */}
@@ -1905,73 +2020,146 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
         >
           <thead>
             <tr className="bg-muted/50 border-b border-border text-muted-foreground font-semibold">
-              {/* Row number header corner */}
-              <th className="sticky start-0 z-20 w-10 border-e border-b border-border/70 bg-muted/60 px-1 py-1.5 text-center font-mono text-[10px] text-muted-foreground">
+              {/* Row number header corner (#) */}
+              <th
+                onClick={() => {
+                  if (editingCellRef.current) commitEdit();
+                  containerRef.current?.focus();
+                  setSel({ r: 0, c: 0 });
+                  setAnchor({ r: rows.length - 1, c: cols.length - 1 });
+                }}
+                title={isAr ? 'تحديد كل الجدول' : 'Select all'}
+                className={cn(
+                  "sticky start-0 z-20 w-10 border-e border-b border-border/70 px-1 py-1.5 text-center font-mono text-[10px] cursor-pointer transition-colors select-none",
+                  bounds && bounds.r0 === 0 && bounds.c0 === 0 && bounds.r1 === rows.length - 1 && bounds.c1 === cols.length - 1
+                    ? "bg-primary/25 text-primary font-bold"
+                    : "bg-muted/60 text-muted-foreground hover:bg-muted/90 hover:text-foreground"
+                )}
+              >
                 #
               </th>
-              {cols.map((col, ci) => (
-                <th
-                  key={col.id}
-                  style={{ width: col.width, minWidth: col.width }}
-                  className="relative border-e border-b border-border/70 bg-muted/40 px-2.5 py-1.5 text-center font-mono text-[11px] font-semibold text-muted-foreground select-none group"
-                >
-                  <div className="flex items-center justify-between">
-                    {editingCol === ci ? (
-                      <input
-                        autoFocus
-                        value={colNameDraft}
-                        dir="auto"
-                        onChange={(e) => setColNameDraft(e.target.value)}
-                        onBlur={commitColRename}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitColRename();
-                          else if (e.key === 'Escape') setEditingCol(null);
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-full h-5 rounded border border-primary bg-background px-1 text-[11px] font-bold outline-none"
-                      />
-                    ) : (
-                      <span
-                        className="flex-1 truncate cursor-pointer hover:underline"
-                        title={isAr ? 'انقر نقراً مزدوجاً لتعديل اسم العمود' : 'Double click to rename column'}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation();
-                          setEditingCol(ci);
-                          setColNameDraft(col.name);
-                        }}
-                      >
-                        {col.name}
-                      </span>
-                    )}
-                    <span className="text-[9px] text-muted-foreground/60 font-mono ms-1">
-                      ({col.id})
-                    </span>
-                  </div>
-                  {/* Resize handle */}
-                  <div
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      resizeRef.current = {
-                        ci,
-                        startX: e.clientX,
-                        startW: col.width,
-                      };
-                    }}
+              {cols.map((col, ci) => {
+                const isColSelected = bounds && ci >= bounds.c0 && ci <= bounds.c1;
+                return (
+                  <th
+                    key={col.id}
+                    style={{ width: col.width, minWidth: col.width }}
                     className={cn(
-                      'absolute top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/50 transition-colors z-10',
-                      isRtl ? 'left-0' : 'right-0'
+                      "relative border-e border-b border-border/70 px-2.5 py-1.5 text-center font-mono text-[11px] select-none group cursor-pointer transition-colors",
+                      isColSelected
+                        ? "bg-primary/20 text-primary font-bold border-b-primary/60"
+                        : "bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground font-semibold"
                     )}
-                  />
-                </th>
-              ))}
+                    title={isAr ? `تحديد العمود ${col.name} (انقر نقراً مزدوجاً لتعديل الاسم)` : `Select column ${col.name} (double click to rename)`}
+                    onMouseDown={(e) => {
+                      if (e.button !== 0) return;
+                      const target = e.target as HTMLElement;
+                      if (target.closest('.cursor-col-resize') || target.tagName === 'INPUT') return;
+                      if (editingCellRef.current) commitEdit();
+                      containerRef.current?.focus();
+                      isDraggingColRef.current = true;
+                      dragColStartRef.current = ci;
+                      if (e.shiftKey && sel) {
+                        setSel({ r: 0, c: sel.c });
+                        setAnchor({ r: rows.length - 1, c: ci });
+                      } else {
+                        setSel({ r: 0, c: ci });
+                        setAnchor({ r: rows.length - 1, c: ci });
+                      }
+                    }}
+                    onMouseEnter={() => {
+                      if (isDraggingColRef.current && dragColStartRef.current !== null) {
+                        setSel({ r: 0, c: dragColStartRef.current });
+                        setAnchor({ r: rows.length - 1, c: ci });
+                      }
+                    }}
+                  >
+                    <div className="flex items-center justify-between">
+                      {editingCol === ci ? (
+                        <input
+                          autoFocus
+                          value={colNameDraft}
+                          dir="auto"
+                          onChange={(e) => setColNameDraft(e.target.value)}
+                          onBlur={commitColRename}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitColRename();
+                            else if (e.key === 'Escape') setEditingCol(null);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-full h-5 rounded border border-primary bg-background px-1 text-[11px] font-bold outline-none"
+                        />
+                      ) : (
+                        <span
+                          className="flex-1 truncate cursor-pointer hover:underline"
+                          title={isAr ? 'انقر نقراً مزدوجاً لتعديل اسم العمود' : 'Double click to rename column'}
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            setEditingCol(ci);
+                            setColNameDraft(col.name);
+                          }}
+                        >
+                          {col.name}
+                        </span>
+                      )}
+                      <span className="text-[9px] text-muted-foreground/60 font-mono ms-1">
+                        ({col.id})
+                      </span>
+                    </div>
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        resizeRef.current = {
+                          ci,
+                          startX: e.clientX,
+                          startW: col.width,
+                        };
+                      }}
+                      className={cn(
+                        'absolute top-0 bottom-0 w-2 cursor-col-resize hover:bg-primary/50 transition-colors z-10',
+                        isRtl ? 'left-0' : 'right-0'
+                      )}
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-border/40">
             {rows.map((row, ri) => (
               <tr key={ri} className={cn('hover:bg-muted/20 transition-colors', ri % 2 === 1 ? 'bg-muted/10' : 'bg-card')}>
                 {/* Row Header Number */}
-                <td className="sticky start-0 z-10 border-e border-b border-border/70 bg-muted/40 px-1 py-1 text-center font-mono text-[10px] text-muted-foreground font-medium select-none">
+                <td
+                  className={cn(
+                    "sticky start-0 z-10 border-e border-b border-border/70 px-1 py-1 text-center font-mono text-[10px] select-none cursor-pointer transition-colors",
+                    bounds && ri >= bounds.r0 && ri <= bounds.r1
+                      ? "bg-primary/20 text-primary font-bold border-e-primary/60"
+                      : "bg-muted/40 text-muted-foreground hover:bg-muted/70 hover:text-foreground font-medium"
+                  )}
+                  title={isAr ? `تحديد الصف ${ri + 1}` : `Select row ${ri + 1}`}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return;
+                    if (editingCellRef.current) commitEdit();
+                    containerRef.current?.focus();
+                    isDraggingRowRef.current = true;
+                    dragRowStartRef.current = ri;
+                    if (e.shiftKey && sel) {
+                      setSel({ r: sel.r, c: 0 });
+                      setAnchor({ r: ri, c: cols.length - 1 });
+                    } else {
+                      setSel({ r: ri, c: 0 });
+                      setAnchor({ r: ri, c: cols.length - 1 });
+                    }
+                  }}
+                  onMouseEnter={() => {
+                    if (isDraggingRowRef.current && dragRowStartRef.current !== null) {
+                      setSel({ r: dragRowStartRef.current, c: 0 });
+                      setAnchor({ r: ri, c: cols.length - 1 });
+                    }
+                  }}
+                >
                   {ri + 1}
                 </td>
 
@@ -2025,6 +2213,7 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
                       style={{
                         backgroundColor: fmt?.bg || undefined,
                         color: fmt?.textColor || undefined,
+                        fontFamily: fmt?.fontFamily || undefined,
                         width: col.width,
                         minWidth: col.width,
                       }}
@@ -2102,8 +2291,6 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
                       }}
                       onClick={() => {
                         if (isDraggingFormulaRangeRef.current) return;
-                        // Just picked this cell into an in-progress formula:
-                        // keep editing the formula cell, don't jump here.
                         if (suppressClickEditRef.current) {
                           suppressClickEditRef.current = false;
                           return;
@@ -2112,8 +2299,7 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
                           dragMovedRef.current = false;
                           return;
                         }
-                        if (editingCellRef.current?.r === ri && editingCellRef.current?.c === ci) return;
-                        startEdit(ri, ci, false);
+                        // Click keeps cell selected without forcing into edit mode
                       }}
                       onDoubleClick={() => startEdit(ri, ci, false)}
                     >
@@ -2123,10 +2309,25 @@ export function MiniSpreadsheet(props: MiniSpreadsheetProps) {
                           value={draft}
                           dir="auto"
                           rows={1}
+                          onPaste={(e) => {
+                            const plain = e.clipboardData?.getData('text/plain') || '';
+                            const html = e.clipboardData?.getData('text/html') || '';
+                            const tableGrid = parseClipboardToTableGrid(plain, html);
+                            if (tableGrid && tableGrid.length > 0 && (tableGrid.length > 1 || tableGrid[0].length > 1)) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              const currentEdit = editingCellRef.current;
+                              cancelEdit();
+                              if (currentEdit) {
+                                void pasteAt(currentEdit.r, currentEdit.c, plain, html);
+                              }
+                            }
+                          }}
                           style={{
                             caretColor: 'var(--primary, #10b981)',
                             resize: 'none',
                             unicodeBidi: 'plaintext',
+                            fontFamily: fmt?.fontFamily || undefined,
                           }}
                           onChange={(e) => {
                             const nextVal = e.target.value;

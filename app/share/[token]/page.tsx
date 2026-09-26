@@ -28,6 +28,9 @@ import { ReportItem, ReportImageItem, TableEntity } from '@/lib/types';
 import { evaluateFormula, formatCellDisplay } from '@/lib/grid/formula-parser';
 import { isCoveredByMerge, findMergeStart } from '@/lib/grid/merge-utils';
 import { chartDataTable } from '@/lib/charts/export-helpers';
+import { sanitizeFontStack } from '@/components/editor/editor-fonts';
+import { CANVAS_FONT_STACK, DEFAULT_FONT_STACK, GOOGLE_FONTS_STYLESHEET_URL, resolveFontStack } from '@/lib/fonts';
+import { wrapTextLines } from '@/lib/drawing/geometry';
 import { buildMindTrees, mindTreesToHtml } from '@/lib/mindmap';
 import { printReportAsPdf } from '@/lib/pdf-export-client';
 import { getReportTheme, getReportBackground } from '@/lib/report-theme-config';
@@ -399,7 +402,8 @@ export default function SharedReportPage() {
       </header>
 
       {/* Main Container */}
-      <main className="mx-auto max-w-5xl px-4 sm:px-8 py-8">
+      <main className="mx-auto max-w-5xl px-4 sm:px-8 py-8" style={{ fontFamily: report.fontFamily ? resolveFontStack(report.fontFamily) : DEFAULT_FONT_STACK }}>
+        <link rel="stylesheet" href={GOOGLE_FONTS_STYLESHEET_URL} />
         {/* Report Card */}
         <div
           className="rounded-2xl border p-6 sm:p-10 shadow-sm"
@@ -517,6 +521,7 @@ export default function SharedReportPage() {
             html={sharedHtml}
             contentJson={report.contentJson}
             smartTables={smartTables}
+            fontFamily={report.fontFamily}
           />
 
           {/* Signature / Official Endorsement Section */}
@@ -633,10 +638,12 @@ function SharedReportBody({
   html,
   contentJson,
   smartTables,
+  fontFamily,
 }: {
   html: string;
   contentJson: any;
   smartTables: Record<string, TableEntity>;
+  fontFamily?: string;
 }) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -739,6 +746,7 @@ function SharedReportBody({
   return (
     <div
       ref={bodyRef}
+      style={{ fontFamily: fontFamily ? resolveFontStack(fontFamily) : DEFAULT_FONT_STACK }}
       className="prose dark:prose-invert max-w-none report-content-view leading-relaxed"
       dangerouslySetInnerHTML={{ __html: html }}
     />
@@ -799,30 +807,56 @@ function drawingElementsToSvg(elements: any[]): string {
     const h = Number((el as any)?.height) || 0;
     const text = String((el as any)?.text || '');
     const fs = Number((el as any)?.fontSize) || 15;
+    const ff = esc(sanitizeFontStack((el as any)?.fontFamily) || CANVAS_FONT_STACK);
+    const textFill = esc((el as any)?.textColor || (el as any)?.strokeColor || '#1e1e1e');
     if (type === 'rectangle' || type === 'note') {
       const x0 = Math.min(x, x + w) + ox;
       const y0 = Math.min(y, y + h) + oy;
-      parts.push(`<rect x="${x0}" y="${y0}" width="${Math.abs(w) || 2}" height="${Math.abs(h) || 2}" rx="${type === 'note' ? 8 : 4}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
-      if (text) parts.push(`<text x="${x0 + Math.abs(w) / 2}" y="${y0 + Math.abs(h) / 2}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+      const ww = Math.abs(w) || 2;
+      const hh = Math.abs(h) || 2;
+      parts.push(`<rect x="${x0}" y="${y0}" width="${ww}" height="${hh}" rx="${type === 'note' ? 8 : 4}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
+      if (text) {
+        const lines = wrapTextLines(text, Math.max(20, ww - 24), fs);
+        const lineH = Math.ceil(fs * 1.35);
+        const totalH = lines.length * lineH;
+        const startY = y0 + (hh - totalH) / 2 + fs * 0.85;
+        const cx0 = x0 + ww / 2;
+        parts.push(`<text x="${cx0}" y="${startY}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${textFill}" font-family="${ff}">${lines.map((ln, i) => `<tspan x="${cx0}" dy="${i === 0 ? 0 : lineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+      }
     } else if (type === 'ellipse') {
       const cx = Math.min(x, x + w) + Math.abs(w) / 2 + ox;
       const cy = Math.min(y, y + h) + Math.abs(h) / 2 + oy;
       parts.push(`<ellipse cx="${cx}" cy="${cy}" rx="${Math.abs(w) / 2 || 2}" ry="${Math.abs(h) / 2 || 2}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
-      if (text) parts.push(`<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+      if (text) {
+        const lines = wrapTextLines(text, Math.max(20, (Math.abs(w) - 20) * 0.82), fs);
+        const lineH = Math.ceil(fs * 1.35);
+        const totalH = lines.length * lineH;
+        const startY = cy - totalH / 2 + fs * 0.85;
+        parts.push(`<text x="${cx}" y="${startY}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${textFill}" font-family="${ff}">${lines.map((ln, i) => `<tspan x="${cx}" dy="${i === 0 ? 0 : lineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+      }
     } else if (type === 'diamond') {
       const x0 = Math.min(x, x + w) + ox;
       const y0 = Math.min(y, y + h) + oy;
       const ww = Math.abs(w) || 2;
       const hh = Math.abs(h) || 2;
       parts.push(`<polygon points="${x0 + ww / 2},${y0} ${x0 + ww},${y0 + hh / 2} ${x0 + ww / 2},${y0 + hh} ${x0},${y0 + hh / 2}" fill="${fill}" stroke="${stroke}" stroke-width="${lw}"${dash((el as any)?.strokeStyle)} />`);
-      if (text) parts.push(`<text x="${x0 + ww / 2}" y="${y0 + hh / 2}" text-anchor="middle" dominant-baseline="middle" font-size="${fs}" font-weight="700" fill="${stroke}" font-family="Tahoma,sans-serif">${esc(text.slice(0, 80))}</text>`);
+      if (text) {
+        const lines = wrapTextLines(text, Math.max(20, (ww - 20) * 0.65), fs);
+        const lineH = Math.ceil(fs * 1.35);
+        const totalH = lines.length * lineH;
+        const startY = y0 + hh / 2 - totalH / 2 + fs * 0.85;
+        const cx0 = x0 + ww / 2;
+        parts.push(`<text x="${cx0}" y="${startY}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${textFill}" font-family="${ff}">${lines.map((ln, i) => `<tspan x="${cx0}" dy="${i === 0 ? 0 : lineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+      }
     } else if (type === 'text') {
       const tFs = Number((el as any)?.fontSize) || 18;
-      const tLines = String(text).split('\n');
+      const maxW = Math.max(40, Math.abs(w || 180));
+      const lines = wrapTextLines(text, maxW, tFs);
       const tLineH = Math.ceil(tFs * 1.35);
+      const tBlockH = Math.max(1, lines.length) * tLineH;
       const tCx = x + ox + w / 2;
-      const tBase = y + oy + (h - tLines.length * tLineH) / 2 + tFs * 0.85;
-      parts.push(`<text x="${tCx}" y="${tBase}" font-size="${tFs}" font-weight="700" fill="${stroke}" text-anchor="middle" font-family="Tahoma,sans-serif">${tLines.map((ln: string, i: number) => `<tspan x="${tCx}" dy="${i === 0 ? 0 : tLineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
+      const tBase = y + oy + (h - tBlockH) / 2 + tFs * 0.85;
+      parts.push(`<text x="${tCx}" y="${tBase}" font-size="${tFs}" font-weight="700" fill="${textFill}" text-anchor="middle" font-family="${ff}">${lines.map((ln: string, i: number) => `<tspan x="${tCx}" dy="${i === 0 ? 0 : tLineH}">${esc(ln) || ' '}</tspan>`).join('')}</text>`);
     } else if (type === 'freedraw') {
       const pts = Array.isArray((el as any)?.points) ? (el as any).points : [];
       if (pts.length > 1) {
@@ -897,6 +931,10 @@ function renderTipTapContentToHtml(
           if ((mark.type === 'fontSize' || mark.type === 'textStyle') && (mark.attrs?.fontSize || mark.attrs?.size)) {
             text = `<span style="font-size: ${mark.attrs.fontSize || mark.attrs.size};">${text}</span>`;
           }
+          if ((mark.type === 'fontFamily' || mark.type === 'textStyle') && (mark.attrs?.fontFamily || mark.attrs?.family)) {
+            const stack = sanitizeFontStack(mark.attrs.fontFamily || mark.attrs.family);
+            if (stack) text = `<span style="font-family: ${stack};">${text}</span>`;
+          }
           if (mark.type === 'underline') text = `<u>${text}</u>`;
           if (mark.type === 'strike') text = `<s>${text}</s>`;
         }
@@ -905,6 +943,17 @@ function renderTipTapContentToHtml(
         text = renderTextWithLatexToHtml(text, true);
       } catch {}
       return text;
+    }
+
+    case 'codeBlock': {
+      const lang = String(node.attrs?.language || '').replace(/[^a-zA-Z0-9+#.-]/g, '').slice(0, 24);
+      const code = (node.content || [])
+        .map((c: any) => (c?.type === 'text' ? String(c.text || '') : ''))
+        .join('')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      return `<div class="report-codeblock-share" dir="ltr" style="margin:12px 0;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#0f172a;"><div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#1e293b;color:#e2e8f0;font-size:11px;font-weight:700;" dir="ltr"><span>${lang || (isAr ? 'كود' : 'Code')}</span></div><pre dir="ltr" style="margin:0;padding:12px 14px;overflow-x:auto;text-align:left;background:#0f172a;color:#e2e8f0;font-family:ui-monospace,Consolas,Menlo,monospace;font-size:13px;line-height:1.65;"><code>${code || ' '}</code></pre></div>`;
     }
 
     case 'latexInline': {

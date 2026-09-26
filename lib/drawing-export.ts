@@ -1,7 +1,13 @@
 'use client';
 
 import type { DrawingElement } from './drawing/types';
-import { elementsBounds } from './drawing/geometry';
+import { elementsBounds, wrapTextLines } from './drawing/geometry';
+import { CANVAS_FONT_STACK, ensureDocumentFontsLoaded, resolveFontStack } from './fonts';
+
+/** Font stack for one element: its own choice, else the unified site stack. */
+function elementFont(el: DrawingElement): string {
+  return resolveFontStack(el.fontFamily, CANVAS_FONT_STACK);
+}
 
 export interface DrawingDocEntry {
   id: string;
@@ -46,16 +52,35 @@ function drawElements(ctx: CanvasRenderingContext2D, elements: DrawingElement[],
     const y = Number(el.y) || 0;
     const w = Number(el.width) || 0;
     const h = Number(el.height) || 0;
+    if (el.rotation) {
+      const cx = ox + x + w / 2;
+      const cy = oy + y + h / 2;
+      ctx.translate(cx, cy);
+      ctx.rotate((el.rotation * Math.PI) / 180);
+      ctx.translate(-cx, -cy);
+    }
     if (el.type === 'rectangle' || el.type === 'note') {
       const x0 = Math.min(x, x + w); const y0 = Math.min(y, y + h);
       const ww = Math.abs(w); const hh = Math.abs(h);
       if (ctx.fillStyle !== 'transparent') ctx.fillRect(ox + x0, oy + y0, ww, hh);
       ctx.strokeRect(ox + x0, oy + y0, ww, hh);
       if (el.text) {
-        ctx.fillStyle = stroke;
-        ctx.font = `700 ${Number(el.fontSize) || 15}px Tahoma, sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(String(el.text).slice(0, 120), ox + x0 + ww / 2, oy + y0 + hh / 2, Math.max(20, ww - 10));
+        const tColor = el.textColor || stroke;
+        const tFs = Number(el.fontSize) || 18;
+        const pad = 12;
+        const maxW = Math.max(20, ww - pad * 2);
+        ctx.font = `700 ${tFs}px ${elementFont(el)}`;
+        const lines = wrapTextLines(el.text, maxW, tFs, (txt) => ctx.measureText(txt).width);
+        const lineH = Math.ceil(tFs * 1.35);
+        const totalH = lines.length * lineH;
+        let tY = oy + y0 + (hh - totalH) / 2 + tFs * 0.85;
+        const tCx = ox + x0 + ww / 2;
+        ctx.fillStyle = tColor;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        for (const line of lines) {
+          ctx.fillText(line || ' ', tCx, tY, maxW);
+          tY += lineH;
+        }
       }
     } else if (el.type === 'ellipse') {
       const cx = Math.min(x, x + w) + Math.abs(w) / 2;
@@ -65,10 +90,21 @@ function drawElements(ctx: CanvasRenderingContext2D, elements: DrawingElement[],
       if (ctx.fillStyle !== 'transparent') ctx.fill();
       ctx.stroke();
       if (el.text) {
-        ctx.fillStyle = stroke;
-        ctx.font = `700 ${Number(el.fontSize) || 15}px Tahoma, sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(String(el.text).slice(0, 120), ox + cx, oy + cy, Math.max(20, Math.abs(w) - 10));
+        const tColor = el.textColor || stroke;
+        const tFs = Number(el.fontSize) || 18;
+        const maxW = Math.max(20, (Math.abs(w) - 20) * 0.82);
+        ctx.font = `700 ${tFs}px ${elementFont(el)}`;
+        const lines = wrapTextLines(el.text, maxW, tFs, (txt) => ctx.measureText(txt).width);
+        const lineH = Math.ceil(tFs * 1.35);
+        const totalH = lines.length * lineH;
+        let tY = oy + cy - totalH / 2 + tFs * 0.85;
+        const tCx = ox + cx;
+        ctx.fillStyle = tColor;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        for (const line of lines) {
+          ctx.fillText(line || ' ', tCx, tY, maxW);
+          tY += lineH;
+        }
       }
     } else if (el.type === 'diamond') {
       const x0 = Math.min(x, x + w); const y0 = Math.min(y, y + h);
@@ -82,22 +118,36 @@ function drawElements(ctx: CanvasRenderingContext2D, elements: DrawingElement[],
       if (ctx.fillStyle !== 'transparent') ctx.fill();
       ctx.stroke();
       if (el.text) {
-        ctx.fillStyle = stroke;
-        ctx.font = `700 ${Number(el.fontSize) || 15}px Tahoma, sans-serif`;
-        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(String(el.text).slice(0, 120), ox + x0 + ww / 2, oy + y0 + hh / 2, Math.max(20, ww - 10));
+        const tColor = el.textColor || stroke;
+        const tFs = Number(el.fontSize) || 18;
+        const maxW = Math.max(20, (ww - 20) * 0.65);
+        ctx.font = `700 ${tFs}px ${elementFont(el)}`;
+        const lines = wrapTextLines(el.text, maxW, tFs, (txt) => ctx.measureText(txt).width);
+        const lineH = Math.ceil(tFs * 1.35);
+        const totalH = lines.length * lineH;
+        let tY = oy + y0 + (hh - totalH) / 2 + tFs * 0.85;
+        const tCx = ox + x0 + ww / 2;
+        ctx.fillStyle = tColor;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+        for (const line of lines) {
+          ctx.fillText(line || ' ', tCx, tY, maxW);
+          tY += lineH;
+        }
       }
     } else if (el.type === 'text') {
       const tFs = Number(el.fontSize) || 18;
-      const tLines = String(el.text || '').split('\n');
+      const tColor = el.textColor || stroke;
+      const maxW = Math.max(40, Math.abs(w || 180));
+      ctx.font = `700 ${tFs}px ${elementFont(el)}`;
+      const lines = wrapTextLines(el.text || '', maxW, tFs, (txt) => ctx.measureText(txt).width);
       const tLineH = Math.ceil(tFs * 1.35);
+      const tBlockH = Math.max(1, lines.length) * tLineH;
       const tCx = ox + x + w / 2;
-      let tY = oy + y + (h - tLines.length * tLineH) / 2 + tFs * 0.85;
-      ctx.fillStyle = stroke;
-      ctx.font = `700 ${tFs}px Tahoma, sans-serif`;
+      let tY = oy + y + (h - tBlockH) / 2 + tFs * 0.85;
+      ctx.fillStyle = tColor;
       ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-      for (const line of tLines) {
-        ctx.fillText(line || ' ', tCx, tY, Math.max(20, Math.abs(w) - 8));
+      for (const line of lines) {
+        ctx.fillText(line || ' ', tCx, tY, maxW);
         tY += tLineH;
       }
     } else if (el.type === 'freedraw') {
@@ -141,6 +191,8 @@ export interface DrawingSnapshot { dataUrl: string; width: number; height: numbe
 export async function snapshotDrawings(contentJson: any): Promise<Record<string, DrawingSnapshot>> {
   const out: Record<string, DrawingSnapshot> = {};
   if (typeof document === 'undefined') return out;
+  // Paint with the real Google fonts, not a silent system-font fallback.
+  await ensureDocumentFontsLoaded();
   const entries = collectDrawings(contentJson);
   for (const entry of entries) {
     try {

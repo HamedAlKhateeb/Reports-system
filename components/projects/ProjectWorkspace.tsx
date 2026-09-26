@@ -114,11 +114,28 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     if (!user || creating) return;
     try {
       setCreating(true);
+      let orgDefaults: any = null;
+      try {
+        const { getOrganizationDefaults } = await import('@/lib/db-intelligence');
+        orgDefaults = await getOrganizationDefaults(user.uid);
+      } catch {}
+
+      const defaultAuthor =
+        (orgDefaults && orgDefaults.autoApplyToNewReports !== false && orgDefaults.author?.trim()) ||
+        user.displayName ||
+        user.email.split('@')[0];
+
       const targetFolderId = folderId || (selectedFolderId && selectedFolderId !== 'all' ? selectedFolderId : undefined);
+
       const created = await createReport({
         title: isAr ? 'تقرير مراجعة جديد' : 'New Report',
         language: defaultReportLang,
-        author: user.displayName || user.email.split('@')[0],
+        author: defaultAuthor,
+        organization: orgDefaults?.organization || undefined,
+        department: orgDefaults?.department || undefined,
+        authorTitle: orgDefaults?.authorTitle || undefined,
+        reviewerName: orgDefaults?.reviewerName || undefined,
+        reviewerTitle: orgDefaults?.reviewerTitle || undefined,
         systemUnderReview: isAr ? 'النظام والمشروع العام' : 'Core System & Project',
         contentJson: getTemplateContent('problem_report', defaultReportLang),
         ownerUid: user.uid,

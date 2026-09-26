@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&family=Tajawal:wght@400;500;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400;1,700&family=Aref+Ruqaa:wght@400;700&family=Cairo:wght@400;500;600;700;800&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Readex+Pro:wght@400;500;600;700&family=Roboto:wght@400;500;700&family=Tajawal:wght@400;500;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -243,12 +243,19 @@
   background-color: var(--editor-th-bg, #1D2721);
 }
 
+.ProseMirror table td.selectedCell,
+.ProseMirror table th.selectedCell {
+  background-color: rgba(59, 130, 246, 0.16) !important;
+  outline: 2px solid #3b82f6 !important;
+  outline-offset: -1px;
+}
+
 .ProseMirror table .selectedCell:after {
   z-index: 2;
   position: absolute;
   content: "";
   left: 0; right: 0; top: 0; bottom: 0;
-  background: rgba(72, 100, 80, 0.15);
+  background: rgba(59, 130, 246, 0.12);
   pointer-events: none;
 }
 
@@ -295,6 +302,99 @@
 .dark .ProseMirror blockquote {
   color: #9E9C96;
   border-inline-start-color: var(--editor-quote-border, #6B8C75);
+}
+
+/* Code snippets — header bar (language + copy) over an LTR code area */
+.report-codeblock {
+  direction: ltr;
+  margin: 1rem 0;
+  border: 1px solid #E7E6E2;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0f172a;
+}
+.report-codeblock-selected {
+  outline: 2px solid hsl(var(--primary));
+  outline-offset: 2px;
+}
+.report-codeblock .codeblock-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  user-select: none;
+}
+.report-codeblock .codeblock-lang {
+  direction: ltr;
+  height: 26px;
+  border-radius: 7px;
+  border: 1px solid #475569;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0 6px;
+  outline: none;
+  cursor: pointer;
+  max-width: 150px;
+}
+.report-codeblock .codeblock-copy,
+.report-codeblock .codeblock-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px solid #475569;
+  background: #334155;
+  color: #e2e8f0;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.report-codeblock .codeblock-copy:hover,
+.report-codeblock .codeblock-action-btn:hover {
+  background: #475569;
+}
+.report-codeblock .codeblock-pre {
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  overflow-x: auto;
+  direction: ltr;
+  text-align: left;
+  background: #0f172a;
+}
+.report-codeblock .codeblock-pre code {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, Menlo, monospace;
+  font-size: inherit;
+  line-height: 1.65;
+  color: #e2e8f0;
+  background: transparent;
+}
+/* Plain <pre> code blocks (pasted HTML without the node view) */
+.ProseMirror pre.report-code,
+.ProseMirror pre:not(.codeblock-pre) {
+  direction: ltr;
+  text-align: left;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin: 1rem 0;
+  overflow-x: auto;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+.ProseMirror pre code {
+  background: transparent;
+  color: inherit;
+  font-size: inherit;
 }
 
 /* Typography styles */
@@ -560,5 +660,20 @@ html {
   border: 1px solid #fecaca;
   border-radius: 4px;
   padding: 0 4px;
+}
+
+/* Wavy red underline for recognized spelling errors */
+.spelling-error-wavy {
+  text-decoration: underline wavy #ef4444 !important;
+  text-decoration-thickness: 1.5px !important;
+  text-underline-offset: 3.5px !important;
+  cursor: text;
+  transition: text-decoration-color 0.15s ease, background-color 0.15s ease;
+}
+
+.spelling-error-wavy:hover {
+  text-decoration-color: #dc2626 !important;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-radius: 2px;
 }
 

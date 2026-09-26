@@ -7,6 +7,8 @@ import { chartDataTable, escapeHtmlExport } from './charts/export-helpers';
 import { buildMindTrees, mindTreesToHtml } from './mindmap';
 import { isCoveredByMerge, findMergeStart } from './grid/merge-utils';
 import { renderLatexToHtml, renderTextWithLatexToHtml, KATEX_CDN_CSS, LATEX_INLINE_CSS } from './latex';
+import { sanitizeFontStack } from '@/components/editor/editor-fonts';
+import { GOOGLE_FONTS_STYLESHEET_URL, resolveFontStack } from './fonts';
 
 /**
  * Converts TipTap JSON node to clean styled HTML for print/PDF.
@@ -58,6 +60,10 @@ function tipTapNodeToHtml(
           if (mark.type === 'fontSize' && mark.attrs?.size) {
             text = `<span style="font-size: ${mark.attrs.size};">${text}</span>`;
           }
+          if (mark.type === 'fontFamily' && mark.attrs?.family) {
+            const stack = sanitizeFontStack(mark.attrs.family);
+            if (stack) text = `<span style="font-family: ${stack};">${text}</span>`;
+          }
           if (mark.type === 'link') {
             text = `<a href="${mark.attrs?.href || '#'}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: underline; font-weight: 500;">${text}</a>`;
           }
@@ -105,6 +111,18 @@ function tipTapNodeToHtml(
     case 'blockquote': {
       const content = (node.content || []).map((c: any) => tipTapNodeToHtml(c, isAr, images, tablesMap, mindmaps, docRef, drawings)).join('');
       return `<blockquote class="report-quote">${content}</blockquote>`;
+    }
+
+    case 'codeBlock': {
+      const lang = String(node.attrs?.language || '').replace(/[^a-zA-Z0-9+#.-]/g, '').slice(0, 24);
+      const code = (node.content || [])
+        .map((c: any) => (c?.type === 'text' ? String(c.text || '') : ''))
+        .join('')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      const header = `<div class="report-code-head"><span>${lang || (isAr ? 'كود' : 'Code')}</span></div>`;
+      return `<div class="report-codeblock-print" dir="ltr">${header}<pre class="report-code" dir="ltr"><code>${code || ' '}</code></pre></div>`;
     }
 
     case 'reportImage': {
@@ -219,10 +237,12 @@ function tipTapNodeToHtml(
               }
               const cellFormat = tbl.cell_formats?.[coord];
               const align = cellFormat?.align || cellFormat?.horizontalAlign || (typeof val === 'number' ? 'right' : (typeof val === 'string' && /[\u0600-\u06FF]/.test(val) ? 'right' : 'left'));
+              const cellFontStack = sanitizeFontStack(cellFormat?.fontFamily);
               const styleClasses = [
                 cellFormat?.bold ? 'font-weight: bold;' : '',
                 cellFormat?.italic ? 'font-style: italic;' : '',
                 cellFormat?.underline ? 'text-decoration: underline;' : '',
+                cellFontStack ? `font-family: ${cellFontStack};` : '',
               ].join(' ');
 
               return `<td class="report-cell"${colSpanAttr}${rowSpanAttr} style="text-align: ${align};${widthStyle} ${styleClasses}">${formatCellDisplay(val)}</td>`;
@@ -376,7 +396,7 @@ export function buildPrintableHtml(
   <title>${rawTitle} - #${report.reportNumber}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+  <link href="${GOOGLE_FONTS_STYLESHEET_URL}" rel="stylesheet">
   <link rel="stylesheet" href="${KATEX_CDN_CSS}">
   <style>
     ${LATEX_INLINE_CSS}
@@ -394,7 +414,7 @@ export function buildPrintableHtml(
     body {
       margin: 0;
       padding: 0;
-      font-family: 'Tajawal', 'Cairo', 'Segoe UI', Arial, sans-serif;
+      font-family: ${report.fontFamily ? resolveFontStack(report.fontFamily) : "'Tajawal', 'Cairo', 'Segoe UI', Arial, sans-serif"};
       direction: ${isAr ? 'rtl' : 'ltr'};
       text-align: ${isAr ? 'right' : 'left'};
       color: ${bg.text};
@@ -495,9 +515,11 @@ export function buildPrintableHtml(
     /* Content Typography */
     .report-content {
       margin-bottom: 30px;
+      font-family: inherit;
     }
 
     .report-h1 {
+      font-family: inherit;
       font-size: 18px;
       font-weight: 700;
       color: #0f766e;
@@ -509,6 +531,7 @@ export function buildPrintableHtml(
     }
 
     .report-h2 {
+      font-family: inherit;
       font-size: 15px;
       font-weight: 700;
       color: #1e293b;
@@ -518,6 +541,7 @@ export function buildPrintableHtml(
     }
 
     .report-h3 {
+      font-family: inherit;
       font-size: 13px;
       font-weight: 600;
       color: #334155;
@@ -527,6 +551,7 @@ export function buildPrintableHtml(
     }
 
     .report-p {
+      font-family: inherit;
       margin-top: 0;
       margin-bottom: 10px;
       font-size: 13px;
@@ -550,6 +575,38 @@ export function buildPrintableHtml(
       color: #334155;
       font-style: italic;
       border-radius: 4px;
+    }
+
+    /* Code snippets: dark block, LTR always, keeps lines together. */
+    .report-codeblock-print {
+      margin: 12px 0;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0f172a;
+      page-break-inside: avoid;
+    }
+    .report-code-head {
+      padding: 4px 10px;
+      background: #1e293b;
+      color: #e2e8f0;
+      font-size: 10px;
+      font-weight: 700;
+      direction: ltr;
+      text-align: left;
+    }
+    .report-code {
+      margin: 0;
+      padding: 10px 12px;
+      overflow-x: auto;
+      direction: ltr;
+      text-align: left;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: ui-monospace, 'Cascadia Code', Consolas, Menlo, monospace;
+      font-size: 11px;
+      line-height: 1.65;
+      white-space: pre;
     }
 
     /* Tables: long tables MUST split across pages (rows stay intact,
@@ -924,10 +981,28 @@ export function buildPrintableHtml(
       setTimeout(onDone, 2000);
     }
 
+    function doPrint() {
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function() {
+          waitForImages(function() {
+            setTimeout(function() { window.print(); }, 250);
+          });
+        }).catch(function() {
+          waitForImages(function() {
+            setTimeout(function() { window.print(); }, 250);
+          });
+        });
+      } else {
+        waitForImages(function() {
+          setTimeout(function() { window.print(); }, 250);
+        });
+      }
+    }
+
     if (document.readyState === 'complete') {
-      triggerPrint();
+      doPrint();
     } else {
-      window.addEventListener('load', triggerPrint);
+      window.addEventListener('load', doPrint);
     }
   </script>
 </body>

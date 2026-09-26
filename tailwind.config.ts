@@ -11,9 +11,14 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['var(--font-tajawal)', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'Tajawal', 'Readex Pro', 'system-ui', 'sans-serif'],
-        serif: ['var(--font-amiri)', 'Amiri', 'serif'],
-        heading: ['var(--font-tajawal)', 'IBM Plex Sans Arabic', 'Noto Sans Arabic', 'sans-serif'],
+        // NOTE: no `var(--font-*)` entries here — those variables only exist
+        // when fonts are loaded via next/font. An undefined var() invalidates
+        // the WHOLE font-family declaration (browser ignores the fallbacks
+        // too), which is what made the site font silently disappear.
+        // These families are loaded via the Google Fonts @import in globals.css.
+        sans: ['Tajawal', 'Cairo', 'Readex Pro', 'Noto Sans Arabic', 'IBM Plex Sans Arabic', 'system-ui', 'sans-serif'],
+        serif: ['Amiri', 'Aref Ruqaa', 'serif'],
+        heading: ['Tajawal', 'Cairo', 'Readex Pro', 'Noto Sans Arabic', 'sans-serif'],
       },
       colors: {
         // Editorial Warm Palette

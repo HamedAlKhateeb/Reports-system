@@ -1,6 +1,7 @@
-import { Node, mergeAttributes, InputRule } from '@tiptap/core';
+import { Node, mergeAttributes, InputRule, nodePasteRule } from '@tiptap/core';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 import { LatexInlineView } from './LatexInlineView';
+import { cleanLatex, isPureLatex } from '@/lib/latex';
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
@@ -15,6 +16,7 @@ export const LatexInline = Node.create({
   group: 'inline',
   inline: true,
   atom: true,
+  marks: '_',
   selectable: true,
   draggable: false,
 
@@ -30,22 +32,69 @@ export const LatexInline = Node.create({
         tag: 'span[data-type="latex-inline"]',
         getAttrs: (dom) => {
           const el = dom as HTMLElement;
-          return { latex: el.getAttribute('data-latex') || '' };
+          const latexAttr = el.getAttribute('data-latex');
+          if (latexAttr) {
+            return { latex: cleanLatex(latexAttr) };
+          }
+          const text = (el.textContent || '').trim();
+          return { latex: cleanLatex(text) };
+        },
+      },
+      {
+        tag: 'code',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const cls = (el.getAttribute('class') || '').toLowerCase();
+          const lang = (el.getAttribute('data-language') || '').toLowerCase();
+          const text = (el.textContent || '').trim();
+          if (/(?:^|\s)language-(?:latex|tex|math|katex)(?:\s|$)/.test(cls) || ['latex', 'tex', 'math', 'katex'].includes(lang)) {
+            return { latex: cleanLatex(text) };
+          }
+          if (isPureLatex(text)) {
+            return { latex: cleanLatex(text) };
+          }
+          return false;
+        },
+      },
+      {
+        tag: 'pre',
+        getAttrs: (dom) => {
+          const el = dom as HTMLElement;
+          const lang = (el.getAttribute('data-language') || '').toLowerCase();
+          const code = el.querySelector('code');
+          const codeCls = (code?.getAttribute('class') || '').toLowerCase();
+          const codeLang = (code?.getAttribute('data-language') || '').toLowerCase();
+          const allLang = `${lang} ${codeCls} ${codeLang}`;
+          const text = (el.textContent || '').trim();
+          if (/(latex|tex|katex|math)/.test(allLang)) {
+            return { latex: cleanLatex(text) };
+          }
+          if (isPureLatex(text)) {
+            return { latex: cleanLatex(text) };
+          }
+          return false;
         },
       },
     ];
   },
 
-  renderHTML({ HTMLAttributes }) {
+  renderHTML({ HTMLAttributes, node }: any) {
+    const rawLatex = cleanLatex(HTMLAttributes['data-latex'] || HTMLAttributes.latex || node?.attrs?.latex || '');
     return [
       'span',
       mergeAttributes(HTMLAttributes, {
         'data-type': 'latex-inline',
-        'data-latex': HTMLAttributes.latex || '',
+        'data-latex': rawLatex,
         class: 'latex-inline',
         dir: 'ltr',
       }),
+      rawLatex ? `$${rawLatex}$` : '',
     ];
+  },
+
+  renderText({ node }: any) {
+    const latex = cleanLatex(node?.attrs?.latex || '');
+    return latex ? `$${latex}$` : '';
   },
 
   addNodeView() {
@@ -53,29 +102,113 @@ export const LatexInline = Node.create({
   },
 
   addInputRules() {
-    // Typing `$x^2$ ` converts to a math node (Markdown-style inline math).
-    const dollarRule = new InputRule({
-      find: /(?:^|\s)\$([^$\n]+?)\$\s$/,
-      handler: ({ state, range, match }) => {
-        const latex = (match[1] || '').trim();
+    const makeHandler = (groupIndex: number) => {
+      return ({ state, range, match }: any) => {
+        const latex = cleanLatex((match[groupIndex] || '').trim());
         if (!latex) return;
-        const { tr } = state;
-        // Replace "$...$ " (including leading space handling) with the node
-        const start = range.from;
-        const end = range.to;
-        tr.replaceWith(start, end, this.type.create({ latex }));
-      },
+        const fullMatch = match[0];
+        // Locate delimiter start so preceding punctuation or whitespace is preserved
+        const delimIdx = fullMatch.search(/[\$\\]/);
+        const start = delimIdx >= 0 ? range.from + delimIdx : range.from;
+        state.tr.replaceWith(start, range.to, this.type.create({ latex }));
+      };
+    };
+
+    // Instant `$$equation$$` (matches inline or multiline display math delimiters)
+    const doubleDollarInstant = new InputRule({
+      find: /(?:^|[^\$])\$\$([^\$]+?)\$\$$/,
+      handler: makeHandler(1),
     });
-    // Typing `\(x^2\) ` converts as well.
-    const parenRule = new InputRule({
+
+    // Space-triggered `$$equation$$ `
+    const doubleDollarWithSpace = new InputRule({
+      find: /(?:^|[^\$])\$\$([^\$]+?)\$\$\s$/,
+      handler: makeHandler(1),
+    });
+
+    // Instant `\[equation\]`
+    const bracketInstant = new InputRule({
+      find: /\\\[(.+?)\\\]$/,
+      handler: makeHandler(1),
+    });
+
+    // Fallback `\[equation\] ` with space
+    const bracketWithSpace = new InputRule({
+      find: /\\\[(.+?)\\\]\s$/,
+      handler: makeHandler(1),
+    });
+
+    // Instant `$equation$` (immediately renders upon typing the closing $)
+    const dollarInstant = new InputRule({
+      find: /(?:^|[^\$])\$([^$\s\n][^$\n]*?)\$$/,
+      handler: makeHandler(1),
+    });
+
+    // Fallback `$equation$ ` with space
+    const dollarWithSpace = new InputRule({
+      find: /(?:^|[^\$])\$([^$\n]+?)\$\s$/,
+      handler: makeHandler(1),
+    });
+
+    // Instant `\(equation\)`
+    const parenInstant = new InputRule({
+      find: /\\\((.+?)\\\)$/,
+      handler: makeHandler(1),
+    });
+
+    // Fallback `\(equation\) ` with space
+    const parenWithSpace = new InputRule({
       find: /\\\((.+?)\\\)\s$/,
-      handler: ({ state, range, match }) => {
-        const latex = (match[1] || '').trim();
-        if (!latex) return;
-        state.tr.replaceWith(range.from, range.to, this.type.create({ latex }));
-      },
+      handler: makeHandler(1),
     });
-    return [dollarRule, parenRule];
+
+    return [
+      doubleDollarInstant,
+      doubleDollarWithSpace,
+      bracketInstant,
+      bracketWithSpace,
+      dollarInstant,
+      dollarWithSpace,
+      parenInstant,
+      parenWithSpace,
+    ];
+  },
+
+  addPasteRules() {
+    return [
+      nodePasteRule({
+        find: /\$\$([^\$]+?)\$\$/g,
+        type: this.type,
+        getAttributes: (match) => {
+          const latex = cleanLatex((match[1] || '').trim());
+          return latex ? { latex } : false;
+        },
+      }),
+      nodePasteRule({
+        find: /\\\[([\s\S]+?)\\\]/g,
+        type: this.type,
+        getAttributes: (match) => {
+          const latex = cleanLatex((match[1] || '').trim());
+          return latex ? { latex } : false;
+        },
+      }),
+      nodePasteRule({
+        find: /(?:^|[^\$])\$([^$\s\n][^$\n]*?)\$/g,
+        type: this.type,
+        getAttributes: (match) => {
+          const latex = cleanLatex((match[1] || '').trim());
+          return latex ? { latex } : false;
+        },
+      }),
+      nodePasteRule({
+        find: /\\\((.+?)\\\)/g,
+        type: this.type,
+        getAttributes: (match) => {
+          const latex = cleanLatex((match[1] || '').trim());
+          return latex ? { latex } : false;
+        },
+      }),
+    ];
   },
 
   addCommands() {
@@ -83,7 +216,7 @@ export const LatexInline = Node.create({
       setLatexInline:
         (options) =>
         ({ chain }) => {
-          const latex = (options?.latex || '').trim();
+          const latex = cleanLatex(options?.latex || '');
           if (!latex) return false;
           return chain()
             .insertContent({ type: this.name, attrs: { latex } })

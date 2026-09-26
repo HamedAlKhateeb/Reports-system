@@ -13,6 +13,21 @@ export interface HittableElement {
   width: number;
   height: number;
   points?: DrawingPoint[];
+  rotation?: number;
+}
+
+/** Rotate a 2D point around an origin by angle in degrees. */
+export function rotatePoint(pt: DrawingPoint, center: DrawingPoint, angleDeg: number): DrawingPoint {
+  if (!angleDeg) return pt;
+  const rad = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = pt.x - center.x;
+  const dy = pt.y - center.y;
+  return {
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  };
 }
 
 export function distanceToSegment(
@@ -40,16 +55,39 @@ function linePoints(el: HittableElement): DrawingPoint[] {
   ];
 }
 
+export function getElementCenter(el: HittableElement): DrawingPoint {
+  if ((el.type === 'arrow' || el.type === 'line' || el.type === 'freedraw') && el.points && el.points.length >= 2) {
+    const xs = el.points.map((p) => p.x);
+    const ys = el.points.map((p) => p.y);
+    return {
+      x: (Math.min(...xs) + Math.max(...xs)) / 2,
+      y: (Math.min(...ys) + Math.max(...ys)) / 2,
+    };
+  }
+  return {
+    x: el.x + (el.width || 0) / 2,
+    y: el.y + (el.height || 0) / 2,
+  };
+}
+
 /** True when a canvas point hits the element (selection / eraser / fill bucket). */
 export function isPointNearElement(
-  pt: DrawingPoint,
+  rawPt: DrawingPoint,
   el: HittableElement,
   threshold = 12
 ): boolean {
+  // If the element has a rotation, un-rotate the test point around the element's center.
+  let pt = rawPt;
+  if (el.rotation) {
+    const center = getElementCenter(el);
+    pt = rotatePoint(rawPt, center, -el.rotation);
+  }
+
   if (el.type === 'arrow' || el.type === 'line') {
+    const th = Math.max(threshold, 20);
     const pts = linePoints(el);
     for (let i = 0; i < pts.length - 1; i++) {
-      if (distanceToSegment(pt.x, pt.y, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y) <= threshold) {
+      if (distanceToSegment(pt.x, pt.y, pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y) <= th) {
         return true;
       }
     }
@@ -121,3 +159,49 @@ export function elementsBounds(elements: DrawingElement[]): {
   if (!isFinite(minX)) return null;
   return { minX, minY, maxX, maxY };
 }
+
+/**
+ * Wraps text into lines that fit within maxWidth (in pixels) for a given font size.
+ * Handles explicit newlines (\n) and word wrapping.
+ */
+export function wrapTextLines(
+  text: string,
+  maxWidth: number,
+  fontSize: number = 15,
+  measureWidth?: (s: string) => number
+): string[] {
+  if (!text) return [];
+  const approxCharWidth = fontSize * 0.58;
+  const measure = measureWidth || ((str: string) => str.length * approxCharWidth);
+  const paragraphs = String(text).split('\n');
+  const lines: string[] = [];
+
+  for (const para of paragraphs) {
+    if (!para.trim()) {
+      lines.push('');
+      continue;
+    }
+    const words = para.split(/\s+/);
+    let currentLine = '';
+
+    for (const word of words) {
+      if (!currentLine) {
+        currentLine = word;
+      } else {
+        const testLine = `${currentLine} ${word}`;
+        if (measure(testLine) <= maxWidth) {
+          currentLine = testLine;
+        } else {
+          lines.push(currentLine);
+          currentLine = word;
+        }
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+  }
+
+  return lines.length ? lines : [''];
+}
+
