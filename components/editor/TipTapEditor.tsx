@@ -712,6 +712,20 @@ export function TipTapEditor({
         return false;
       },
       handleKeyDown: (view, event) => {
+        // If drawing is active or drawing node is selected, route Ctrl+Z and Ctrl+Y to drawing canvas!
+        if ((event.ctrlKey || event.metaKey) && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
+          const sel: any = view?.state?.selection;
+          const selectedNode = sel?.node;
+          const isDrawing = selectedNode?.type?.name === 'reportDrawing' || editorRef.current?.isActive('reportDrawing');
+          if (isDrawing) {
+            const cmd = (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey)) ? 'redo' : 'undo';
+            window.dispatchEvent(new CustomEvent('report-drawing-command', { detail: { command: cmd } }));
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+          }
+        }
+
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'd') {
           event.preventDefault();
           const { state } = view;

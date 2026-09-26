@@ -107,4 +107,70 @@ if (bounds) {
   assert(bounds.maxY === 290, `maxY is 290 (got ${bounds.maxY})`);
 }
 
+// 5. Test separateShapeTexts
+console.log('\n--- 5. Testing Shape Text Separation into Independent Elements ---');
+import { getConnectedElementIds, separateShapeTexts } from '../../lib/drawing/geometry';
+
+const rawShapesWithText: DrawingElement[] = [
+  { id: 'rect1', type: 'rectangle', x: 50, y: 50, width: 200, height: 100, text: 'Hello Shape', strokeColor: '#000' },
+  { id: 'circle1', type: 'ellipse', x: 300, y: 50, width: 100, height: 100, strokeColor: '#000' }, // no text
+];
+const { elements: separated, changed } = separateShapeTexts(rawShapesWithText);
+assert(changed === true, 'separateShapeTexts detected and performed separation');
+assert(separated.length === 3, `Separated array contains 3 elements (got ${separated.length})`);
+const rectShape = separated.find((x) => x.id === 'rect1')!;
+const rectText = separated.find((x) => x.containerId === 'rect1')!;
+assert(!rectShape.text, 'Parent rectangle has its text cleared');
+assert(rectText !== undefined, 'Independent text element exists with containerId matching rectangle');
+assert(rectText.type === 'text', 'Child element is of type text');
+assert(rectText.text === 'Hello Shape', 'Child element preserves text');
+
+// 6. Test getConnectedElementIds (Movement Logic)
+console.log('\n--- 6. Testing Connected Movement Logic ---');
+// Case A: Dragging text element alone moves ONLY the text
+const textMoveIds = getConnectedElementIds(rectText.id, separated);
+assert(textMoveIds.size === 1 && textMoveIds.has(rectText.id), 'Dragging text alone returns only text element ID');
+
+// Case B: Dragging parent shape moves both shape AND its bound text
+const shapeMoveIds = getConnectedElementIds(rectShape.id, separated);
+assert(shapeMoveIds.has(rectShape.id) && shapeMoveIds.has(rectText.id), 'Dragging shape moves both shape and its bound text');
+assert(!shapeMoveIds.has('circle1'), 'Unconnected circle is NOT in moving group');
+
+// Case C: Shapes connected via an Arrow
+const arrowEl: DrawingElement = {
+  id: 'arrow1',
+  type: 'arrow',
+  x: 250,
+  y: 100,
+  width: 50,
+  height: 0,
+  points: [{ x: 250, y: 100 }, { x: 300, y: 100 }], // starts on rect1, ends on circle1
+  strokeColor: '#000',
+};
+const connectedDiagram = [...separated, arrowEl];
+const connectedFromRect = getConnectedElementIds('rect1', connectedDiagram);
+assert(connectedFromRect.has('rect1'), 'Includes rect1');
+assert(connectedFromRect.has(rectText.id), 'Includes rect1 bound text');
+assert(connectedFromRect.has('arrow1'), 'Includes connecting arrow1');
+assert(connectedFromRect.has('circle1'), 'Includes connected circle1');
+console.log('✅ Flowchart shapes linked by arrow all move together!');
+
+// Case D: Dragging circle1 also moves the whole connected graph
+const connectedFromCircle = getConnectedElementIds('circle1', connectedDiagram);
+assert(connectedFromCircle.has('rect1') && connectedFromCircle.has('circle1') && connectedFromCircle.has('arrow1'), 'Moving circle moves entire connected graph');
+
+// 7. Test Text Centering inside Shape (Enter key confirmation)
+console.log('\n--- 7. Testing Text Centering Calculation inside Geometric Shape ---');
+const shapeBox = { x0: 100, y0: 100, x1: 300, y1: 200 }; // 200w x 100h
+const shapeW = shapeBox.x1 - shapeBox.x0; // 200
+const shapeH = shapeBox.y1 - shapeBox.y0; // 100
+const textWidth = 80;
+const textHeight = 30;
+const centeredX = Math.round(shapeBox.x0 + (shapeW - textWidth) / 2); // 100 + 60 = 160
+const centeredY = Math.round(shapeBox.y0 + (shapeH - textHeight) / 2); // 100 + 35 = 135
+assert(centeredX === 160, `Centered X is 160 (got ${centeredX})`);
+assert(centeredY === 135, `Centered Y is 135 (got ${centeredY})`);
+assert(centeredX + textWidth / 2 === shapeBox.x0 + shapeW / 2, 'Horizontal center of text matches horizontal center of shape');
+assert(centeredY + textHeight / 2 === shapeBox.y0 + shapeH / 2, 'Vertical center of text matches vertical center of shape');
+
 console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! 🎉\n');

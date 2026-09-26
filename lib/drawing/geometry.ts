@@ -205,3 +205,138 @@ export function wrapTextLines(
   return lines.length ? lines : [''];
 }
 
+/**
+ * Resolves all element IDs that should move together when `draggedId` is dragged.
+ * - If `draggedId` is a text element bound to a shape (has `containerId`), ONLY the text moves.
+ * - If `draggedId` is a shape:
+ *   - The shape itself moves.
+ *   - Any bound text elements (`containerId === shape.id`) move with it.
+ *   - Any shapes connected via arrows/lines (flowcharts, diagrams) move with it as a connected unit.
+ */
+export function getConnectedElementIds(
+  draggedId: string,
+  elements: DrawingElement[]
+): Set<string> {
+  const dragged = elements.find((el) => el.id === draggedId);
+  if (!dragged) return new Set([draggedId]);
+
+  // If the user is dragging the text element specifically, only move the text itself.
+  if (dragged.type === 'text' && dragged.containerId) {
+    return new Set([draggedId]);
+  }
+
+  // Build undirected adjacency graph for shapes, arrows, and bound elements
+  const adj = new Map<string, Set<string>>();
+  const addEdge = (u: string, v: string) => {
+    if (!adj.has(u)) adj.set(u, new Set());
+    if (!adj.has(v)) adj.set(v, new Set());
+    adj.get(u)!.add(v);
+    adj.get(v)!.add(u);
+  };
+
+  // Ensure every element has a node in adj
+  for (const el of elements) {
+    if (!adj.has(el.id)) adj.set(el.id, new Set());
+  }
+
+  // 1. Container <-> Child bindings (e.g. Shape <-> its Text)
+  for (const el of elements) {
+    if (el.containerId) {
+      addEdge(el.id, el.containerId);
+    }
+    if (el.boundElementIds) {
+      for (const bId of el.boundElementIds) {
+        addEdge(el.id, bId);
+      }
+    }
+  }
+
+  // 2. Arrow / Line connections to shapes (start / end points near shapes)
+  const lineEls = elements.filter(
+    (el) => (el.type === 'arrow' || el.type === 'line') && Array.isArray(el.points) && el.points.length >= 2
+  );
+  const shapeEls = elements.filter(
+    (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw'
+  );
+
+  const CONNECTION_THRESHOLD = 26; // Proximity distance for connected arrow/line endpoints
+
+  for (const line of lineEls) {
+    const pts = line.points!;
+    const pStart = pts[0];
+    const pEnd = pts[pts.length - 1];
+
+    for (const shape of shapeEls) {
+      if (isPointNearElement(pStart, shape, CONNECTION_THRESHOLD)) {
+        addEdge(line.id, shape.id);
+      }
+      if (isPointNearElement(pEnd, shape, CONNECTION_THRESHOLD)) {
+        addEdge(line.id, shape.id);
+      }
+    }
+  }
+
+  // Run BFS starting from draggedId
+  const visited = new Set<string>();
+  const queue: string[] = [draggedId];
+  visited.add(draggedId);
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const neighbors = adj.get(curr);
+    if (neighbors) {
+      neighbors.forEach((n) => {
+        if (!visited.has(n)) {
+          visited.add(n);
+          queue.push(n);
+        }
+      });
+    }
+  }
+
+  return visited;
+}
+
+/**
+ * Ensures text inside shapes exists as independent child text elements (with `containerId`).
+ * Preserves backward compatibility while guaranteeing the text is an independent element.
+ */
+export function separateShapeTexts(elements: DrawingElement[]): { elements: DrawingElement[]; changed: boolean } {
+  let changed = false;
+  const result: DrawingElement[] = [];
+
+  for (const el of elements || []) {
+    if (el.text && ['rectangle', 'ellipse', 'diamond', 'note'].includes(el.type)) {
+      const alreadyHasChild = elements.some((x) => x.type === 'text' && x.containerId === el.id);
+      if (!alreadyHasChild) {
+        changed = true;
+        const pad = 12;
+        const w = Math.abs(el.width) || 120;
+        const h = Math.abs(el.height) || 60;
+        const textEl: DrawingElement = {
+          id: `${el.id}_text`,
+          type: 'text',
+          containerId: el.id,
+          x: el.x + pad,
+          y: el.y + pad,
+          width: Math.max(40, w - pad * 2),
+          height: Math.max(24, h - pad * 2),
+          text: el.text,
+          fontSize: el.fontSize || 18,
+          fontFamily: el.fontFamily,
+          textColor: el.textColor || el.strokeColor || '#1e1e1e',
+          textAlign: el.textAlign || 'center',
+          rotation: el.rotation,
+        };
+        const { text: _t, ...cleanShape } = el;
+        result.push(cleanShape as DrawingElement);
+        result.push(textEl);
+        continue;
+      }
+    }
+    result.push(el);
+  }
+
+  return { elements: result, changed };
+}
+

@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/components/ui/toast';
 import type { DrawingElement, DrawingTool } from '@/lib/drawing/types';
 import { DRAWING_STROKE_COLORS, DRAWING_FILL_COLORS, newDrawingElementId } from '@/lib/drawing/types';
-import { isPointNearElement, dashFor, wrapTextLines } from '@/lib/drawing/geometry';
+import { isPointNearElement, dashFor, wrapTextLines, getConnectedElementIds, separateShapeTexts } from '@/lib/drawing/geometry';
 import { CANVAS_FONT_STACK, EDITOR_FONTS, matchEditorFont, resolveFontStack } from '@/lib/fonts';
 import {
   MousePointer2, Hand, Square, Diamond, Circle, MoveRight, Minus, Pencil,
@@ -31,11 +31,19 @@ export function ReportDrawingView(props: NodeViewProps) {
   const { lang } = useLanguage();
   const isAr = lang === 'ar';
 
-  const initial: DrawingElement[] = useMemo(
-    () => (Array.isArray(node.attrs.elements) ? node.attrs.elements : []),
+  const initial: DrawingElement[] = useMemo(() => {
+    const raw = Array.isArray(node.attrs.elements) ? node.attrs.elements : [];
+    const { elements: separated, changed } = separateShapeTexts(raw);
+    if (changed) {
+      setTimeout(() => {
+        try {
+          updateAttributes({ elements: separated });
+        } catch {}
+      }, 50);
+    }
+    return separated;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    []
-  );
+  }, []);
   const [elements, setElements] = useState<DrawingElement[]>(initial);
   const elementsRef = useRef<DrawingElement[]>(initial);
   const [history, setHistory] = useState<DrawingElement[][]>([initial]);
@@ -458,13 +466,17 @@ export function ReportDrawingView(props: NodeViewProps) {
       if (nx !== el.x || ny !== el.y) dragMovedRef.current = true;
       const dx = nx - el.x;
       const dy = ny - el.y;
+      if (dx === 0 && dy === 0) return;
+
+      // If user holds Alt, only move this single element; otherwise move all connected shapes/text/arrows
+      const movingIds = e.altKey ? new Set([id]) : getConnectedElementIds(id, elementsRef.current);
       setAll(
         elementsRef.current.map((x) => {
-          if (x.id !== id) return x;
+          if (!movingIds.has(x.id)) return x;
           if ((x.type === 'arrow' || x.type === 'line' || x.type === 'freedraw') && x.points) {
-            return { ...x, x: nx, y: ny, points: x.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
+            return { ...x, x: x.x + dx, y: x.y + dy, points: x.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
           }
-          return { ...x, x: nx, y: ny };
+          return { ...x, x: x.x + dx, y: x.y + dy };
         })
       );
       return;
@@ -485,6 +497,56 @@ export function ReportDrawingView(props: NodeViewProps) {
       return { ...prev, x, y, width, height };
     });
   };
+
+  const startEditTextForShape = useCallback(
+    (shapeId: string) => {
+      const shape = elementsRef.current.find((x) => x.id === shapeId);
+      if (!shape) return;
+      if (shape.type === 'text') {
+        setSelectedId(shape.id);
+        setEditingTextId(shape.id);
+        setTextDraft(shape.text || '');
+        return;
+      }
+      // Check if shape already has an independent bound text element:
+      let textEl = elementsRef.current.find(
+        (x) => x.type === 'text' && (x.containerId === shape.id || x.id === `${shape.id}_text`)
+      );
+      if (!textEl) {
+        const b = boxOf(shape);
+        const shapeW = Math.max(20, b.x1 - b.x0);
+        const shapeH = Math.max(20, b.y1 - b.y0);
+        const tFs = shape.fontSize || fontSize || 18;
+        const textId = newDrawingElementId('txt');
+        const textW = Math.max(40, shapeW - 20);
+        const textH = Math.max(24, shapeH - 20);
+        const textX = Math.round(b.x0 + (shapeW - textW) / 2);
+        const textY = Math.round(b.y0 + (shapeH - textH) / 2);
+        textEl = {
+          id: textId,
+          type: 'text',
+          containerId: shape.id,
+          x: textX,
+          y: textY,
+          width: textW,
+          height: textH,
+          text: shape.text || '',
+          fontSize: tFs,
+          fontFamily: shape.fontFamily || fontFamily,
+          textColor: shape.textColor || shape.strokeColor || '#1e1e1e',
+          rotation: shape.rotation || 0,
+        };
+        const cleanElements = elementsRef.current.map((x) =>
+          x.id === shape.id ? { ...x, text: undefined } : x
+        );
+        setAll([...cleanElements, textEl]);
+      }
+      setSelectedId(textEl.id);
+      setEditingTextId(textEl.id);
+      setTextDraft(textEl.text || '');
+    },
+    [fontSize, fontFamily, setAll]
+  );
 
   const endStroke = useCallback(() => {
     mouseDownRef.current = false;
@@ -547,11 +609,7 @@ export function ReportDrawingView(props: NodeViewProps) {
       }
       if (pendingEditRef.current === id) {
         pendingEditRef.current = null;
-        const clickedEl = elementsRef.current.find((x) => x.id === id);
-        if (clickedEl && ['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(clickedEl.type)) {
-          setEditingTextId(id);
-          setTextDraft(clickedEl.text || '');
-        }
+        startEditTextForShape(id);
       }
       return;
     }
@@ -571,12 +629,56 @@ export function ReportDrawingView(props: NodeViewProps) {
       return null;
     });
     setTool('select');
-  }, [commit, tightTextBox]);
+  }, [commit, tightTextBox, startEditTextForShape]);
 
-  const commitText = () => {
+  const commitText = useCallback(() => {
     if (!editingTextId) return;
     const v = textDraft;
     const trimmed = v.trim();
+    const editingEl = elementsRef.current.find((x) => x.id === editingTextId);
+
+    if (editingEl?.containerId) {
+      const parentShape = elementsRef.current.find((x) => x.id === editingEl.containerId);
+      if (parentShape) {
+        if (!trimmed) {
+          commit(elementsRef.current.filter((x) => x.id !== editingTextId));
+          setEditingTextId(null);
+          return;
+        }
+        const b = boxOf(parentShape);
+        const shapeW = Math.max(20, b.x1 - b.x0);
+        const shapeH = Math.max(20, b.y1 - b.y0);
+        const tFs = editingEl.fontSize || parentShape.fontSize || 18;
+        const dims = tightTextBox(v, tFs, editingEl.fontFamily || parentShape.fontFamily);
+        const pad = 8;
+        const textW = Math.min(Math.max(40, dims.width), Math.max(20, shapeW - pad * 2));
+        const textH = Math.min(Math.max(24, dims.height), Math.max(20, shapeH - pad * 2));
+        const textX = Math.round(b.x0 + (shapeW - textW) / 2);
+        const textY = Math.round(b.y0 + (shapeH - textH) / 2);
+
+        commit(
+          elementsRef.current.map((x) =>
+            x.id === editingTextId
+              ? {
+                  ...x,
+                  text: v,
+                  x: textX,
+                  y: textY,
+                  width: textW,
+                  height: textH,
+                  fontSize: tFs,
+                  fontFamily: editingEl.fontFamily || parentShape.fontFamily,
+                  textColor: editingEl.textColor || parentShape.textColor || parentShape.strokeColor || '#1e1e1e',
+                  rotation: parentShape.rotation || 0,
+                }
+              : x
+          )
+        );
+        setEditingTextId(null);
+        return;
+      }
+    }
+
     commit(
       elementsRef.current
         .filter((el) => !(el.id === editingTextId && el.type === 'text' && !trimmed))
@@ -588,69 +690,144 @@ export function ReportDrawingView(props: NodeViewProps) {
         })
     );
     setEditingTextId(null);
-  };
+  }, [editingTextId, textDraft, commit, tightTextBox]);
 
   const cloneSelected = useCallback(() => {
     if (!selectedId) return;
     const el = elementsRef.current.find((x) => x.id === selectedId);
     if (!el) return;
     const offset = 20;
+
+    const boundText = elementsRef.current.find((x) => x.type === 'text' && x.containerId === el.id);
+    const newShapeId = newDrawingElementId();
     const copy: DrawingElement = {
       ...el,
-      id: newDrawingElementId(),
+      id: newShapeId,
       x: el.x + offset,
       y: el.y + offset,
       points: el.points ? el.points.map((p) => ({ x: p.x + offset, y: p.y + offset })) : undefined,
     };
-    commit([...elementsRef.current, copy]);
-    setSelectedId(copy.id);
+
+    let nextElements = [...elementsRef.current, copy];
+    let newSelectedId = newShapeId;
+
+    if (boundText) {
+      const newTextId = newDrawingElementId('txt');
+      const copyText: DrawingElement = {
+        ...boundText,
+        id: newTextId,
+        containerId: newShapeId,
+        x: boundText.x + offset,
+        y: boundText.y + offset,
+      };
+      nextElements.push(copyText);
+    } else if (el.type === 'text' && el.containerId) {
+      const newTextId = newDrawingElementId('txt');
+      const copyText: DrawingElement = {
+        ...el,
+        id: newTextId,
+        containerId: undefined,
+        x: el.x + offset,
+        y: el.y + offset,
+      };
+      nextElements = [...elementsRef.current, copyText];
+      newSelectedId = newTextId;
+    }
+
+    commit(nextElements);
+    setSelectedId(newSelectedId);
   }, [selectedId, commit]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedId) return;
-    commit(elementsRef.current.filter((x) => x.id !== selectedId));
+    commit(
+      elementsRef.current.filter((x) => x.id !== selectedId && x.containerId !== selectedId)
+    );
     setSelectedId(null);
   }, [selectedId, commit]);
 
-  // Keyboard Delete/Backspace removes the selected element, Ctrl+D clones it. Capture phase
-  // on the canvas box so TipTap's Backspace-guard never sees it while the
-  // canvas has focus. Never fires while editing text or typing in a field.
+  const duplicateSelected = () => {
+    cloneSelected();
+    toast.success(isAr ? 'تم استنساخ الشكل' : 'Shape duplicated');
+  };
+
+  const isCanvasActiveRef = useRef(false);
+
   useEffect(() => {
-    const box = boxRef.current;
-    if (!box) return;
-    const onKey = (e: KeyboardEvent) => {
+    const handleDocDown = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (boxRef.current && boxRef.current.contains(target)) {
+        isCanvasActiveRef.current = true;
+      } else if (!target.closest('.editor-toolbar-root')) {
+        isCanvasActiveRef.current = false;
+      }
+    };
+    window.addEventListener('mousedown', handleDocDown, true);
+    return () => window.removeEventListener('mousedown', handleDocDown, true);
+  }, []);
+
+  // Global window capture keydown listener: handles Ctrl+Z, Ctrl+Y, Ctrl+D, Enter, Delete
+  useEffect(() => {
+    const handleGlobalKey = (e: KeyboardEvent) => {
+      if (!isCanvasActiveRef.current) return;
       if (editingTextId) return;
-      const t = document.activeElement as HTMLElement | null;
-      const tag = (t?.tagName || '').toLowerCase();
-      if (t && (t.isContentEditable || tag === 'input' || tag === 'textarea' || tag === 'select')) return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-        if (!selectedId) return;
-        e.preventDefault();
-        e.stopPropagation();
-        cloneSelected();
+      const activeEl = document.activeElement as HTMLElement | null;
+      const tag = (activeEl?.tagName || '').toLowerCase();
+      if (activeEl && (tag === 'input' || tag === 'textarea' || activeEl.isContentEditable)) {
         return;
       }
-      if (e.key === 'Enter' || e.key === 'F2') {
-        if (!selectedId) return;
-        const target = elementsRef.current.find((x) => x.id === selectedId);
-        if (target && ['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(target.type)) {
+
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key.toLowerCase();
+        if (k === 'z') {
           e.preventDefault();
           e.stopPropagation();
-          setEditingTextId(selectedId);
-          setTextDraft(target.text || '');
+          if (e.shiftKey) {
+            redo();
+          } else {
+            undo();
+          }
+          return;
+        }
+        if (k === 'y') {
+          e.preventDefault();
+          e.stopPropagation();
+          redo();
+          return;
+        }
+        if (k === 'd') {
+          if (selectedId) {
+            e.preventDefault();
+            e.stopPropagation();
+            cloneSelected();
+            return;
+          }
+        }
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedId) {
+          e.preventDefault();
+          e.stopPropagation();
+          deleteSelected();
           return;
         }
       }
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      if (!selectedId) return;
-      e.preventDefault();
-      e.stopPropagation();
-      commit(elementsRef.current.filter((x) => x.id !== selectedId));
-      setSelectedId(null);
+
+      if (e.key === 'Enter' || e.key === 'F2') {
+        if (selectedId) {
+          e.preventDefault();
+          e.stopPropagation();
+          startEditTextForShape(selectedId);
+          return;
+        }
+      }
     };
-    box.addEventListener('keydown', onKey, true);
-    return () => box.removeEventListener('keydown', onKey, true);
-  }, [editingTextId, selectedId, commit, cloneSelected]);
+
+    window.addEventListener('keydown', handleGlobalKey, true);
+    return () => window.removeEventListener('keydown', handleGlobalKey, true);
+  }, [editingTextId, undo, redo, selectedId, cloneSelected, deleteSelected, startEditTextForShape]);
 
   /**
    * Style controls do double duty: they set the defaults for NEW shapes,
@@ -680,24 +857,6 @@ export function ReportDrawingView(props: NodeViewProps) {
           : x
       )
     );
-  };
-
-  /** Duplicate (clone) the selected shape with a slight offset. */
-  const duplicateSelected = () => {
-    if (!selectedId) return;
-    const el = elementsRef.current.find((x) => x.id === selectedId);
-    if (!el) return;
-    const OFF = 24;
-    const copy: DrawingElement = {
-      ...el,
-      id: newDrawingElementId(),
-      x: el.x + OFF,
-      y: el.y + OFF,
-      points: el.points?.map((p) => ({ x: p.x + OFF, y: p.y + OFF })),
-    };
-    commit([...elementsRef.current, copy]);
-    setSelectedId(copy.id);
-    toast.success(isAr ? 'تم استنساخ الشكل' : 'Shape duplicated');
   };
 
   const fitView = () => {
@@ -734,10 +893,6 @@ export function ReportDrawingView(props: NodeViewProps) {
       );
     } catch {}
   }, [thisDrawingId, title, isAr, tool, stroke, fill, strokeWidth, strokeStyle, fontSize, fontFamily, textColor, selectedId, selectedElement, zoom]);
-
-  useEffect(() => {
-    broadcastActive();
-  }, [broadcastActive]);
 
   useEffect(() => {
     const onCommand = (e: Event) => {
@@ -794,23 +949,16 @@ export function ReportDrawingView(props: NodeViewProps) {
         deleteSelected();
       } else if (command === 'edit-text') {
         if (selectedId) {
-          const target = elementsRef.current.find((x) => x.id === selectedId);
-          if (target && ['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(target.type)) {
-            setEditingTextId(selectedId);
-            setTextDraft(target.text || '');
-          }
+          startEditTextForShape(selectedId);
         }
       } else if (command === 'clear-text') {
         if (selectedId) {
-          const target = elementsRef.current.find((x) => x.id === selectedId);
-          if (target) {
-            commit(
-              elementsRef.current.map((x) =>
-                x.id === selectedId ? { ...x, text: '' } : x
-              )
-            );
-            toast.success(isAr ? 'تم مسح النص' : 'Text cleared');
-          }
+          commit(
+            elementsRef.current
+              .filter((x) => !(x.type === 'text' && x.containerId === selectedId))
+              .map((x) => (x.id === selectedId ? { ...x, text: '' } : x))
+          );
+          toast.success(isAr ? 'تم مسح النص' : 'Text cleared');
         }
       } else if (command === 'delete-drawing') {
         props.deleteNode();
@@ -830,7 +978,7 @@ export function ReportDrawingView(props: NodeViewProps) {
       window.removeEventListener('report-drawing-command', onCommand);
       window.removeEventListener('report-drawing-request-state', onRequestState);
     };
-  }, [thisDrawingId, broadcastActive, undo, redo, cloneSelected, deleteSelected, restyleSelected, selectedId, isAr, props, commit]);
+  }, [thisDrawingId, broadcastActive, undo, redo, cloneSelected, deleteSelected, restyleSelected, selectedId, isAr, props, commit, startEditTextForShape]);
 
   const frameW = `${Math.max(30, Math.min(100, Number(width) || 100))}%`;
   const alignCls = alignment === 'left' ? 'ms-0 me-auto' : alignment === 'right' ? 'ms-auto me-0' : 'mx-auto';
@@ -858,7 +1006,7 @@ export function ReportDrawingView(props: NodeViewProps) {
         onMouseDownCapture={broadcastActive}
         onMouseEnter={broadcastActive}
       >
-        <div className="sticky top-14 sm:top-16 z-20 bg-card/95 backdrop-blur-md shadow-xs border-b border-border rounded-t-xl">
+        <div className="relative border-b border-border bg-card rounded-t-xl">
           <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-border bg-muted/40 px-2.5 py-1.5 text-xs">
             <div className="flex min-w-0 items-center gap-1.5">
               <Pencil className="h-3.5 w-3.5 shrink-0 text-[#2E4034] dark:text-emerald-400" />
@@ -868,8 +1016,8 @@ export function ReportDrawingView(props: NodeViewProps) {
               </button>
             </div>
             <div className="flex items-center gap-1">
-              <button type="button" onClick={undo} disabled={hIdx <= 0} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40" title={isAr ? 'تراجع' : 'Undo'}><Undo2 className="h-3.5 w-3.5" /></button>
-              <button type="button" onClick={redo} disabled={hIdx >= history.length - 1} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40" title={isAr ? 'إعادة' : 'Redo'}><Redo2 className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={undo} disabled={hIdx <= 0} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40" title={`${isAr ? 'تراجع' : 'Undo'} (Ctrl+Z)`}><Undo2 className="h-3.5 w-3.5" /></button>
+              <button type="button" onClick={redo} disabled={hIdx >= history.length - 1} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40" title={`${isAr ? 'إعادة' : 'Redo'} (Ctrl+Y)`}><Redo2 className="h-3.5 w-3.5" /></button>
               <button type="button" onClick={() => setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)))} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="+"><ZoomIn className="h-3.5 w-3.5" /></button>
               <button type="button" onClick={() => setZoom((z) => Math.max(0.3, +(z - 0.1).toFixed(2)))} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title="-"><ZoomOut className="h-3.5 w-3.5" /></button>
               <button type="button" onClick={fitView} className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" title={isAr ? 'ملاءمة العرض' : 'Fit view'}><Maximize2 className="h-3.5 w-3.5" /></button>
@@ -919,55 +1067,53 @@ export function ReportDrawingView(props: NodeViewProps) {
               <option value="dashed">{isAr ? 'متقطع' : 'Dashed'}</option>
               <option value="dotted">{isAr ? 'منقط' : 'Dotted'}</option>
             </select>
-            <div className="flex items-center gap-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  const next = Math.max(8, fontSize - 2);
-                  setFontSize(next);
-                  restyleSelected({ fontSize: next }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
-                }}
-                className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
-                title={isAr ? 'تصغير الخط' : 'Decrease font size'}
-              >
-                A-
-              </button>
-              <select
-                value={fontSize}
-                onChange={(e) => {
-                  const v = Number(e.target.value);
-                  setFontSize(v);
-                  restyleSelected({ fontSize: v }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
-                }}
-                className="h-6 rounded border border-border bg-card px-1 text-[11px] font-bold"
-                dir="ltr"
-                aria-label="font size"
-              >
-                <option value={10}>10</option>
-                <option value={12}>12</option>
-                <option value={14}>14</option>
-                <option value={16}>16</option>
-                <option value={18}>18</option>
-                <option value={20}>20</option>
-                <option value={24}>24</option>
-                <option value={28}>28</option>
-                <option value={32}>32</option>
-                <option value={40}>40</option>
-                <option value={48}>48</option>
-              </select>
-              <button
-                type="button"
-                onClick={() => {
-                  const next = Math.min(72, fontSize + 2);
-                  setFontSize(next);
-                  restyleSelected({ fontSize: next }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
-                }}
-                className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
-                title={isAr ? 'تكبير الخط' : 'Increase font size'}
-              >
-                A+
-              </button>
-            </div>
+            {(() => {
+              const FONT_SIZES = [10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 40, 48, 56, 64, 72];
+              const fontSizesList = FONT_SIZES.includes(fontSize) ? FONT_SIZES : [...FONT_SIZES, fontSize].sort((a, b) => a - b);
+              return (
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.max(8, fontSize - 2);
+                      setFontSize(next);
+                      restyleSelected({ fontSize: next }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
+                    }}
+                    className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
+                    title={isAr ? 'تصغير الخط' : 'Decrease font size'}
+                  >
+                    A-
+                  </button>
+                  <select
+                    value={fontSize}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      setFontSize(v);
+                      restyleSelected({ fontSize: v }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
+                    }}
+                    className="h-6 rounded border border-border bg-card px-1 text-[11px] font-bold"
+                    dir="ltr"
+                    aria-label="font size"
+                  >
+                    {fontSizesList.map((sz) => (
+                      <option key={sz} value={sz}>{sz}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = Math.min(72, fontSize + 2);
+                      setFontSize(next);
+                      restyleSelected({ fontSize: next }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw');
+                    }}
+                    className="h-6 w-6 rounded border border-border bg-card text-[11px] font-bold hover:bg-muted text-foreground flex items-center justify-center cursor-pointer"
+                    title={isAr ? 'تكبير الخط' : 'Increase font size'}
+                  >
+                    A+
+                  </button>
+                </div>
+              );
+            })()}
             <select value={matchEditorFont(fontFamily)?.id || EDITOR_FONTS[0].id} onChange={(e) => { const f = EDITOR_FONTS.find((x) => x.id === e.target.value); const v = f ? f.stack : CANVAS_FONT_STACK; setFontFamily(v); restyleSelected({ fontFamily: v }, (el) => el.type !== 'arrow' && el.type !== 'line' && el.type !== 'freedraw'); }} className="h-6 max-w-[110px] rounded border border-border bg-card px-1 text-[11px]" style={{ fontFamily }} aria-label={isAr ? 'نوع الخط' : 'Font family'} title={isAr ? 'نوع الخط (يطبق على المحدد)' : 'Font family (applies to selection)'}>
               {EDITOR_FONTS.map((f) => (
                 <option key={f.id} value={f.id} style={{ fontFamily: f.stack }}>{isAr ? f.labelAr : f.labelEn}</option>
@@ -995,6 +1141,7 @@ export function ReportDrawingView(props: NodeViewProps) {
             {selectedId && (() => {
               const selEl = elementsRef.current.find((x) => x.id === selectedId);
               if (!selEl) return null;
+              const boundChildText = elementsRef.current.find((x) => x.type === 'text' && x.containerId === selEl.id);
               return (
                 <>
                   <span className="h-4 w-px bg-border" />
@@ -1031,21 +1178,39 @@ export function ReportDrawingView(props: NodeViewProps) {
                       0°
                     </button>
                   ) : null}
+                  {/* Text editing and selection for shapes and text */}
                   {['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(selEl.type) && (
                     <>
                       <button
                         type="button"
-                        onClick={() => {
-                          setEditingTextId(selectedId);
-                          setTextDraft(selEl.text || '');
-                        }}
+                        onClick={() => startEditTextForShape(selectedId)}
                         className="flex h-6 items-center gap-1 rounded bg-[#2E4034]/10 hover:bg-[#2E4034]/20 text-[#2E4034] dark:text-emerald-300 px-2 text-[11px] font-bold transition-colors cursor-pointer"
-                        title={isAr ? 'تعديل نص العنصر' : 'Edit text'}
+                        title={isAr ? 'تعديل نص العنصر (Enter)' : 'Edit text (Enter)'}
                       >
                         <Type className="h-3 w-3" />
                         <span>{isAr ? 'تعديل النص' : 'Edit Text'}</span>
                       </button>
-                      {selEl.text ? (
+                      {boundChildText && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(boundChildText.id)}
+                          className="flex h-6 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-bold hover:bg-muted text-foreground cursor-pointer"
+                          title={isAr ? 'تحديد النص بمفرده لتعديله بشكل مستقل' : 'Select text alone'}
+                        >
+                          <span>{isAr ? 'تحديد النص' : 'Select Text'}</span>
+                        </button>
+                      )}
+                      {selEl.type === 'text' && selEl.containerId && (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedId(selEl.containerId!)}
+                          className="flex h-6 items-center gap-1 rounded border border-border bg-card px-2 text-[11px] font-bold hover:bg-muted text-foreground cursor-pointer"
+                          title={isAr ? 'تحديد الشكل الحاوي' : 'Select Container Shape'}
+                        >
+                          <span>{isAr ? 'تحديد الشكل' : 'Select Shape'}</span>
+                        </button>
+                      )}
+                      {(selEl.text || boundChildText) ? (
                         <>
                           <div className="flex items-center gap-1" title={isAr ? 'لون النص داخل الشكل' : 'Text color'}>
                             <span className="text-[10px] text-muted-foreground font-semibold">T:</span>
@@ -1055,7 +1220,8 @@ export function ReportDrawingView(props: NodeViewProps) {
                                 type="button"
                                 onClick={() => {
                                   setTextColor(c);
-                                  commit(elementsRef.current.map((x) => (x.id === selectedId ? { ...x, textColor: c } : x)));
+                                  const targetId = boundChildText ? boundChildText.id : selectedId;
+                                  commit(elementsRef.current.map((x) => (x.id === targetId ? { ...x, textColor: c } : x)));
                                 }}
                                 style={{ backgroundColor: c }}
                                 className={cn(
@@ -1065,18 +1231,21 @@ export function ReportDrawingView(props: NodeViewProps) {
                               />
                             ))}
                           </div>
-                          {selEl.type !== 'text' ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                commit(elementsRef.current.map((x) => (x.id === selectedId ? { ...x, text: '' } : x)));
-                              }}
-                              className="h-6 px-1.5 rounded text-[11px] text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 font-medium cursor-pointer"
-                              title={isAr ? 'مسح النص فقط وإبقاء الشكل' : 'Clear text alone'}
-                            >
-                              {isAr ? 'مسح النص فقط' : 'Clear Text'}
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              commit(
+                                elementsRef.current
+                                  .filter((x) => !(x.type === 'text' && (x.id === selectedId || x.containerId === selectedId)))
+                                  .map((x) => (x.id === selectedId ? { ...x, text: '' } : x))
+                              );
+                              if (selEl.type === 'text') setSelectedId(null);
+                            }}
+                            className="h-6 px-1.5 rounded text-[11px] text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 font-medium cursor-pointer"
+                            title={isAr ? 'مسح النص فقط وإبقاء الشكل' : 'Clear text alone'}
+                          >
+                            {isAr ? 'مسح النص فقط' : 'Clear Text'}
+                          </button>
                         </>
                       ) : null}
                     </>
@@ -1100,9 +1269,7 @@ export function ReportDrawingView(props: NodeViewProps) {
             const hit = [...elementsRef.current].reverse().find((el) => isPointNearElement(pt, el, 12));
             if (hit && ['text', 'note', 'rectangle', 'ellipse', 'diamond'].includes(hit.type)) {
               e.stopPropagation();
-              setSelectedId(hit.id);
-              setEditingTextId(hit.id);
-              setTextDraft(hit.text || '');
+              startEditTextForShape(hit.id);
             }
           }}
           className="relative w-full touch-none select-none overflow-hidden outline-none"
@@ -1344,9 +1511,9 @@ export function ReportDrawingView(props: NodeViewProps) {
           {editingTextId ? (
             <div className="absolute inset-x-3 bottom-3 z-30 flex flex-col gap-2 rounded-xl border border-border bg-card/95 p-3 shadow-xl backdrop-blur-md" dir={isAr ? 'rtl' : 'ltr'}>
               <div className="flex items-center justify-between text-xs font-bold text-foreground">
-                <span>{isAr ? 'تعديل النص' : 'Edit Text'}</span>
+                <span>{isAr ? 'نص الشكل (سينزل في منتصف الشكل)' : 'Shape Text (centers inside shape)'}</span>
                 <span className="text-[10px] text-muted-foreground font-normal">
-                  {isAr ? 'Enter لسطر جديد | Ctrl+Enter أو الزر للحفظ | Esc للإلغاء' : 'Enter for newline | Ctrl+Enter to save | Esc to cancel'}
+                  {isAr ? 'Enter للحفظ في المنتصف | Shift+Enter لسطر جديد | Esc للإلغاء' : 'Enter to save and center | Shift+Enter for newline | Esc to cancel'}
                 </span>
               </div>
               <textarea
@@ -1356,13 +1523,15 @@ export function ReportDrawingView(props: NodeViewProps) {
                 onChange={(e) => setTextDraft(e.target.value)}
                 onKeyDown={(e) => {
                   e.stopPropagation();
-                  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
                     commitText();
                   } else if (e.key === 'Escape') {
+                    e.preventDefault();
                     setEditingTextId(null);
                   }
                 }}
-                placeholder={isAr ? 'اكتب نص العنصر هنا…' : 'Enter element text here…'}
+                placeholder={isAr ? 'اكتب نص العنصر هنا واضغط Enter للحفظ في المنتصف…' : 'Enter element text here and press Enter to save centered…'}
                 className="w-full resize-y rounded-md border border-border bg-background p-2 text-xs outline-none focus:border-[#2E4034] font-sans"
               />
               <div className="flex items-center justify-end gap-2">
@@ -1378,7 +1547,7 @@ export function ReportDrawingView(props: NodeViewProps) {
                   onClick={commitText}
                   className="h-7 rounded-md bg-[#2E4034] px-4 text-xs font-bold text-white hover:bg-[#233329] transition-colors cursor-pointer"
                 >
-                  {isAr ? 'حفظ النص' : 'Save Text'}
+                  {isAr ? 'حفظ وتوسيط (Enter)' : 'Save & Center (Enter)'}
                 </button>
               </div>
             </div>

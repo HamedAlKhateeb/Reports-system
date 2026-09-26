@@ -62,6 +62,7 @@ import {
   ZoomIn,
   ZoomOut,
   CopyPlus,
+  X,
 } from 'lucide-react';
 import { useLanguage } from '@/lib/i18n/LanguageContext';
 import { Button } from '@/components/ui/button';
@@ -1972,22 +1973,22 @@ export function EditorToolbar({
       {/* Excalidraw / Drawing Canvas Sub-Toolbar: Sticky with the Editor Header */}
       {isDrawingActive && activeDrawing && (
         <div
-          className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 bg-emerald-500/10 dark:bg-emerald-950/30 border-t border-emerald-500/20 text-xs w-full max-w-full overflow-x-auto sm:overflow-visible transition-all animate-in fade-in slide-in-from-top-1"
+          className="flex flex-nowrap items-center gap-1.5 border-t border-border/70 bg-muted/40 px-2 sm:px-3 py-1 text-xs text-foreground w-full max-w-full overflow-x-auto scroll-smooth transition-all animate-in fade-in slide-in-from-top-1"
           dir={isRtl ? 'rtl' : 'ltr'}
           onMouseDown={keepFocus}
         >
           {/* Drawing Title Badge */}
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-600/15 text-emerald-800 dark:text-emerald-300 font-bold shrink-0">
-            <PenTool className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-muted/80 border border-border/60 text-foreground font-bold shrink-0">
+            <PenTool className="h-3.5 w-3.5 text-primary" />
             <span className="text-[11px] truncate max-w-[130px] sm:max-w-[200px]">
               {activeDrawing.title || (isRtl ? 'لوحة الرسم' : 'Drawing Canvas')}
             </span>
           </div>
 
-          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+          <Separator orientation="vertical" className="h-4 bg-border/60" />
 
           {/* Tool Buttons */}
-          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs shrink-0">
             {drawingTools.map((t) => {
               const Icon = t.icon;
               const isCurrent = activeDrawing.tool === t.k;
@@ -2013,10 +2014,10 @@ export function EditorToolbar({
             })}
           </div>
 
-          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+          <Separator orientation="vertical" className="h-4 bg-border/60" />
 
           {/* Undo / Redo & Zoom */}
-          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+          <div className="flex items-center gap-0.5 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs shrink-0">
             <Button
               type="button"
               variant="ghost"
@@ -2024,7 +2025,7 @@ export function EditorToolbar({
               disabled={!activeDrawing.canUndo}
               onClick={() => sendDrawingCommand('undo')}
               className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
-              title={isRtl ? 'تراجع' : 'Undo'}
+              title={`${isRtl ? 'تراجع' : 'Undo'} (Ctrl+Z)`}
             >
               <Undo2 className="h-3.5 w-3.5" />
             </Button>
@@ -2035,7 +2036,7 @@ export function EditorToolbar({
               disabled={!activeDrawing.canRedo}
               onClick={() => sendDrawingCommand('redo')}
               className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground disabled:opacity-40"
-              title={isRtl ? 'إعادة' : 'Redo'}
+              title={`${isRtl ? 'إعادة' : 'Redo'} (Ctrl+Y)`}
             >
               <Redo2 className="h-3.5 w-3.5" />
             </Button>
@@ -2071,10 +2072,10 @@ export function EditorToolbar({
             </Button>
           </div>
 
-          <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
+          <Separator orientation="vertical" className="h-4 bg-border/60" />
 
           {/* Stroke & Fill Colors & Geometry Properties */}
-          <div className="flex items-center gap-1.5 bg-card/80 rounded-lg px-2 py-1 border border-border/70 shadow-2xs">
+          <div className="flex items-center gap-1.5 bg-card/80 rounded-lg px-2 py-1 border border-border/70 shadow-2xs shrink-0">
             {/* Stroke colors */}
             <div className="flex items-center gap-1" title={isRtl ? 'لون الحد (يطبق على المحدد)' : 'Stroke color'}>
               {DRAWING_STROKE_COLORS.slice(0, 5).map((c) => (
@@ -2168,8 +2169,8 @@ export function EditorToolbar({
           {/* Selected Element Controls (Clone, Edit Text, Clear Text, Delete) */}
           {activeDrawing.hasSelected && (
             <>
-              <Separator orientation="vertical" className="h-4 bg-emerald-500/30" />
-              <div className="flex items-center gap-1 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs">
+              <Separator orientation="vertical" className="h-4 bg-border/60" />
+              <div className="flex items-center gap-1 bg-card/80 rounded-lg p-0.5 border border-border/70 shadow-2xs shrink-0">
                 {/* Clone / Duplicate */}
                 <Button
                   type="button"
@@ -2190,7 +2191,7 @@ export function EditorToolbar({
                   size="sm"
                   onClick={() => sendDrawingCommand('edit-text')}
                   className="h-7 px-1.5 text-[11px] gap-1 rounded-md text-muted-foreground hover:text-foreground"
-                  title={isRtl ? 'تعديل النص داخل الشكل' : 'Edit text inside shape'}
+                  title={isRtl ? 'تعديل النص داخل الشكل (Enter)' : 'Edit text inside shape (Enter)'}
                 >
                   <TypeIcon className="h-3.5 w-3.5" />
                   <span className="hidden sm:inline">{isRtl ? 'تعديل النص' : 'Edit Text'}</span>
@@ -2225,8 +2226,8 @@ export function EditorToolbar({
             </>
           )}
 
-          {/* Delete Whole Drawing */}
-          <div className="ms-auto flex items-center gap-1">
+          {/* Delete Whole Drawing & Close Toolbar */}
+          <div className="ms-auto flex items-center gap-1 shrink-0">
             <Button
               type="button"
               variant="ghost"
@@ -2237,6 +2238,19 @@ export function EditorToolbar({
             >
               <Trash2 className="h-3 w-3" />
               <span>{isRtl ? 'حذف الرسم' : 'Delete drawing'}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                setActiveDrawing(null);
+                setSelectedDrawingId(null);
+              }}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted"
+              title={isRtl ? 'إخفاء شريط أدوات الرسم' : 'Dismiss drawing toolbar'}
+            >
+              <X className="h-3.5 w-3.5" />
             </Button>
           </div>
         </div>

@@ -49,6 +49,10 @@ export interface DrawingElement {
   points?: DrawingPoint[];
   /** Rotation angle in degrees (0-360). */
   rotation?: number;
+  /** ID of container shape if this element is bound text inside a shape. */
+  containerId?: string;
+  /** IDs of bound elements (e.g. text element or connected arrows). */
+  boundElementIds?: string[];
 }
 
 export type DrawingTool =
